@@ -1,16 +1,20 @@
 import time
 import logging
+from pathlib import Path
 from util import create_parser, set_seed, logger_setup
 from data_loading import get_data
 from training import train_gnn
 from inference import infer_gnn
 import json
 
+_BASELINE_DIR = Path(__file__).resolve().parent
+
+
 def main():
     parser = create_parser()
     args = parser.parse_args()
 
-    with open('data_config.json', 'r') as config_file:
+    with open(_BASELINE_DIR / 'data_config.json', 'r') as config_file:
         data_config = json.load(config_file)
 
     # Setup logging
