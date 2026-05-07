@@ -9,8 +9,16 @@ from torch_geometric.nn import to_hetero, summary
 from torch_geometric.utils import degree
 import logging
 
+def _log_best(best_epoch, best_val, best_te):
+    logging.info('Training complete.')
+    logging.info(f'Best epoch: {best_epoch}')
+    logging.info(f"  Val  — F1: {best_val['f1']:.4f} | Recall: {best_val['recall']:.4f} | Precision: {best_val['precision']:.4f} | AUPRC: {best_val['auprc']:.4f}")
+    logging.info(f"  Test — F1: {best_te['f1']:.4f} | Recall: {best_te['recall']:.4f} | Precision: {best_te['precision']:.4f} | AUPRC: {best_te['auprc']:.4f}")
+
 def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config):
     best_val_f1 = 0
+    best_val_result = best_te_result = None
+    best_epoch = 0
     patience_counter = 0
     for epoch in range(config.epochs):
         total_loss = total_examples = 0
@@ -44,14 +52,17 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
         f1 = f1_score(ground_truth, pred)
         logging.info(f'Train F1: {f1:.4f}')
 
-        val_f1 = evaluate_homo(val_loader, val_inds, model, val_data, device, args)
-        te_f1 = evaluate_homo(te_loader, te_inds, model, te_data, device, args)
+        val_result = evaluate_homo(val_loader, val_inds, model, val_data, device, args)
+        te_result  = evaluate_homo(te_loader,  te_inds,  model, te_data,  device, args)
 
-        logging.info(f'Validation F1: {val_f1:.4f}')
-        logging.info(f'Test F1: {te_f1:.4f}')
+        logging.info(f"Val  — F1: {val_result['f1']:.4f} | Recall: {val_result['recall']:.4f} | Precision: {val_result['precision']:.4f} | AUPRC: {val_result['auprc']:.4f} | Mem: {val_result['memory_mb']:.1f}MB | Time: {val_result['time_s']:.1f}s")
+        logging.info(f"Test — F1: {te_result['f1']:.4f} | Recall: {te_result['recall']:.4f} | Precision: {te_result['precision']:.4f} | AUPRC: {te_result['auprc']:.4f} | Mem: {te_result['memory_mb']:.1f}MB | Time: {te_result['time_s']:.1f}s")
 
-        if val_f1 > best_val_f1:
-            best_val_f1 = val_f1
+        if val_result['f1'] > best_val_f1:
+            best_val_f1 = val_result['f1']
+            best_val_result = val_result
+            best_te_result = te_result
+            best_epoch = epoch
             patience_counter = 0
             if args.save_model:
                 save_model(model, optimizer, epoch, args, data_config)
@@ -61,10 +72,13 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
                 logging.info(f'Early stopping at epoch {epoch} (patience={args.patience})')
                 break
 
+    _log_best(best_epoch, best_val_result, best_te_result)
     return model
 
 def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config):
     best_val_f1 = 0
+    best_val_result = best_te_result = None
+    best_epoch = 0
     patience_counter = 0
     for epoch in range(config.epochs):
         total_loss = total_examples = 0
@@ -100,14 +114,17 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
         f1 = f1_score(ground_truth, pred)
         logging.info(f'Train F1: {f1:.4f}')
 
-        val_f1 = evaluate_hetero(val_loader, val_inds, model, val_data, device, args)
-        te_f1 = evaluate_hetero(te_loader, te_inds, model, te_data, device, args)
+        val_result = evaluate_hetero(val_loader, val_inds, model, val_data, device, args)
+        te_result  = evaluate_hetero(te_loader,  te_inds,  model, te_data,  device, args)
 
-        logging.info(f'Validation F1: {val_f1:.4f}')
-        logging.info(f'Test F1: {te_f1:.4f}')
+        logging.info(f"Val  — F1: {val_result['f1']:.4f} | Recall: {val_result['recall']:.4f} | Precision: {val_result['precision']:.4f} | AUPRC: {val_result['auprc']:.4f} | Mem: {val_result['memory_mb']:.1f}MB | Time: {val_result['time_s']:.1f}s")
+        logging.info(f"Test — F1: {te_result['f1']:.4f} | Recall: {te_result['recall']:.4f} | Precision: {te_result['precision']:.4f} | AUPRC: {te_result['auprc']:.4f} | Mem: {te_result['memory_mb']:.1f}MB | Time: {te_result['time_s']:.1f}s")
 
-        if val_f1 > best_val_f1:
-            best_val_f1 = val_f1
+        if val_result['f1'] > best_val_f1:
+            best_val_f1 = val_result['f1']
+            best_val_result = val_result
+            best_te_result = te_result
+            best_epoch = epoch
             patience_counter = 0
             if args.save_model:
                 save_model(model, optimizer, epoch, args, data_config)
@@ -117,6 +134,7 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
                 logging.info(f'Early stopping at epoch {epoch} (patience={args.patience})')
                 break
 
+    _log_best(best_epoch, best_val_result, best_te_result)
     return model
 
 def get_model(sample_batch, config, args):

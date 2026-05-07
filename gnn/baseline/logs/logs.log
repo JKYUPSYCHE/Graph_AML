@@ -1,0 +1,654 @@
+2026-05-06 12:21:25,396 [INFO ] Retrieving data
+2026-05-06 12:21:25,436 [INFO ] Available Edge Features: ['row_id', 'from_id', 'to_id', 'from_node', 'to_node', 'timestamp', 'amount', 'label']
+2026-05-06 12:41:11,767 [INFO ] Retrieving data
+2026-05-06 12:41:11,773 [INFO ] Available Edge Features: ['EdgeID', 'from_id', 'to_id', 'Timestamp', 'Amount Sent', 'Sent Currency', 'Amount Received', 'Received Currency', 'Payment Format', 'Is Laundering']
+2026-05-06 12:41:11,796 [INFO ] Illicit ratio = 0 / 100 = 0.00%
+2026-05-06 12:41:11,796 [INFO ] Number of nodes (holdings doing transcations) = 113
+2026-05-06 12:41:11,796 [INFO ] Number of transactions = 100
+2026-05-06 12:41:11,796 [INFO ] Edge features being used: ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+2026-05-06 12:41:11,796 [INFO ] Node features being used: ['Feature'] ("Feature" is a placeholder feature of all 1s)
+2026-05-06 12:41:11,800 [INFO ] number of days and transactions in the data: 1 days, 100 transactions
+2026-05-06 12:42:59,191 [INFO ] Retrieving data
+2026-05-06 12:42:59,193 [INFO ] Available Edge Features: ['EdgeID', 'from_id', 'to_id', 'Timestamp', 'Amount Sent', 'Sent Currency', 'Amount Received', 'Received Currency', 'Payment Format', 'Is Laundering']
+2026-05-06 12:42:59,197 [INFO ] Illicit ratio = 0 / 100 = 0.00%
+2026-05-06 12:42:59,197 [INFO ] Number of nodes (holdings doing transcations) = 113
+2026-05-06 12:42:59,197 [INFO ] Number of transactions = 100
+2026-05-06 12:42:59,197 [INFO ] Edge features being used: ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+2026-05-06 12:42:59,197 [INFO ] Node features being used: ['Feature'] ("Feature" is a placeholder feature of all 1s)
+2026-05-06 12:42:59,199 [INFO ] number of days and transactions in the data: 1 days, 100 transactions
+2026-05-06 12:42:59,199 [WARNI] Only 1 day of data — falling back to index-based split
+2026-05-06 12:42:59,203 [INFO ] Retrieved data in 0.01s
+2026-05-06 12:42:59,203 [INFO ] Running Training
+2026-05-06 12:44:00,685 [INFO ] Retrieving data
+2026-05-06 12:44:00,689 [INFO ] Available Edge Features: ['EdgeID', 'from_id', 'to_id', 'Timestamp', 'Amount Sent', 'Sent Currency', 'Amount Received', 'Received Currency', 'Payment Format', 'Is Laundering']
+2026-05-06 12:44:00,692 [INFO ] Illicit ratio = 0 / 100 = 0.00%
+2026-05-06 12:44:00,692 [INFO ] Number of nodes (holdings doing transcations) = 113
+2026-05-06 12:44:00,692 [INFO ] Number of transactions = 100
+2026-05-06 12:44:00,692 [INFO ] Edge features being used: ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+2026-05-06 12:44:00,692 [INFO ] Node features being used: ['Feature'] ("Feature" is a placeholder feature of all 1s)
+2026-05-06 12:44:00,694 [INFO ] number of days and transactions in the data: 1 days, 100 transactions
+2026-05-06 12:44:00,694 [WARNI] Only 1 day of data — falling back to index-based split
+2026-05-06 12:44:41,638 [INFO ] Retrieving data
+2026-05-06 12:44:41,641 [INFO ] Available Edge Features: ['EdgeID', 'from_id', 'to_id', 'Timestamp', 'Amount Sent', 'Sent Currency', 'Amount Received', 'Received Currency', 'Payment Format', 'Is Laundering']
+2026-05-06 12:44:41,644 [INFO ] Illicit ratio = 0 / 100 = 0.00%
+2026-05-06 12:44:41,645 [INFO ] Number of nodes (holdings doing transcations) = 113
+2026-05-06 12:44:41,645 [INFO ] Number of transactions = 100
+2026-05-06 12:44:41,645 [INFO ] Edge features being used: ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+2026-05-06 12:44:41,645 [INFO ] Node features being used: ['Feature'] ("Feature" is a placeholder feature of all 1s)
+2026-05-06 12:44:41,647 [INFO ] number of days and transactions in the data: 1 days, 100 transactions
+2026-05-06 12:44:41,648 [WARNI] Only 1 day of data — falling back to index-based split
+2026-05-06 12:44:41,648 [INFO ] Total train samples: 60.00% || IR: 0.00% || Train days: (index)
+2026-05-06 12:44:41,648 [INFO ] Total val samples: 20.00% || IR: 0.00% || Val days: (index)
+2026-05-06 12:44:41,648 [INFO ] Total test samples: 20.00% || IR: 0.00% || Test days: (index)
+2026-05-06 12:44:41,651 [INFO ] Start: adding ports
+2026-05-06 12:44:41,686 [INFO ] Done: adding ports
+2026-05-06 12:44:41,698 [INFO ] train data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[113, 1] },
+  (node, to, node)={
+    edge_index=[2, 60],
+    edge_attr=[60, 6],
+    y=[60],
+    timestamps=[60],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 60],
+    edge_attr=[60, 6],
+  }
+)
+2026-05-06 12:44:41,698 [INFO ] validation data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[113, 1] },
+  (node, to, node)={
+    edge_index=[2, 80],
+    edge_attr=[80, 6],
+    y=[80],
+    timestamps=[80],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 80],
+    edge_attr=[80, 6],
+  }
+)
+2026-05-06 12:44:41,699 [INFO ] test data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[113, 1] },
+  (node, to, node)={
+    edge_index=[2, 100],
+    edge_attr=[100, 6],
+    y=[100],
+    timestamps=[100],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 100],
+    edge_attr=[100, 6],
+  }
+)
+2026-05-06 12:44:41,699 [INFO ] Retrieved data in 0.06s
+2026-05-06 12:44:41,699 [INFO ] Running Training
+2026-05-06 12:44:42,001 [INFO ] +-----------------------------------------+-----------------------------+----------------+----------+
+| Layer                                   | Input Shape                 | Output Shape   | #Param   |
+|-----------------------------------------+-----------------------------+----------------+----------|
+| GraphModule                             |                             |                | 64,374   |
+| ├─(node_emb)ModuleDict                  | --                          | --             | 60       |
+| │    └─(node)Linear                     | [81, 2]                     | [81, 20]       | 60       |
+| ├─(edge_emb)ModuleDict                  | --                          | --             | 280      |
+| │    └─(node__to__node)Linear           | [60, 6]                     | [60, 20]       | 140      |
+| │    └─(node__rev_to__node)Linear       | [60, 6]                     | [60, 20]       | 140      |
+| ├─(convs)ModuleList                     | --                          | --             | 48,640   |
+| │    └─(0)ModuleDict                    | --                          | --             | 24,320   |
+| │    │    └─(node__to__node)PNAConv     | [81, 20], [2, 60], [60, 20] | [81, 20]       | 12,160   |
+| │    │    └─(node__rev_to__node)PNAConv | [81, 20], [2, 60], [60, 20] | [81, 20]       | 12,160   |
+| │    └─(1)ModuleDict                    | --                          | --             | 24,320   |
+| │    │    └─(node__to__node)PNAConv     | [81, 20], [2, 60], [60, 20] | [81, 20]       | 12,160   |
+| │    │    └─(node__rev_to__node)PNAConv | [81, 20], [2, 60], [60, 20] | [81, 20]       | 12,160   |
+| ├─(batch_norms)ModuleList               | --                          | --             | 80       |
+| │    └─(0)ModuleDict                    | --                          | --             | 40       |
+| │    │    └─(node)BatchNorm             | [81, 20]                    | [81, 20]       | 40       |
+| │    └─(1)ModuleDict                    | --                          | --             | 40       |
+| │    │    └─(node)BatchNorm             | [81, 20]                    | [81, 20]       | 40       |
+| ├─(emlps)ModuleList                     | --                          | --             | 6,560    |
+| │    └─(0)ModuleList                    | --                          | --             | 3,280    |
+| │    │    └─(0)ModuleDict               | --                          | --             | 2,440    |
+| │    │    └─(1)ModuleDict               | --                          | --             | --       |
+| │    │    └─(2)ModuleDict               | --                          | --             | 840      |
+| │    └─(1)ModuleList                    | --                          | --             | 3,280    |
+| │    │    └─(0)ModuleDict               | --                          | --             | 2,440    |
+| │    │    └─(1)ModuleDict               | --                          | --             | --       |
+| │    │    └─(2)ModuleDict               | --                          | --             | 840      |
+| ├─(mlp)ModuleList                       | --                          | --             | 8,754    |
+| │    └─(0)ModuleDict                    | --                          | --             | 6,100    |
+| │    │    └─(node__to__node)Linear      | [60, 60]                    | [60, 50]       | 3,050    |
+| │    │    └─(node__rev_to__node)Linear  | [60, 60]                    | [60, 50]       | 3,050    |
+| │    └─(1)ModuleDict                    | --                          | --             | --       |
+| │    │    └─(node__to__node)ReLU        | [60, 50]                    | [60, 50]       | --       |
+| │    │    └─(node__rev_to__node)ReLU    | [60, 50]                    | [60, 50]       | --       |
+| │    └─(2)ModuleDict                    | --                          | --             | --       |
+| │    │    └─(node__to__node)Dropout     | [60, 50]                    | [60, 50]       | --       |
+| │    │    └─(node__rev_to__node)Dropout | [60, 50]                    | [60, 50]       | --       |
+| │    └─(3)ModuleDict                    | --                          | --             | 2,550    |
+| │    │    └─(node__to__node)Linear      | [60, 50]                    | [60, 25]       | 1,275    |
+| │    │    └─(node__rev_to__node)Linear  | [60, 50]                    | [60, 25]       | 1,275    |
+| │    └─(4)ModuleDict                    | --                          | --             | --       |
+| │    │    └─(node__to__node)ReLU        | [60, 25]                    | [60, 25]       | --       |
+| │    │    └─(node__rev_to__node)ReLU    | [60, 25]                    | [60, 25]       | --       |
+| │    └─(5)ModuleDict                    | --                          | --             | --       |
+| │    │    └─(node__to__node)Dropout     | [60, 25]                    | [60, 25]       | --       |
+| │    │    └─(node__rev_to__node)Dropout | [60, 25]                    | [60, 25]       | --       |
+| │    └─(6)ModuleDict                    | --                          | --             | 104      |
+| │    │    └─(node__to__node)Linear      | [60, 25]                    | [60, 2]        | 52       |
+| │    │    └─(node__rev_to__node)Linear  | [60, 25]                    | [60, 2]        | 52       |
++-----------------------------------------+-----------------------------+----------------+----------+
+2026-05-06 12:44:42,228 [INFO ] Train F1: 0.0000
+2026-05-06 12:44:42,365 [INFO ] Validation F1: 0.0000
+2026-05-06 12:44:42,365 [INFO ] Test F1: 0.0000
+2026-05-06 12:44:42,455 [INFO ] Train F1: 0.0000
+2026-05-06 12:44:42,517 [INFO ] Validation F1: 0.0000
+2026-05-06 12:44:42,517 [INFO ] Test F1: 0.0000
+2026-05-06 12:44:42,569 [INFO ] Train F1: 0.0000
+2026-05-06 12:44:42,618 [INFO ] Validation F1: 0.0000
+2026-05-06 12:44:42,618 [INFO ] Test F1: 0.0000
+2026-05-06 12:44:42,678 [INFO ] Train F1: 0.0000
+2026-05-06 12:44:42,726 [INFO ] Validation F1: 0.0000
+2026-05-06 12:44:42,726 [INFO ] Test F1: 0.0000
+2026-05-06 12:44:42,782 [INFO ] Train F1: 0.0000
+2026-05-06 12:44:42,837 [INFO ] Validation F1: 0.0000
+2026-05-06 12:44:42,837 [INFO ] Test F1: 0.0000
+2026-05-06 12:46:03,093 [INFO ] Retrieving data
+2026-05-06 12:46:03,097 [INFO ] Available Edge Features: ['EdgeID', 'from_id', 'to_id', 'Timestamp', 'Amount Sent', 'Sent Currency', 'Amount Received', 'Received Currency', 'Payment Format', 'Is Laundering']
+2026-05-06 12:46:03,102 [INFO ] Illicit ratio = 0 / 100 = 0.00%
+2026-05-06 12:46:03,102 [INFO ] Number of nodes (holdings doing transcations) = 113
+2026-05-06 12:46:03,102 [INFO ] Number of transactions = 100
+2026-05-06 12:46:03,102 [INFO ] Edge features being used: ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+2026-05-06 12:46:03,102 [INFO ] Node features being used: ['Feature'] ("Feature" is a placeholder feature of all 1s)
+2026-05-06 12:46:03,105 [INFO ] number of days and transactions in the data: 1 days, 100 transactions
+2026-05-06 12:46:03,106 [WARNI] Only 1 day of data — falling back to index-based split
+2026-05-06 12:46:03,107 [INFO ] Total train samples: 60.00% || IR: 0.00% || Train days: (index)
+2026-05-06 12:46:03,107 [INFO ] Total val samples: 20.00% || IR: 0.00% || Val days: (index)
+2026-05-06 12:46:03,107 [INFO ] Total test samples: 20.00% || IR: 0.00% || Test days: (index)
+2026-05-06 12:46:03,108 [INFO ] Start: adding ports
+2026-05-06 12:46:03,130 [INFO ] Done: adding ports
+2026-05-06 12:46:03,131 [INFO ] train data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[113, 1] },
+  (node, to, node)={
+    edge_index=[2, 60],
+    edge_attr=[60, 6],
+    y=[60],
+    timestamps=[60],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 60],
+    edge_attr=[60, 6],
+  }
+)
+2026-05-06 12:46:03,132 [INFO ] validation data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[113, 1] },
+  (node, to, node)={
+    edge_index=[2, 80],
+    edge_attr=[80, 6],
+    y=[80],
+    timestamps=[80],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 80],
+    edge_attr=[80, 6],
+  }
+)
+2026-05-06 12:46:03,132 [INFO ] test data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[113, 1] },
+  (node, to, node)={
+    edge_index=[2, 100],
+    edge_attr=[100, 6],
+    y=[100],
+    timestamps=[100],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 100],
+    edge_attr=[100, 6],
+  }
+)
+2026-05-06 12:46:03,132 [INFO ] Retrieved data in 0.04s
+2026-05-06 12:46:03,132 [INFO ] Running Training
+2026-05-06 12:46:03,271 [INFO ] +-----------------------------------------+-----------------------------+----------------+----------+
+| Layer                                   | Input Shape                 | Output Shape   | #Param   |
+|-----------------------------------------+-----------------------------+----------------+----------|
+| GraphModule                             |                             |                | 64,374   |
+| ├─(node_emb)ModuleDict                  | --                          | --             | 60       |
+| │    └─(node)Linear                     | [81, 2]                     | [81, 20]       | 60       |
+| ├─(edge_emb)ModuleDict                  | --                          | --             | 280      |
+| │    └─(node__to__node)Linear           | [60, 6]                     | [60, 20]       | 140      |
+| │    └─(node__rev_to__node)Linear       | [60, 6]                     | [60, 20]       | 140      |
+| ├─(convs)ModuleList                     | --                          | --             | 48,640   |
+| │    └─(0)ModuleDict                    | --                          | --             | 24,320   |
+| │    │    └─(node__to__node)PNAConv     | [81, 20], [2, 60], [60, 20] | [81, 20]       | 12,160   |
+| │    │    └─(node__rev_to__node)PNAConv | [81, 20], [2, 60], [60, 20] | [81, 20]       | 12,160   |
+| │    └─(1)ModuleDict                    | --                          | --             | 24,320   |
+| │    │    └─(node__to__node)PNAConv     | [81, 20], [2, 60], [60, 20] | [81, 20]       | 12,160   |
+| │    │    └─(node__rev_to__node)PNAConv | [81, 20], [2, 60], [60, 20] | [81, 20]       | 12,160   |
+| ├─(batch_norms)ModuleList               | --                          | --             | 80       |
+| │    └─(0)ModuleDict                    | --                          | --             | 40       |
+| │    │    └─(node)BatchNorm             | [81, 20]                    | [81, 20]       | 40       |
+| │    └─(1)ModuleDict                    | --                          | --             | 40       |
+| │    │    └─(node)BatchNorm             | [81, 20]                    | [81, 20]       | 40       |
+| ├─(emlps)ModuleList                     | --                          | --             | 6,560    |
+| │    └─(0)ModuleList                    | --                          | --             | 3,280    |
+| │    │    └─(0)ModuleDict               | --                          | --             | 2,440    |
+| │    │    └─(1)ModuleDict               | --                          | --             | --       |
+| │    │    └─(2)ModuleDict               | --                          | --             | 840      |
+| │    └─(1)ModuleList                    | --                          | --             | 3,280    |
+| │    │    └─(0)ModuleDict               | --                          | --             | 2,440    |
+| │    │    └─(1)ModuleDict               | --                          | --             | --       |
+| │    │    └─(2)ModuleDict               | --                          | --             | 840      |
+| ├─(mlp)ModuleList                       | --                          | --             | 8,754    |
+| │    └─(0)ModuleDict                    | --                          | --             | 6,100    |
+| │    │    └─(node__to__node)Linear      | [60, 60]                    | [60, 50]       | 3,050    |
+| │    │    └─(node__rev_to__node)Linear  | [60, 60]                    | [60, 50]       | 3,050    |
+| │    └─(1)ModuleDict                    | --                          | --             | --       |
+| │    │    └─(node__to__node)ReLU        | [60, 50]                    | [60, 50]       | --       |
+| │    │    └─(node__rev_to__node)ReLU    | [60, 50]                    | [60, 50]       | --       |
+| │    └─(2)ModuleDict                    | --                          | --             | --       |
+| │    │    └─(node__to__node)Dropout     | [60, 50]                    | [60, 50]       | --       |
+| │    │    └─(node__rev_to__node)Dropout | [60, 50]                    | [60, 50]       | --       |
+| │    └─(3)ModuleDict                    | --                          | --             | 2,550    |
+| │    │    └─(node__to__node)Linear      | [60, 50]                    | [60, 25]       | 1,275    |
+| │    │    └─(node__rev_to__node)Linear  | [60, 50]                    | [60, 25]       | 1,275    |
+| │    └─(4)ModuleDict                    | --                          | --             | --       |
+| │    │    └─(node__to__node)ReLU        | [60, 25]                    | [60, 25]       | --       |
+| │    │    └─(node__rev_to__node)ReLU    | [60, 25]                    | [60, 25]       | --       |
+| │    └─(5)ModuleDict                    | --                          | --             | --       |
+| │    │    └─(node__to__node)Dropout     | [60, 25]                    | [60, 25]       | --       |
+| │    │    └─(node__rev_to__node)Dropout | [60, 25]                    | [60, 25]       | --       |
+| │    └─(6)ModuleDict                    | --                          | --             | 104      |
+| │    │    └─(node__to__node)Linear      | [60, 25]                    | [60, 2]        | 52       |
+| │    │    └─(node__rev_to__node)Linear  | [60, 25]                    | [60, 2]        | 52       |
++-----------------------------------------+-----------------------------+----------------+----------+
+2026-05-06 12:46:03,338 [INFO ] Train F1: 0.0000
+2026-05-06 12:46:03,399 [INFO ] Validation F1: 0.0000
+2026-05-06 12:46:03,399 [INFO ] Test F1: 0.0000
+2026-05-06 12:46:03,459 [INFO ] Train F1: 0.0000
+2026-05-06 12:46:03,512 [INFO ] Validation F1: 0.0000
+2026-05-06 12:46:03,512 [INFO ] Test F1: 0.0000
+2026-05-06 12:46:03,656 [INFO ] Train F1: 0.0000
+2026-05-06 12:46:03,719 [INFO ] Validation F1: 0.0000
+2026-05-06 12:46:03,719 [INFO ] Test F1: 0.0000
+2026-05-06 12:46:03,779 [INFO ] Train F1: 0.0000
+2026-05-06 12:46:03,838 [INFO ] Validation F1: 0.0000
+2026-05-06 12:46:03,838 [INFO ] Test F1: 0.0000
+2026-05-06 12:46:03,894 [INFO ] Train F1: 0.0000
+2026-05-06 12:46:03,944 [INFO ] Validation F1: 0.0000
+2026-05-06 12:46:03,944 [INFO ] Test F1: 0.0000
+2026-05-06 12:46:37,458 [INFO ] Retrieving data
+2026-05-06 12:46:37,468 [INFO ] Available Edge Features: ['EdgeID', 'from_id', 'to_id', 'Timestamp', 'Amount Sent', 'Sent Currency', 'Amount Received', 'Received Currency', 'Payment Format', 'Is Laundering']
+2026-05-06 12:46:37,642 [INFO ] Illicit ratio = 0 / 10000 = 0.00%
+2026-05-06 12:46:37,642 [INFO ] Number of nodes (holdings doing transcations) = 8434
+2026-05-06 12:46:37,642 [INFO ] Number of transactions = 10000
+2026-05-06 12:46:37,642 [INFO ] Edge features being used: ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+2026-05-06 12:46:37,642 [INFO ] Node features being used: ['Feature'] ("Feature" is a placeholder feature of all 1s)
+2026-05-06 12:46:37,649 [INFO ] number of days and transactions in the data: 1 days, 10000 transactions
+2026-05-06 12:46:37,650 [WARNI] Only 1 day of data — falling back to index-based split
+2026-05-06 12:46:37,650 [INFO ] Total train samples: 60.00% || IR: 0.00% || Train days: (index)
+2026-05-06 12:46:37,650 [INFO ] Total val samples: 20.00% || IR: 0.00% || Val days: (index)
+2026-05-06 12:46:37,651 [INFO ] Total test samples: 20.00% || IR: 0.00% || Test days: (index)
+2026-05-06 12:46:37,652 [INFO ] Start: adding ports
+2026-05-06 12:46:39,773 [INFO ] Done: adding ports
+2026-05-06 12:46:39,779 [INFO ] train data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[8434, 1] },
+  (node, to, node)={
+    edge_index=[2, 6000],
+    edge_attr=[6000, 6],
+    y=[6000],
+    timestamps=[6000],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 6000],
+    edge_attr=[6000, 6],
+  }
+)
+2026-05-06 12:46:39,779 [INFO ] validation data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[8434, 1] },
+  (node, to, node)={
+    edge_index=[2, 8000],
+    edge_attr=[8000, 6],
+    y=[8000],
+    timestamps=[8000],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 8000],
+    edge_attr=[8000, 6],
+  }
+)
+2026-05-06 12:46:39,780 [INFO ] test data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[8434, 1] },
+  (node, to, node)={
+    edge_index=[2, 10000],
+    edge_attr=[10000, 6],
+    y=[10000],
+    timestamps=[10000],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 10000],
+    edge_attr=[10000, 6],
+  }
+)
+2026-05-06 12:46:39,780 [INFO ] Retrieved data in 2.32s
+2026-05-06 12:46:39,780 [INFO ] Running Training
+2026-05-06 12:46:40,276 [INFO ] +-----------------------------------------+-----------------------------------+----------------+----------+
+| Layer                                   | Input Shape                       | Output Shape   | #Param   |
+|-----------------------------------------+-----------------------------------+----------------+----------|
+| GraphModule                             |                                   |                | 64,374   |
+| ├─(node_emb)ModuleDict                  | --                                | --             | 60       |
+| │    └─(node)Linear                     | [5730, 2]                         | [5730, 20]     | 60       |
+| ├─(edge_emb)ModuleDict                  | --                                | --             | 280      |
+| │    └─(node__to__node)Linear           | [6000, 6]                         | [6000, 20]     | 140      |
+| │    └─(node__rev_to__node)Linear       | [5979, 6]                         | [5979, 20]     | 140      |
+| ├─(convs)ModuleList                     | --                                | --             | 48,640   |
+| │    └─(0)ModuleDict                    | --                                | --             | 24,320   |
+| │    │    └─(node__to__node)PNAConv     | [5730, 20], [2, 6000], [6000, 20] | [5730, 20]     | 12,160   |
+| │    │    └─(node__rev_to__node)PNAConv | [5730, 20], [2, 5979], [5979, 20] | [5730, 20]     | 12,160   |
+| │    └─(1)ModuleDict                    | --                                | --             | 24,320   |
+| │    │    └─(node__to__node)PNAConv     | [5730, 20], [2, 6000], [6000, 20] | [5730, 20]     | 12,160   |
+| │    │    └─(node__rev_to__node)PNAConv | [5730, 20], [2, 5979], [5979, 20] | [5730, 20]     | 12,160   |
+| ├─(batch_norms)ModuleList               | --                                | --             | 80       |
+| │    └─(0)ModuleDict                    | --                                | --             | 40       |
+| │    │    └─(node)BatchNorm             | [5730, 20]                        | [5730, 20]     | 40       |
+| │    └─(1)ModuleDict                    | --                                | --             | 40       |
+| │    │    └─(node)BatchNorm             | [5730, 20]                        | [5730, 20]     | 40       |
+| ├─(emlps)ModuleList                     | --                                | --             | 6,560    |
+| │    └─(0)ModuleList                    | --                                | --             | 3,280    |
+| │    │    └─(0)ModuleDict               | --                                | --             | 2,440    |
+| │    │    └─(1)ModuleDict               | --                                | --             | --       |
+| │    │    └─(2)ModuleDict               | --                                | --             | 840      |
+| │    └─(1)ModuleList                    | --                                | --             | 3,280    |
+| │    │    └─(0)ModuleDict               | --                                | --             | 2,440    |
+| │    │    └─(1)ModuleDict               | --                                | --             | --       |
+| │    │    └─(2)ModuleDict               | --                                | --             | 840      |
+| ├─(mlp)ModuleList                       | --                                | --             | 8,754    |
+| │    └─(0)ModuleDict                    | --                                | --             | 6,100    |
+| │    │    └─(node__to__node)Linear      | [6000, 60]                        | [6000, 50]     | 3,050    |
+| │    │    └─(node__rev_to__node)Linear  | [5979, 60]                        | [5979, 50]     | 3,050    |
+| │    └─(1)ModuleDict                    | --                                | --             | --       |
+| │    │    └─(node__to__node)ReLU        | [6000, 50]                        | [6000, 50]     | --       |
+| │    │    └─(node__rev_to__node)ReLU    | [5979, 50]                        | [5979, 50]     | --       |
+| │    └─(2)ModuleDict                    | --                                | --             | --       |
+| │    │    └─(node__to__node)Dropout     | [6000, 50]                        | [6000, 50]     | --       |
+| │    │    └─(node__rev_to__node)Dropout | [5979, 50]                        | [5979, 50]     | --       |
+| │    └─(3)ModuleDict                    | --                                | --             | 2,550    |
+| │    │    └─(node__to__node)Linear      | [6000, 50]                        | [6000, 25]     | 1,275    |
+| │    │    └─(node__rev_to__node)Linear  | [5979, 50]                        | [5979, 25]     | 1,275    |
+| │    └─(4)ModuleDict                    | --                                | --             | --       |
+| │    │    └─(node__to__node)ReLU        | [6000, 25]                        | [6000, 25]     | --       |
+| │    │    └─(node__rev_to__node)ReLU    | [5979, 25]                        | [5979, 25]     | --       |
+| │    └─(5)ModuleDict                    | --                                | --             | --       |
+| │    │    └─(node__to__node)Dropout     | [6000, 25]                        | [6000, 25]     | --       |
+| │    │    └─(node__rev_to__node)Dropout | [5979, 25]                        | [5979, 25]     | --       |
+| │    └─(6)ModuleDict                    | --                                | --             | 104      |
+| │    │    └─(node__to__node)Linear      | [6000, 25]                        | [6000, 2]      | 52       |
+| │    │    └─(node__rev_to__node)Linear  | [5979, 25]                        | [5979, 2]      | 52       |
++-----------------------------------------+-----------------------------------+----------------+----------+
+2026-05-06 12:46:41,793 [INFO ] Train F1: 0.0000
+2026-05-06 12:46:42,375 [INFO ] Validation F1: 0.0000
+2026-05-06 12:46:42,376 [INFO ] Test F1: 0.0000
+2026-05-06 12:46:43,806 [INFO ] Train F1: 0.0000
+2026-05-06 12:46:44,253 [INFO ] Validation F1: 0.0000
+2026-05-06 12:46:44,254 [INFO ] Test F1: 0.0000
+2026-05-06 12:46:45,648 [INFO ] Train F1: 0.0000
+2026-05-06 12:46:46,112 [INFO ] Validation F1: 0.0000
+2026-05-06 12:46:46,112 [INFO ] Test F1: 0.0000
+2026-05-06 12:46:47,675 [INFO ] Train F1: 0.0000
+2026-05-06 12:46:48,142 [INFO ] Validation F1: 0.0000
+2026-05-06 12:46:48,142 [INFO ] Test F1: 0.0000
+2026-05-06 12:46:49,519 [INFO ] Train F1: 0.0000
+2026-05-06 12:46:50,049 [INFO ] Validation F1: 0.0000
+2026-05-06 12:46:50,049 [INFO ] Test F1: 0.0000
+2026-05-06 12:49:02,716 [INFO ] Retrieving data
+2026-05-06 12:49:02,725 [INFO ] Available Edge Features: ['EdgeID', 'from_id', 'to_id', 'Timestamp', 'Amount Sent', 'Sent Currency', 'Amount Received', 'Received Currency', 'Payment Format', 'Is Laundering']
+2026-05-06 12:49:02,880 [INFO ] Illicit ratio = 0 / 10000 = 0.00%
+2026-05-06 12:49:02,880 [INFO ] Number of nodes (holdings doing transcations) = 8434
+2026-05-06 12:49:02,880 [INFO ] Number of transactions = 10000
+2026-05-06 12:49:02,880 [INFO ] Edge features being used: ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+2026-05-06 12:49:02,880 [INFO ] Node features being used: ['Feature'] ("Feature" is a placeholder feature of all 1s)
+2026-05-06 12:49:02,887 [INFO ] number of days and transactions in the data: 1 days, 10000 transactions
+2026-05-06 12:49:02,888 [WARNI] Only 1 day of data — falling back to index-based split
+2026-05-06 12:49:02,889 [INFO ] Total train samples: 60.00% || IR: 0.00% || Train days: (index)
+2026-05-06 12:49:02,889 [INFO ] Total val samples: 20.00% || IR: 0.00% || Val days: (index)
+2026-05-06 12:49:02,889 [INFO ] Total test samples: 20.00% || IR: 0.00% || Test days: (index)
+2026-05-06 12:49:02,890 [INFO ] Start: adding ports
+2026-05-06 12:49:04,967 [INFO ] Done: adding ports
+2026-05-06 12:49:04,973 [INFO ] train data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[8434, 1] },
+  (node, to, node)={
+    edge_index=[2, 6000],
+    edge_attr=[6000, 6],
+    y=[6000],
+    timestamps=[6000],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 6000],
+    edge_attr=[6000, 6],
+  }
+)
+2026-05-06 12:49:04,973 [INFO ] validation data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[8434, 1] },
+  (node, to, node)={
+    edge_index=[2, 8000],
+    edge_attr=[8000, 6],
+    y=[8000],
+    timestamps=[8000],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 8000],
+    edge_attr=[8000, 6],
+  }
+)
+2026-05-06 12:49:04,973 [INFO ] test data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[8434, 1] },
+  (node, to, node)={
+    edge_index=[2, 10000],
+    edge_attr=[10000, 6],
+    y=[10000],
+    timestamps=[10000],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 10000],
+    edge_attr=[10000, 6],
+  }
+)
+2026-05-06 12:49:04,974 [INFO ] Retrieved data in 2.26s
+2026-05-06 12:49:04,974 [INFO ] Running Training
+2026-05-06 12:49:05,479 [INFO ] +-----------------------------------------+-----------------------------------+----------------+----------+
+| Layer                                   | Input Shape                       | Output Shape   | #Param   |
+|-----------------------------------------+-----------------------------------+----------------+----------|
+| GraphModule                             |                                   |                | 64,374   |
+| ├─(node_emb)ModuleDict                  | --                                | --             | 60       |
+| │    └─(node)Linear                     | [5730, 2]                         | [5730, 20]     | 60       |
+| ├─(edge_emb)ModuleDict                  | --                                | --             | 280      |
+| │    └─(node__to__node)Linear           | [6000, 6]                         | [6000, 20]     | 140      |
+| │    └─(node__rev_to__node)Linear       | [5979, 6]                         | [5979, 20]     | 140      |
+| ├─(convs)ModuleList                     | --                                | --             | 48,640   |
+| │    └─(0)ModuleDict                    | --                                | --             | 24,320   |
+| │    │    └─(node__to__node)PNAConv     | [5730, 20], [2, 6000], [6000, 20] | [5730, 20]     | 12,160   |
+| │    │    └─(node__rev_to__node)PNAConv | [5730, 20], [2, 5979], [5979, 20] | [5730, 20]     | 12,160   |
+| │    └─(1)ModuleDict                    | --                                | --             | 24,320   |
+| │    │    └─(node__to__node)PNAConv     | [5730, 20], [2, 6000], [6000, 20] | [5730, 20]     | 12,160   |
+| │    │    └─(node__rev_to__node)PNAConv | [5730, 20], [2, 5979], [5979, 20] | [5730, 20]     | 12,160   |
+| ├─(batch_norms)ModuleList               | --                                | --             | 80       |
+| │    └─(0)ModuleDict                    | --                                | --             | 40       |
+| │    │    └─(node)BatchNorm             | [5730, 20]                        | [5730, 20]     | 40       |
+| │    └─(1)ModuleDict                    | --                                | --             | 40       |
+| │    │    └─(node)BatchNorm             | [5730, 20]                        | [5730, 20]     | 40       |
+| ├─(emlps)ModuleList                     | --                                | --             | 6,560    |
+| │    └─(0)ModuleList                    | --                                | --             | 3,280    |
+| │    │    └─(0)ModuleDict               | --                                | --             | 2,440    |
+| │    │    └─(1)ModuleDict               | --                                | --             | --       |
+| │    │    └─(2)ModuleDict               | --                                | --             | 840      |
+| │    └─(1)ModuleList                    | --                                | --             | 3,280    |
+| │    │    └─(0)ModuleDict               | --                                | --             | 2,440    |
+| │    │    └─(1)ModuleDict               | --                                | --             | --       |
+| │    │    └─(2)ModuleDict               | --                                | --             | 840      |
+| ├─(mlp)ModuleList                       | --                                | --             | 8,754    |
+| │    └─(0)ModuleDict                    | --                                | --             | 6,100    |
+| │    │    └─(node__to__node)Linear      | [6000, 60]                        | [6000, 50]     | 3,050    |
+| │    │    └─(node__rev_to__node)Linear  | [5979, 60]                        | [5979, 50]     | 3,050    |
+| │    └─(1)ModuleDict                    | --                                | --             | --       |
+| │    │    └─(node__to__node)ReLU        | [6000, 50]                        | [6000, 50]     | --       |
+| │    │    └─(node__rev_to__node)ReLU    | [5979, 50]                        | [5979, 50]     | --       |
+| │    └─(2)ModuleDict                    | --                                | --             | --       |
+| │    │    └─(node__to__node)Dropout     | [6000, 50]                        | [6000, 50]     | --       |
+| │    │    └─(node__rev_to__node)Dropout | [5979, 50]                        | [5979, 50]     | --       |
+| │    └─(3)ModuleDict                    | --                                | --             | 2,550    |
+| │    │    └─(node__to__node)Linear      | [6000, 50]                        | [6000, 25]     | 1,275    |
+| │    │    └─(node__rev_to__node)Linear  | [5979, 50]                        | [5979, 25]     | 1,275    |
+| │    └─(4)ModuleDict                    | --                                | --             | --       |
+| │    │    └─(node__to__node)ReLU        | [6000, 25]                        | [6000, 25]     | --       |
+| │    │    └─(node__rev_to__node)ReLU    | [5979, 25]                        | [5979, 25]     | --       |
+| │    └─(5)ModuleDict                    | --                                | --             | --       |
+| │    │    └─(node__to__node)Dropout     | [6000, 25]                        | [6000, 25]     | --       |
+| │    │    └─(node__rev_to__node)Dropout | [5979, 25]                        | [5979, 25]     | --       |
+| │    └─(6)ModuleDict                    | --                                | --             | 104      |
+| │    │    └─(node__to__node)Linear      | [6000, 25]                        | [6000, 2]      | 52       |
+| │    │    └─(node__rev_to__node)Linear  | [5979, 25]                        | [5979, 2]      | 52       |
++-----------------------------------------+-----------------------------------+----------------+----------+
+2026-05-06 12:49:06,888 [INFO ] Train F1: 0.0000
+2026-05-06 12:49:07,336 [INFO ] Validation F1: 0.0000
+2026-05-06 12:49:07,337 [INFO ] Test F1: 0.0000
+2026-05-06 12:49:08,788 [INFO ] Train F1: 0.0000
+2026-05-06 12:49:09,261 [INFO ] Validation F1: 0.0000
+2026-05-06 12:49:09,261 [INFO ] Test F1: 0.0000
+2026-05-06 12:49:10,689 [INFO ] Train F1: 0.0000
+2026-05-06 12:49:11,194 [INFO ] Validation F1: 0.0000
+2026-05-06 12:49:11,195 [INFO ] Test F1: 0.0000
+2026-05-06 12:49:12,909 [INFO ] Train F1: 0.0000
+2026-05-06 12:49:13,396 [INFO ] Validation F1: 0.0000
+2026-05-06 12:49:13,396 [INFO ] Test F1: 0.0000
+2026-05-06 12:49:14,748 [INFO ] Train F1: 0.0000
+2026-05-06 12:49:15,237 [INFO ] Validation F1: 0.0000
+2026-05-06 12:49:15,237 [INFO ] Test F1: 0.0000
+2026-05-06 14:23:07,017 [INFO ] Retrieving data
+2026-05-06 14:23:07,670 [INFO ] Available Edge Features: ['EdgeID', 'from_id', 'to_id', 'Timestamp', 'Amount Sent', 'Sent Currency', 'Amount Received', 'Received Currency', 'Payment Format', 'Is Laundering']
+2026-05-06 14:23:18,657 [INFO ] Illicit ratio = 214 / 1000000 = 0.02%
+2026-05-06 14:23:18,657 [INFO ] Number of nodes (holdings doing transcations) = 523382
+2026-05-06 14:23:18,657 [INFO ] Number of transactions = 1000000
+2026-05-06 14:23:18,657 [INFO ] Edge features being used: ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+2026-05-06 14:23:18,657 [INFO ] Node features being used: ['Feature'] ("Feature" is a placeholder feature of all 1s)
+2026-05-06 14:23:18,725 [INFO ] number of days and transactions in the data: 6 days, 1000000 transactions
+2026-05-06 14:23:18,776 [INFO ] Calculate split: [[0], [1], [2, 3, 4, 5]]
+2026-05-06 14:23:18,788 [INFO ] Total train samples: 99.99% || IR: 0.02% || Train days: [0]
+2026-05-06 14:23:18,789 [INFO ] Total val samples: 0.00% || IR: 52.38% || Val days: [1]
+2026-05-06 14:23:18,789 [INFO ] Total test samples: 0.00% || IR: 60.53% || Test days: [2, 3, 4, 5]
+2026-05-06 14:23:18,831 [INFO ] Start: adding ports
+2026-05-06 14:31:34,287 [INFO ] Done: adding ports
+2026-05-06 14:31:34,712 [INFO ] train data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[523382, 1] },
+  (node, to, node)={
+    edge_index=[2, 999941],
+    edge_attr=[999941, 6],
+    y=[999941],
+    timestamps=[999941],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 999941],
+    edge_attr=[999941, 6],
+  }
+)
+2026-05-06 14:31:34,713 [INFO ] validation data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[523382, 1] },
+  (node, to, node)={
+    edge_index=[2, 999962],
+    edge_attr=[999962, 6],
+    y=[999962],
+    timestamps=[999962],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 999962],
+    edge_attr=[999962, 6],
+  }
+)
+2026-05-06 14:31:34,714 [INFO ] test data object: HeteroGraphData(
+  readout='edge',
+  node={ x=[523382, 1] },
+  (node, to, node)={
+    edge_index=[2, 1000000],
+    edge_attr=[1000000, 6],
+    y=[1000000],
+    timestamps=[1000000],
+  },
+  (node, rev_to, node)={
+    edge_index=[2, 1000000],
+    edge_attr=[1000000, 6],
+  }
+)
+2026-05-06 14:31:34,728 [INFO ] Retrieved data in 507.71s
+2026-05-06 14:31:34,729 [INFO ] Running Training
+2026-05-06 14:31:39,852 [INFO ] +-----------------------------------------+--------------------------------------+----------------+----------+
+| Layer                                   | Input Shape                          | Output Shape   | #Param   |
+|-----------------------------------------+--------------------------------------+----------------+----------|
+| GraphModule                             |                                      |                | 64,374   |
+| ├─(node_emb)ModuleDict                  | --                                   | --             | 60       |
+| │    └─(node)Linear                     | [42492, 2]                           | [42492, 20]    | 60       |
+| ├─(edge_emb)ModuleDict                  | --                                   | --             | 280      |
+| │    └─(node__to__node)Linear           | [77318, 6]                           | [77318, 20]    | 140      |
+| │    └─(node__rev_to__node)Linear       | [84124, 6]                           | [84124, 20]    | 140      |
+| ├─(convs)ModuleList                     | --                                   | --             | 48,640   |
+| │    └─(0)ModuleDict                    | --                                   | --             | 24,320   |
+| │    │    └─(node__to__node)PNAConv     | [42492, 20], [2, 77318], [77318, 20] | [42492, 20]    | 12,160   |
+| │    │    └─(node__rev_to__node)PNAConv | [42492, 20], [2, 84124], [84124, 20] | [42492, 20]    | 12,160   |
+| │    └─(1)ModuleDict                    | --                                   | --             | 24,320   |
+| │    │    └─(node__to__node)PNAConv     | [42492, 20], [2, 77318], [77318, 20] | [42492, 20]    | 12,160   |
+| │    │    └─(node__rev_to__node)PNAConv | [42492, 20], [2, 84124], [84124, 20] | [42492, 20]    | 12,160   |
+| ├─(batch_norms)ModuleList               | --                                   | --             | 80       |
+| │    └─(0)ModuleDict                    | --                                   | --             | 40       |
+| │    │    └─(node)BatchNorm             | [42492, 20]                          | [42492, 20]    | 40       |
+| │    └─(1)ModuleDict                    | --                                   | --             | 40       |
+| │    │    └─(node)BatchNorm             | [42492, 20]                          | [42492, 20]    | 40       |
+| ├─(emlps)ModuleList                     | --                                   | --             | 6,560    |
+| │    └─(0)ModuleList                    | --                                   | --             | 3,280    |
+| │    │    └─(0)ModuleDict               | --                                   | --             | 2,440    |
+| │    │    └─(1)ModuleDict               | --                                   | --             | --       |
+| │    │    └─(2)ModuleDict               | --                                   | --             | 840      |
+| │    └─(1)ModuleList                    | --                                   | --             | 3,280    |
+| │    │    └─(0)ModuleDict               | --                                   | --             | 2,440    |
+| │    │    └─(1)ModuleDict               | --                                   | --             | --       |
+| │    │    └─(2)ModuleDict               | --                                   | --             | 840      |
+| ├─(mlp)ModuleList                       | --                                   | --             | 8,754    |
+| │    └─(0)ModuleDict                    | --                                   | --             | 6,100    |
+| │    │    └─(node__to__node)Linear      | [77318, 60]                          | [77318, 50]    | 3,050    |
+| │    │    └─(node__rev_to__node)Linear  | [84124, 60]                          | [84124, 50]    | 3,050    |
+| │    └─(1)ModuleDict                    | --                                   | --             | --       |
+| │    │    └─(node__to__node)ReLU        | [77318, 50]                          | [77318, 50]    | --       |
+| │    │    └─(node__rev_to__node)ReLU    | [84124, 50]                          | [84124, 50]    | --       |
+| │    └─(2)ModuleDict                    | --                                   | --             | --       |
+| │    │    └─(node__to__node)Dropout     | [77318, 50]                          | [77318, 50]    | --       |
+| │    │    └─(node__rev_to__node)Dropout | [84124, 50]                          | [84124, 50]    | --       |
+| │    └─(3)ModuleDict                    | --                                   | --             | 2,550    |
+| │    │    └─(node__to__node)Linear      | [77318, 50]                          | [77318, 25]    | 1,275    |
+| │    │    └─(node__rev_to__node)Linear  | [84124, 50]                          | [84124, 25]    | 1,275    |
+| │    └─(4)ModuleDict                    | --                                   | --             | --       |
+| │    │    └─(node__to__node)ReLU        | [77318, 25]                          | [77318, 25]    | --       |
+| │    │    └─(node__rev_to__node)ReLU    | [84124, 25]                          | [84124, 25]    | --       |
+| │    └─(5)ModuleDict                    | --                                   | --             | --       |
+| │    │    └─(node__to__node)Dropout     | [77318, 25]                          | [77318, 25]    | --       |
+| │    │    └─(node__rev_to__node)Dropout | [84124, 25]                          | [84124, 25]    | --       |
+| │    └─(6)ModuleDict                    | --                                   | --             | 104      |
+| │    │    └─(node__to__node)Linear      | [77318, 25]                          | [77318, 2]     | 52       |
+| │    │    └─(node__rev_to__node)Linear  | [84124, 25]                          | [84124, 2]     | 52       |
++-----------------------------------------+--------------------------------------+----------------+----------+
+2026-05-06 14:52:13,779 [INFO ] Train F1: 0.0003
+2026-05-06 14:52:14,095 [INFO ] Validation F1: 0.0000
+2026-05-06 14:52:14,096 [INFO ] Test F1: 0.0000
+2026-05-06 15:11:37,282 [INFO ] Train F1: 0.0000
+2026-05-06 15:11:37,520 [INFO ] Validation F1: 0.0000
+2026-05-06 15:11:37,521 [INFO ] Test F1: 0.0000
+2026-05-06 15:31:01,420 [INFO ] Train F1: 0.0000
+2026-05-06 15:31:01,536 [INFO ] Validation F1: 0.0000
+2026-05-06 15:31:01,536 [INFO ] Test F1: 0.0000
