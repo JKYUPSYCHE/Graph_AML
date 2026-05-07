@@ -18,24 +18,6 @@ gnn/
     ├── format_kaggle_files.py  # 전처리 스크립트 — Kaggle raw CSV → formatted_transactions.csv
     ├── data_config.json    # 데이터/모델 경로 설정 (실행 전 경로 수정 필요)
     ├── model_settings.json # 모델별 하이퍼파라미터 (lr, hidden dim, dropout 등)
-    └── env.yml             # baseline 전용 conda 환경 파일 (PyTorch, PyG 포함)
-```
-
-## 환경 설치
-
-프로젝트 공통 `requirements.txt`에는 PyTorch/PyG가 없으므로 baseline 실행 시 아래 순서로 별도 설치 필요.
-
-```bash
-# 1. PyTorch (CUDA 11.8)
-pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 torchaudio==2.0.2+cu118 \
-  --extra-index-url https://download.pytorch.org/whl/cu118
-
-# 2. PyG extensions
-pip install torch-scatter torch-sparse torch-cluster torch-geometric \
-  -f https://data.pyg.org/whl/torch-2.0.1+cu118.html
-
-# 3. 기타 의존성
-pip install datatable wandb munch tqdm scikit-learn pandas
 ```
 
 ## 실행 방법

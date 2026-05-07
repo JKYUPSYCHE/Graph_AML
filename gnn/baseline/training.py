@@ -11,6 +11,7 @@ import logging
 
 def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config):
     best_val_f1 = 0
+    patience_counter = 0
     for epoch in range(config.epochs):
         total_loss = total_examples = 0
         preds = []
@@ -51,13 +52,20 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
 
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
+            patience_counter = 0
             if args.save_model:
                 save_model(model, optimizer, epoch, args, data_config)
+        else:
+            patience_counter += 1
+            if args.patience is not None and patience_counter >= args.patience:
+                logging.info(f'Early stopping at epoch {epoch} (patience={args.patience})')
+                break
 
     return model
 
 def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config):
     best_val_f1 = 0
+    patience_counter = 0
     for epoch in range(config.epochs):
         total_loss = total_examples = 0
         preds = []
@@ -100,8 +108,14 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
 
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
+            patience_counter = 0
             if args.save_model:
                 save_model(model, optimizer, epoch, args, data_config)
+        else:
+            patience_counter += 1
+            if args.patience is not None and patience_counter >= args.patience:
+                logging.info(f'Early stopping at epoch {epoch} (patience={args.patience})')
+                break
 
     return model
 
