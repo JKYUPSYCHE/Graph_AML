@@ -1,10 +1,13 @@
+import os
+import time
 import torch
 import tqdm
+import psutil
 from torch_geometric.transforms import BaseTransform
 from typing import Union
 from torch_geometric.data import Data, HeteroData
 from torch_geometric.loader import LinkNeighborLoader
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score
 import json
 
 class AddEgoIds(BaseTransform):
@@ -94,8 +97,13 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
 
 @torch.no_grad()
 def evaluate_homo(loader, inds, model, data, device, args):
-    '''Evaluates the model performane for homogenous graph data.'''
+    '''Evaluates the model performance for homogenous graph data.'''
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats(device)
+    t_start = time.perf_counter()
+
     preds = []
+    pred_probas = []
     ground_truths = []
     for batch in tqdm.tqdm(loader, disable=not args.tqdm):
         inds = inds.detach().cpu()
@@ -127,18 +135,39 @@ def evaluate_homo(loader, inds, model, data, device, args):
             out = model(batch.x, batch.edge_index, batch.edge_attr)
             out = out[mask]
             pred = out.argmax(dim=-1)
+            pred_proba = out.softmax(dim=-1)[:, 1]
             preds.append(pred)
+            pred_probas.append(pred_proba)
             ground_truths.append(batch.y[mask])
-    pred = torch.cat(preds, dim=0).cpu().numpy()
-    ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
-    f1 = f1_score(ground_truth, pred)
 
-    return f1
+    t_end = time.perf_counter()
+    if torch.cuda.is_available():
+        memory_mb = torch.cuda.max_memory_allocated(device) / 1024 ** 2
+    else:
+        memory_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2
+
+    pred = torch.cat(preds, dim=0).cpu().numpy()
+    pred_proba = torch.cat(pred_probas, dim=0).cpu().numpy()
+    ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
+
+    return {
+        'f1':        f1_score(ground_truth, pred, zero_division=0),
+        'recall':    recall_score(ground_truth, pred, zero_division=0),
+        'precision': precision_score(ground_truth, pred, zero_division=0),
+        'auprc':     average_precision_score(ground_truth, pred_proba),
+        'memory_mb': memory_mb,
+        'time_s':    t_end - t_start,
+    }
 
 @torch.no_grad()
 def evaluate_hetero(loader, inds, model, data, device, args):
-    '''Evaluates the model performane for heterogenous graph data.'''
+    '''Evaluates the model performance for heterogenous graph data.'''
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats(device)
+    t_start = time.perf_counter()
+
     preds = []
+    pred_probas = []
     ground_truths = []
     for batch in tqdm.tqdm(loader, disable=not args.tqdm):
         inds = inds.detach().cpu()
@@ -172,13 +201,29 @@ def evaluate_hetero(loader, inds, model, data, device, args):
             out = out[('node', 'to', 'node')]
             out = out[mask]
             pred = out.argmax(dim=-1)
+            pred_proba = out.softmax(dim=-1)[:, 1]
             preds.append(pred)
+            pred_probas.append(pred_proba)
             ground_truths.append(batch['node', 'to', 'node'].y[mask])
-    pred = torch.cat(preds, dim=0).cpu().numpy()
-    ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
-    f1 = f1_score(ground_truth, pred)
 
-    return f1
+    t_end = time.perf_counter()
+    if torch.cuda.is_available():
+        memory_mb = torch.cuda.max_memory_allocated(device) / 1024 ** 2
+    else:
+        memory_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2
+
+    pred = torch.cat(preds, dim=0).cpu().numpy()
+    pred_proba = torch.cat(pred_probas, dim=0).cpu().numpy()
+    ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
+
+    return {
+        'f1':        f1_score(ground_truth, pred, zero_division=0),
+        'recall':    recall_score(ground_truth, pred, zero_division=0),
+        'precision': precision_score(ground_truth, pred, zero_division=0),
+        'auprc':     average_precision_score(ground_truth, pred_proba),
+        'memory_mb': memory_mb,
+        'time_s':    t_end - t_start,
+    }
 
 def save_model(model, optimizer, epoch, args, data_config):
     torch.save({
