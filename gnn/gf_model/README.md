@@ -9,7 +9,6 @@ Multi-PNA+EU baseline에 계좌 수준 노드 피처(Graph Feature)를 추가한
 | 노드 피처 | placeholder (1) | 계좌 수준 7개 피처 (train-only) |
 | 노드 피처 파일 | 없음 | `account_node_features.csv` |
 | `--node_features` 플래그 | 없음 | 있음 |
-| train/val/test 분할 | timestamp 누적 행 수 60/20/20 | timestamp 누적 행 수 60/20/20 (동일) |
 
 ### 노드 피처 목록 (`--node_features` 사용 시)
 
