@@ -16,7 +16,7 @@ def _log_best(best_epoch, best_val, best_te):
     logging.info(f"  Test — F1: {best_te['f1']:.4f} | Recall: {best_te['recall']:.4f} | Precision: {best_te['precision']:.4f} | AUPRC: {best_te['auprc']:.4f}")
 
 def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config):
-    best_val_f1 = 0
+    best_val_f1 = -1
     best_val_result = best_te_result = None
     best_epoch = 0
     patience_counter = 0
@@ -76,7 +76,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
     return model
 
 def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config):
-    best_val_f1 = 0
+    best_val_f1 = -1
     best_val_result = best_te_result = None
     best_epoch = 0
     patience_counter = 0
