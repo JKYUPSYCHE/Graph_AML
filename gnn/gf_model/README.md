@@ -163,3 +163,25 @@ python main.py --data Small_LI --model pna --emlps --reverse_mp --ego --ports --
 | 플래그 | 기본값 | 설명 |
 |--------|--------|------|
 | `--tqdm` | False | 터미널 실행 시 배치 진행 바 표시. 비대화형 환경(서버 로그)에서는 끄는 것 권장 |
+
+## 저장된 모델로 추론하기
+
+`--save_model`로 학습하면 두 파일이 저장된다.
+
+```
+experiments/gf_model/models/
+├── checkpoint_{unique_name}.tar        # 모델 가중치
+└── checkpoint_{unique_name}_args.json  # 학습에 사용한 플래그 전체
+```
+
+`_args.json`에는 `--emlps`, `--ports`, `--node_features` 등 모델 구조에 영향을 주는 플래그가 모두 기록된다. 추론 시 이 플래그들을 동일하게 넘겨야 모델 구조가 일치하여 로드가 성공한다.
+
+**추론 실행 예시**
+
+```bash
+# 1. args.json 확인
+cat experiments/gf_model/models/checkpoint_gf_run1_args.json
+
+# 2. json의 플래그 그대로 --inference 붙여서 실행
+python main.py --data Small_LI --model pna --emlps --reverse_mp --ego --ports --node_features --inference --unique_name gf_run1
+```
