@@ -10,3 +10,6 @@ __pycache__/
 
 # Logs
 logs/
+
+# TensorBoard
+gnn/gf_model/runs/

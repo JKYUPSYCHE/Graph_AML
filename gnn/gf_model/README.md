@@ -6,7 +6,7 @@ Multi-PNA+EU baseline에 계좌 수준 노드 피처(Graph Feature)를 추가한
 
 | 항목 | baseline | gf_model |
 |------|----------|----------|
-| 노드 피처 | placeholder (1) | 계좌 수준 7개 피처 (train-only) |
+| 노드 피처 | placeholder (1) | 계좌 수준 6개 피처 (train-only) |
 | 노드 피처 파일 | 없음 | `account_node_features.csv` |
 | `--node_features` 플래그 | 없음 | 있음 |
 
@@ -14,12 +14,11 @@ Multi-PNA+EU baseline에 계좌 수준 노드 피처(Graph Feature)를 추가한
 
 | 피처 | 설명 |
 |------|------|
-| `train_only_pagerank` | train 엣지 기반 PageRank |
+| `train_only_pagerank` | train 엣지 기반 PageRank(log1p) |
 | `train_only_in_degree` | train 기준 수신 거래 수 |
 | `train_only_out_degree` | train 기준 송신 거래 수 |
-| `train_only_in_amount_sum` | train 기준 수신 총액 |
-| `train_only_out_amount_sum` | train 기준 송신 총액 |
-| `train_only_tx_count` | train 기준 총 거래 수 (in + out) |
+| `train_only_in_amount_sum` | train 기준 수신 총액(log1p)|
+| `train_only_out_amount_sum` | train 기준 송신 총액(log1p) |
 | `is_new_in_val_test` | val/test에만 등장한 신규 계좌 여부 |
 
 val/test에만 등장한 계좌(leakage 방지)는 통계값이 0으로 채워진다.
@@ -74,7 +73,27 @@ python /path/to/make_account_node_features.py formatted_transactions.csv
 `--data` 인자로 넘긴 값이 `aml_data` 및 `node_features` 경로 하위 폴더명이 된다.
 예: `--data Small_LI` → `../../data/Small_LI/formatted_transactions.csv`, `../../data/Small_LI/account_node_features.csv`
 
-### 3. 학습 실행
+### 3. TensorBoard 설치 (에폭별 지표 시각화)
+
+학습 중 Train/Val/Test의 F1·Recall·Precision·AUPRC를 실시간으로 그래프로 확인하려면 아래 패키지가 필요하다.
+
+```bash
+pip install tensorboard "setuptools<70"
+```
+
+> `setuptools<70` 이 필요한 이유: tensorboard가 내부적으로 `pkg_resources`를 사용하는데, setuptools 70 이상에서는 해당 모듈이 제거되어 실행 오류가 발생한다.
+
+학습 실행 후 (또는 실행 중) 별도 터미널에서 아래 명령어로 TensorBoard를 실행한다.
+
+```bash
+# gnn/gf_model/ 디렉토리에서 실행
+tensorboard --logdir runs
+```
+
+브라우저에서 `http://localhost:6006` 으로 접속하면 에폭별 지표 그래프를 확인할 수 있다.
+로그는 `runs/{데이터}_{모델}_{날짜시간}/` 폴더에 저장되며, 실험을 여러 번 돌렸을 때 TensorBoard에서 실험별로 비교할 수 있다.
+
+### 4. 학습 실행
 
 `gnn/gf_model/` 디렉토리에서 실행한다.
 
@@ -95,7 +114,7 @@ python main.py --data Small_LI --model pna --emlps --reverse_mp --ego --ports --
 python main.py --data Small_LI --model pna --emlps --reverse_mp --ego --ports --node_features --inference --unique_name gf_run1
 ```
 
-### CLI 플래그 전체 목록
+### 5. CLI 플래그 전체 목록
 
 **필수 인자**
 
@@ -108,7 +127,7 @@ python main.py --data Small_LI --model pna --emlps --reverse_mp --ego --ports --
 
 | 플래그 | 기본값 | 설명 |
 |--------|--------|------|
-| `--node_features` | False | `account_node_features.csv`의 계좌 수준 노드 피처 7개 사용. 미지정 시 placeholder(1) 사용 |
+| `--node_features` | False | `account_node_features.csv`의 계좌 수준 노드 피처 6개 사용. 미지정 시 placeholder(1) 사용 |
 
 **그래프 구성 옵션**
 
