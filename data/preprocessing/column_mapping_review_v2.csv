@@ -1,0 +1,31 @@
+﻿parquet_column_name,official_feature_name,feature_meaning,source_column,calculation_method,current_status,suggested_action,used_in_ml,reason,notes,mapped_to_parquet_column
+amount__current__value,raw__tx__cur__amt_paid__val__wcur,현재 거래 지급 금액,amount,identity,exists_in_output,keep,True,기존 컬럼 정상,공식 표시명은 alias만 catalog 기록,
+amount__current__log1p,raw__tx__cur__amt__log_paid__wcur,지급 금액 log1p,amount,log1p,exists_in_output,keep,True,기존 컬럼 정상,공식 표시명은 official_feature_name에만 기록,
+amount_received__current__value,raw__tx__cur__amt_recv__val__wcur,수취 금액,amount_received,identity,add_if_source_exists,add_candidate,False,clean_base에 amount_received 있을 때만 생성. 기본 used_in_ml=False,parquet에 포함 시 used_in_ml=True로 변경 가능,
+amount_received__current__log1p,raw__tx__cur__amt__log_recv__wcur,수취 금액 log1p,amount_received,log1p,add_if_source_exists,add_candidate,False,clean_base에 amount_received 있을 때만 생성. 기본 used_in_ml=False,,
+amount__paid_recv_ratio,raw__tx__cur__amt__paid_recv_ratio__wcur,지급/수취 금액 비율,"amount,amount_received",paid/received,add_if_source_exists,add_candidate,False,통화전환/금액불일치 포착. amount_received 필요. 기본 used_in_ml=False,received=0/null->null,
+time__row__hour,raw__tx__cur__time__hour__wcur,거래 시간(0-23),timestamp,dt.hour(),exists_in_output,keep,True,기존 컬럼 정상,공식 표시명은 official_feature_name에만 기록,
+time__row__dayofweek,raw__tx__cur__time__dow__wcur,거래 요일(0=월~6=일),timestamp,dt.weekday()-1,exists_in_output,keep,True,기존 컬럼 정상. [QA] 0=월~6=일로 수정됨,공식 표시명은 official_feature_name에만 기록,
+time__row__is_weekend,raw__tx__cur__time__is_weekend__wcur,주말 여부(1=주말),timestamp,(weekday-1)>=5->1,exists_in_output,keep,True,기존 컬럼 정상. [QA] is_weekend 조건 수정됨,공식 표시명은 official_feature_name에만 기록,
+time__row__elapsed_h,raw__tx__cur__time__elapsed_h__wcur,데이터 시작 후 경과시간,timestamp,(ts-min)/3600,not_generated,add_candidate,False,누수위험. optional. used_in_ml=False 유지,분석 목적 parquet 보존 시만 생성 가능,
+cat__from_bank__code,raw__tx__cur__bank__from_enc__wcur,송금 은행 code,from_bank,train-only label code,exists_in_output,keep,True,기존 컬럼 정상. 코드값 순서의미없음,공식 표시명은 official_feature_name에만 기록,
+cat__to_bank__code,raw__tx__cur__bank__to_enc__wcur,수취 은행 code,to_bank,train-only label code,exists_in_output,keep,True,기존 컬럼 정상,공식 표시명은 official_feature_name에만 기록,
+cat__payment_currency__code,raw__tx__cur__ccy__paid_enc__wcur,지급 통화 code,payment_currency,train-only label code,exists_in_output,keep,True,기존 컬럼 정상,공식 표시명은 official_feature_name에만 기록,
+cat__receiving_currency__code,raw__tx__cur__ccy__recv_enc__wcur,수취 통화 code,receiving_currency,train-only label code,exists_in_output,keep,True,기존 컬럼 정상,공식 표시명은 official_feature_name에만 기록,
+cat__payment_format__code,raw__tx__cur__payfmt__enc__wcur,결제 방식 code,payment_format,train-only label code,exists_in_output,keep,True,기존 컬럼 정상,공식 표시명은 official_feature_name에만 기록,
+cat__currency_pair__code,raw__tx__cur__ccy__pair_enc__wcur,지급+수취 통화 쌍 code,"payment_currency,receiving_currency",pair train-only code,generated_as_candidate,add_candidate,False,오늘 회의 후보. parquet에 포함. 성능비교 후 used_in_ml=True 활성화 가능,ml_feature_columns.csv에서 True로 변경,
+cat__bank_pair__code,raw__tx__cur__bank__pair_enc__wcur,송금+수취 은행 쌍 code,"from_bank,to_bank",pair train-only code,generated_as_candidate,add_candidate,False,오늘 회의 후보. parquet에 포함. 성능비교 후 used_in_ml=True 활성화 가능,ml_feature_columns.csv에서 True로 변경,
+(없음-alias),raw__tx__cur__bank__from_enc__wcur,from_bank code (ML파트명),from_bank,-,alias_of_existing,alias_only,False,cat__from_bank__code와 동일 값. 명칭만 다름. 실제 사용 여부는 mapped parquet 컬럼 기준,실제 사용 여부는 mapped parquet 컬럼 기준,cat__from_bank__code
+(없음-alias),raw__tx__cur__bank__to_enc__wcur,to_bank code (ML파트명),to_bank,-,alias_of_existing,alias_only,False,cat__to_bank__code와 동일 값. 실제 사용 여부는 mapped parquet 컬럼 기준,실제 사용 여부는 mapped parquet 컬럼 기준,cat__to_bank__code
+(없음-alias),raw__tx__cur__ccy__paid_enc__wcur,payment_currency code (ML파트명),payment_currency,-,alias_of_existing,alias_only,False,cat__payment_currency__code와 동일 값. 실제 사용 여부는 mapped parquet 컬럼 기준,실제 사용 여부는 mapped parquet 컬럼 기준,cat__payment_currency__code
+(없음-alias),raw__tx__cur__ccy__recv_enc__wcur,receiving_currency code (ML파트명),receiving_currency,-,alias_of_existing,alias_only,False,cat__receiving_currency__code와 동일 값. 실제 사용 여부는 mapped parquet 컬럼 기준,실제 사용 여부는 mapped parquet 컬럼 기준,cat__receiving_currency__code
+(없음-alias),raw__tx__cur__payfmt__enc__wcur,payment_format code (ML파트명),payment_format,-,alias_of_existing,alias_only,False,cat__payment_format__code와 동일 값. 실제 사용 여부는 mapped parquet 컬럼 기준,실제 사용 여부는 mapped parquet 컬럼 기준,cat__payment_format__code
+label,(없음),세탁 여부 라벨,Is Laundering,rename,exists_meta,exclude,False,model input 제외. label leakage,"parquet에 유지, ML feature 자동 차단(ml_io)",
+timestamp,(없음),거래 시간 원본,Timestamp,cast datetime,exists_meta,exclude,False,model input 제외. meta,"parquet에 유지, Xy 파일에서 제거",
+tx_id,(없음),거래 ID,없음/row index,auto gen,exists_meta,exclude,False,model input 제외. ID,후속 파트 meta로 보존,
+sender_account,(없음),송신 계좌,Account,rename,exists_meta,exclude,False,model input 제외. 계좌ID는 후속 파트 meta,,
+receiver_account,(없음),수신 계좌,Account.1,rename,exists_meta,exclude,False,model input 제외. 계좌ID는 후속 파트 meta,,
+split,(없음),train/val/test 구분,없음,time-sorted split,exists_meta,exclude,False,model input 제외. split 컬럼,ml_io 자동 차단,
+timehist__snd__out__tx_count__count__w1h,th__snd__out__txcnt__cnt__w1h,sender 1h 이전 송금 건수,"sender_account,timestamp",window count past-only,exists_in_ml01,keep,False,ml_exp01 관리. ts<current 조건. 기본 used_in_ml=False,ml_exp01 실험 시 활성화 가능,
+timehist__snd__out__amount__sum__w1d,th__snd__out__amt__sum__w1d,sender 1d 이전 송금 금액합,"sender_account,amount,timestamp",window sum past-only,exists_in_ml01,keep,False,ml_exp01 관리. 기본 used_in_ml=False,ml_exp01 실험 시 활성화 가능,
+(ML-01 history 전체),th__* 계열,sender/receiver 과거 집계,"sender/receiver,amount,timestamp",window past-only agg,exists_in_ml01,keep,False,ml_exp01 관리. 기본 used_in_ml=False. 상세는 feature_catalog 참조,ml_exp01 실험 시 활성화 가능,
