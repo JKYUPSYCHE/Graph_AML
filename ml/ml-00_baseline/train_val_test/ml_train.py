@@ -3,7 +3,7 @@
 이 파일의 핵심 역할
 ------------------
 1. 사용자가 노트북에서 입력한 train/validation parquet 경로를 확정
-2. feature catalog CSV에서 실제 ML에 사용할 feature 목록을 read 및 확정
+2. ml_feature_columns.csv에서 실제 ML에 사용할 feature 목록을 read 및 확정
 3. train split은 모델 학습에 사용
 4. validation split은 학습 중 early stopping 평가에만 사용
 5. 학습이 끝나면 아래 산출물을 output_dir에 저장
@@ -71,7 +71,7 @@ class XGBTrainConfig:
 
     train_path: Path | str                  # 입력 데이터 경로: train split parquet. 
     val_path: Path | str                    # 입력 데이터 경로: validation split parquet.
-    feature_columns_path: Path | str        # feature catalog CSV 경로.
+    feature_columns_path: Path | str        # ml_feature_columns.csv 경로.
     output_dir: Path | str                  # 학습 산출물 저장 디렉터리.
     project_root: Path | str | None = None  # 상대경로 해석 기준이 되는 프로젝트 루트,None이면 입력 경로들은 절대경로여야함     
 
@@ -256,7 +256,7 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
     1. 난수 시드 고정
     2. 입력 파일 존재 확인
     3. output_dir 준비 및 기존 산출물 보호
-    4. feature catalog에서 사용할 feature 목록 로드
+    4. ml_feature_columns.csv에서 사용할 feature 목록 로드
     5. train/validation parquet를 X, y로 로드
     6. label 불균형 보정값 계산
     7. XGBoost 모델 생성 및 학습
@@ -273,7 +273,7 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
     require_training_files(config)
     prepare_output_dir(config.output_dir, overwrite=config.overwrite)
     
-    # feature catalog CSV에서 실제 모델 입력에 사용할 feature 목록을 read
+    # ml_feature_columns.csv에서 실제 모델 입력에 사용할 feature 목록을 read
     # load_feature_columns() 내부에서 label/target/leakage 의심 컬럼 차단 
     feature_columns = load_feature_columns(
         config.feature_columns_path,
@@ -355,7 +355,7 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         "label_col": config.label_col,                              # 정답 label 컬럼명
         "train_path": str(config.train_path),                       # 학습에 사용한 입력 파일 경로
         "val_path": str(config.val_path),                           # 학습에 사용한 입력 파일 경로
-        "feature_columns_source": str(config.feature_columns_path), # feature catalog 원본 경로
+        "feature_columns_source": str(config.feature_columns_path), # ml_feature_columns.csv 원본/사본 경로
         # 후속 모듈이 참조할 artifact 파일명
         "model_file_name": "model.pkl",                             
         "feature_columns_file_name": "feature_columns.json",

@@ -5,7 +5,7 @@ ML-ready parquet 학습 데이터를 안전하게 불러오기 위한 입출력 
 
 전체 흐름
 1. 사용자가 입력한 데이터 경로를 절대경로 or PROJECT_ROOT 기준 경로로 해석
-2. feature catalog CSV에서 used_in_ml=True인 feature column 목록 선택
+2. ml_feature_columns.csv에서 used_in_ml="TRUE"인 feature column 목록 선택
 3. label/target 계열 컬럼이나 누수 가능성이 큰 컬럼명이 feature에 들어가지 않도록 차단
 4. parquet 파일에서 필요한 컬럼만 read
 5. X는 숫자형인지, NaN/inf가 없는지 확인
@@ -67,7 +67,7 @@ def resolve_project_path(path: str | Path, project_root: str | Path | None = Non
 @dataclass(frozen=True)
 class InputPaths:
     """
-    train/val/test parquet 와 feature catalog 경로를 한 묶음으로 보관하는 자료구조
+    train/val/test parquet와 ml_feature_columns.csv 경로를 한 묶음으로 보관하는 자료구조
     frozen=True -> 객체 생성 후 train_path, val_path 같은 값을 실수로 바꾸지 못하게 고정 
     """
     train_path: Path
@@ -139,18 +139,84 @@ def require_input_files(paths: InputPaths, require_test: bool = False) -> None:
 
 
 # -----------------------------------------------------------------------------
-# 3. feature catalog 처리 함수
+# 3. ml_feature_columns.csv 처리 함수
 # -----------------------------------------------------------------------------
-def used_in_ml_mask(series: pd.Series) -> pd.Series:
+@dataclass(frozen=True)
+class FeatureColumnsCheckResult:
+    """ml_feature_columns.csv 검증 또는 정규화 처리 결과."""
+
+    ok: bool
+    processed: bool
+    path: Path
+    total_rows: int
+    selected_count: int
+    selected_columns: list[str]
+    error_type: str | None = None
+    error_message: str | None = None
+
+
+def _resolve_optional_project_path(path: str | Path, project_root: str | Path | None = None) -> Path:
     """
-    feature catalog의 used_in_ml 값을 strict boolean mask로 해석
+    파일명만 들어온 경우도 처리하기 위한 내부 경로 해석 함수.
 
-    허용되는 true 표현: True, "true", "1", "yes", "y"
-    허용되는 false 표현: False, "false", "0", "no", "n"
+    project_root가 있으면 기존 ML 모듈 규칙대로 project_root 기준으로 해석한다.
+    project_root가 없고 상대경로만 들어오면 현재 실행 디렉터리 기준으로 해석한다.
+    """
 
-    주의
-    - 허용 범위 밖의 값은 조용히 제외하지 않고 즉시 ValueError를 발생시킴
-    - catalog 작성 규칙은 위 표현 중 하나로 통일해야 함
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute() or project_root is not None:
+        return resolve_project_path(candidate, project_root)
+    return candidate.resolve()
+
+
+def parse_used_in_ml(series: pd.Series) -> pd.Series:
+    """
+    used_in_ml 컬럼을 strict boolean mask로 변환한다.
+
+    사용 목적
+    --------
+    - ML 학습에 사용할 feature row만 선택하기 위한 boolean mask를 만든다.
+    - used_in_ml 값은 CSV에서 문자값 "TRUE" 또는 "FALSE"로 고정한다.
+    - "TRUE"인 row의 column_name만 모델 입력 feature로 사용한다.
+
+    strict 처리 이유
+    ----------------
+    - true/false, 1/0, yes/no처럼 여러 표현을 허용하면 작성자마다 CSV 표기가 달라질 수 있다.
+    - 빈 값이나 정의되지 않은 값은 조용히 False로 처리하지 않고 즉시 에러로 중단한다.
+    """
+
+    if series.isna().any():
+        missing_rows = (series[series.isna()].index + 2).tolist()
+        raise ValueError(f"used_in_ml contains missing values. csv_rows={missing_rows[:30]}")
+
+    allowed_values = {"TRUE", "FALSE"}
+    as_text = series.astype(str)
+
+    invalid = as_text[~as_text.isin(allowed_values)]
+    if not invalid.empty:
+        invalid_rows = (invalid.index + 2).tolist()
+        raise ValueError(
+            "used_in_ml contains unsupported values. "
+            'allowed_values=["TRUE", "FALSE"], '
+            f"invalid_values={sorted(invalid.unique().tolist())[:30]}, "
+            f"csv_rows={invalid_rows[:30]}"
+        )
+
+    return as_text == "TRUE"
+
+
+def used_in_ml_mask(series: pd.Series) -> pd.Series:
+    """하위 호환용 wrapper. 실제 파싱 정책은 parse_used_in_ml()에만 둔다."""
+
+    return parse_used_in_ml(series)
+
+
+def normalize_used_in_ml_values(series: pd.Series) -> pd.Series:
+    """
+    legacy bool 표기를 표준 문자값 "TRUE" / "FALSE"로 변환한다.
+
+    이 함수는 export 사본 정규화용이다. 학습 입력 검증은 parse_used_in_ml()이 수행하며,
+    최종 CSV에는 반드시 "TRUE" / "FALSE"만 남아야 한다.
     """
 
     if series.isna().any():
@@ -158,38 +224,181 @@ def used_in_ml_mask(series: pd.Series) -> pd.Series:
         raise ValueError(f"used_in_ml contains missing values. csv_rows={missing_rows[:30]}")
 
     if pd.api.types.is_bool_dtype(series):
-        return series
+        return series.map(lambda value: "TRUE" if bool(value) else "FALSE")
 
-    true_values = {"true", "1", "yes", "y"}
-    false_values = {"false", "0", "no", "n"}
-    allowed_values = true_values | false_values
-    normalized = series.astype(str).str.strip().str.lower()
-    invalid = normalized[~normalized.isin(allowed_values)]
+    mapping = {
+        "TRUE": "TRUE",
+        "FALSE": "FALSE",
+        "True": "TRUE",
+        "False": "FALSE",
+    }
+    as_text = series.astype(str).str.strip()
+    invalid = as_text[~as_text.isin(mapping)]
     if not invalid.empty:
         invalid_rows = (invalid.index + 2).tolist()
         raise ValueError(
-            "used_in_ml contains unsupported values. "
-            f"allowed_true={sorted(true_values)}, allowed_false={sorted(false_values)}, "
-            f"invalid_values={sorted(invalid.unique().tolist())[:30]}, csv_rows={invalid_rows[:30]}"
+            "used_in_ml contains unsupported values for normalization. "
+            'allowed_values=["TRUE", "FALSE", "True", "False"], '
+            f"invalid_values={sorted(invalid.unique().tolist())[:30]}, "
+            f"csv_rows={invalid_rows[:30]}"
         )
-    return normalized.isin(true_values)
+    return as_text.map(mapping)
+
+
+def check_feature_columns_file(
+    path: str | Path,
+    *,
+    project_root: str | Path | None = None,
+    label_col: str = "label",
+    strict: bool = False,
+) -> FeatureColumnsCheckResult:
+    """
+    ml_feature_columns.csv 파일을 검증하고 처리 결과를 반환한다.
+
+    입력
+    ----
+    - path: 파일명 또는 경로
+    - project_root: path가 상대경로일 때 해석 기준. None이면 현재 실행 디렉터리 기준
+    - label_col: label 컬럼명
+    - strict: True이면 오류를 결과 객체로 감싸지 않고 원래 예외를 그대로 발생시킨다.
+
+    반환
+    ----
+    - ok=True: 검증 성공
+    - ok=False: 검증 실패. error_type, error_message에 원인 기록
+    """
+
+    feature_columns_path = Path(path)
+    try:
+        feature_columns_path = _resolve_optional_project_path(path, project_root)
+        if not feature_columns_path.exists():
+            raise FileNotFoundError(f"feature columns file not found: {feature_columns_path}")
+
+        feature_table = pd.read_csv(feature_columns_path, encoding="utf-8-sig", dtype={"used_in_ml": "string"})
+        required_columns = {"column_name", "used_in_ml"}
+        missing_columns = required_columns - set(feature_table.columns)
+        if missing_columns:
+            raise ValueError(f"Feature columns CSV is missing columns: {sorted(missing_columns)}")
+
+        mask = parse_used_in_ml(feature_table["used_in_ml"])
+        selected_names = feature_table.loc[mask, "column_name"]
+
+        missing_names = selected_names[selected_names.isna()]
+        if not missing_names.empty:
+            missing_rows = (missing_names.index + 2).tolist()
+            raise ValueError(f"Selected feature rows contain missing column_name. csv_rows={missing_rows[:30]}")
+
+        feature_columns = selected_names.astype(str).str.strip().tolist()
+        blank_rows = [int(row_index) + 2 for row_index, column in zip(selected_names.index, feature_columns) if not column]
+        if blank_rows:
+            raise ValueError(f"Selected feature rows contain blank column_name. csv_rows={blank_rows[:30]}")
+
+        duplicated = sorted({column for column in feature_columns if feature_columns.count(column) > 1})
+        if duplicated:
+            raise ValueError(f"Duplicated selected feature columns: {duplicated}")
+
+        validate_no_forbidden_features(feature_columns, label_col=label_col)
+
+        if not feature_columns:
+            raise ValueError(f"No usable feature columns found. path={feature_columns_path}")
+
+        return FeatureColumnsCheckResult(
+            ok=True,
+            processed=True,
+            path=feature_columns_path,
+            total_rows=int(len(feature_table)),
+            selected_count=int(len(feature_columns)),
+            selected_columns=feature_columns,
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        if strict:
+            raise
+        return FeatureColumnsCheckResult(
+            ok=False,
+            processed=False,
+            path=feature_columns_path,
+            total_rows=0,
+            selected_count=0,
+            selected_columns=[],
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
+
+
+def normalize_feature_columns_file(
+    path: str | Path,
+    *,
+    output_path: str | Path | None = None,
+    project_root: str | Path | None = None,
+    label_col: str = "label",
+    overwrite: bool = False,
+    strict: bool = False,
+) -> FeatureColumnsCheckResult:
+    """
+    ml_feature_columns.csv의 used_in_ml 값을 "TRUE" / "FALSE" 문자값으로 저장한다.
+
+    기본값은 path 파일을 제자리에서 정규화한다. 원본 산출물을 보존해야 하는 경우,
+    먼저 export 사본을 만든 뒤 그 사본 경로를 path로 넘긴다.
+    """
+
+    source_path = Path(path)
+    target_path = Path(output_path) if output_path is not None else Path(path)
+    try:
+        source_path = _resolve_optional_project_path(path, project_root)
+        target_path = source_path if output_path is None else _resolve_optional_project_path(output_path, project_root)
+        if not source_path.exists():
+            raise FileNotFoundError(f"feature columns file not found: {source_path}")
+        if target_path.exists() and target_path != source_path and not overwrite:
+            raise FileExistsError(f"normalized feature columns output already exists: {target_path}")
+
+        feature_table = pd.read_csv(source_path, encoding="utf-8-sig", dtype={"used_in_ml": "string"})
+        required_columns = {"column_name", "used_in_ml"}
+        missing_columns = required_columns - set(feature_table.columns)
+        if missing_columns:
+            raise ValueError(f"Feature columns CSV is missing columns: {sorted(missing_columns)}")
+
+        feature_table = feature_table.copy()
+        feature_table["used_in_ml"] = normalize_used_in_ml_values(feature_table["used_in_ml"])
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        feature_table.to_csv(target_path, index=False, encoding="utf-8-sig")
+
+        return check_feature_columns_file(
+            target_path,
+            project_root=None,
+            label_col=label_col,
+            strict=True,
+        )
+    except (FileNotFoundError, FileExistsError, OSError, ValueError) as exc:
+        if strict:
+            raise
+        return FeatureColumnsCheckResult(
+            ok=False,
+            processed=False,
+            path=target_path,
+            total_rows=0,
+            selected_count=0,
+            selected_columns=[],
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
 
 
 def load_feature_columns(
     path: str | Path,
     label_col: str = "label",
+    project_root: str | Path | None = None,
 ) -> list[str]:
     """
-    feature catalog CSV에서 모델에 사용할 feature column 목록을 read하고 검증하여 반환
+    ml_feature_columns.csv에서 모델에 사용할 feature column 목록을 read하고 검증하여 반환
 
-    feature catalog 필수 컬럼
+    필수 컬럼
     - column_name: 실제 parquet에 존재해야 하는 feature 컬럼명
     - used_in_ml: 모델 사용 여부
     
     동작 의도
     1. CSV를 read하여 DataFrame으로 로드
     2. 필수 컬럼이 있는지 확인
-    3. used_in_ml=True인 행만 CSV 순서 그대로 선택
+    3. used_in_ml="TRUE"인 행만 CSV 순서 그대로 선택
     4. 빈 column_name과 중복 feature를 차단
     5. label/target/누수 의심 컬럼이 feature에 들어갔는지 검사
     6. 최종 feature column list를 반환
@@ -197,39 +406,13 @@ def load_feature_columns(
     이 함수는 stage, feature_group, 파일명에서 feature 조합을 추론하지 않음
     """
 
-    path = Path(path)
-    feature_table = pd.read_csv(path, encoding="utf-8-sig")
-
-    required_columns = {"column_name", "used_in_ml"}
-    missing_columns = required_columns - set(feature_table.columns)
-    if missing_columns:
-        raise ValueError(f"Feature catalog is missing columns: {sorted(missing_columns)}")
-
-    # feature 조합은 CSV 작성자가 직접 통제하고, 학습 모듈은 used_in_ml만 반영
-    mask = used_in_ml_mask(feature_table["used_in_ml"])
-    selected_names = feature_table.loc[mask, "column_name"]
-
-    missing_names = selected_names[selected_names.isna()]
-    if not missing_names.empty:
-        missing_rows = (missing_names.index + 2).tolist()
-        raise ValueError(f"Selected feature rows contain missing column_name. csv_rows={missing_rows[:30]}")
-
-    feature_columns = selected_names.astype(str).str.strip().tolist()
-    blank_rows = [int(row_index) + 2 for row_index, column in zip(selected_names.index, feature_columns) if not column]
-    if blank_rows:
-        raise ValueError(f"Selected feature rows contain blank column_name. csv_rows={blank_rows[:30]}")
-    
-    # 같은 feature가 두 번 들어가면 모델 입력 순서와 중요도 해석이 꼬일 수 있으므로 차단
-    duplicated = sorted({column for column in feature_columns if feature_columns.count(column) > 1})
-    if duplicated:
-        raise ValueError(f"Duplicated selected feature columns: {duplicated}")
-
-    validate_no_forbidden_features(feature_columns, label_col=label_col)
-
-    if not feature_columns:
-        raise ValueError(f"No usable feature columns found. path={path}")
-
-    return feature_columns
+    result = check_feature_columns_file(
+        path,
+        project_root=project_root,
+        label_col=label_col,
+        strict=True,
+    )
+    return result.selected_columns
 
 
 def validate_no_forbidden_features(feature_columns: list[str], label_col: str = "label") -> None:

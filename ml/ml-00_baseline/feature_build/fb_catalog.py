@@ -10,6 +10,7 @@ Feature catalog와 요약 테이블 생성 모듈
 중요한 구분
 -----------
 - `ml_feature_columns.csv`: 모델 입력 truth source. column_name과 used_in_ml만 중요하다.
+  used_in_ml은 문자열 "TRUE" / "FALSE"로 저장한다.
 - `feature_catalog.csv`: 설명/관리용. operation, params, leakage_policy 등을 사람이 검토한다.
 - `feature_info.csv`: 실제 생성된 컬럼의 분포/품질 정보. 이 파일은 fb_operations.py에서 만든다.
 """
@@ -38,7 +39,7 @@ def make_feature_columns_table(feature_specs: Tuple[FeatureSpec, ...]) -> pd.Dat
     반환 컬럼
     ---------
     - column_name: feature 컬럼명
-    - used_in_ml: 모델 입력으로 사용할지 여부
+    - used_in_ml: 모델 입력으로 사용할지 여부. 문자열 "TRUE" / "FALSE"로 저장
     """
 
     validate_feature_specs(feature_specs)
@@ -47,7 +48,7 @@ def make_feature_columns_table(feature_specs: Tuple[FeatureSpec, ...]) -> pd.Dat
     return pd.DataFrame(
         {
             "column_name": columns,
-            "used_in_ml": [bool(spec.used_in_ml) for spec in feature_specs],
+            "used_in_ml": ["TRUE" if spec.used_in_ml else "FALSE" for spec in feature_specs],
         }
     )
 
@@ -88,7 +89,7 @@ def make_feature_catalog(
                 "aml_typology": spec.aml_typology,
                 "leakage_policy": spec.leakage_policy,
                 "computational_cost": spec.computational_cost,
-                "used_in_ml": bool(spec.used_in_ml),
+                "used_in_ml": "TRUE" if spec.used_in_ml else "FALSE",
             }
         )
     catalog = pd.DataFrame(rows)
