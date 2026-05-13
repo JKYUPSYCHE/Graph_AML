@@ -42,7 +42,7 @@ def create_parser():
     parser.add_argument("--data", default=None, type=str, help="Select the AML dataset. Needs to be either small or medium.", required=True)
     parser.add_argument("--model", default=None, type=str, help="Select the model architecture. Needs to be one of [gin, gat, rgcn, pna]", required=True)
     parser.add_argument("--save_model", action='store_true', help="Save the best model.")
-    parser.add_argument("--unique_name", action='store_true', help="Unique name under which the model will be stored.")
+    parser.add_argument("--unique_name", default=None, type=str, help="Unique name under which the model will be stored.")
     parser.add_argument("--finetune", action='store_true', help="Fine-tune a model. Note that args.unique_name needs to point to the pre-trained model.")
     parser.add_argument("--inference", action='store_true', help="Load a trained model and only do AML inference with it. args.unique name needs to point to the trained model.")
     parser.add_argument("--patience", default=None, type=int, help="Early stopping patience in epochs (disabled if not set).")

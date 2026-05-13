@@ -2,14 +2,47 @@ import pandas as pd
 import numpy as np
 import torch
 import logging
-import itertools
 from data_util import GraphData, HeteroData, z_norm, create_hetero_obj
+
+
+def _time_split(timestamps_np):
+    """Timestamp 누적 행 수 기준 60/20/20 split.
+
+    동일 timestamp의 거래는 쪼개지 않는다.
+    반환: tr_inds, val_inds, te_inds (torch.LongTensor)
+    """
+    n = len(timestamps_np)
+    train_cut = n * 0.60
+    val_cut   = n * 0.80
+
+    ts_series = pd.Series(timestamps_np)
+    ts_counts = (
+        ts_series.value_counts()
+        .sort_index()
+        .reset_index()
+    )
+    ts_counts.columns = ['Timestamp', 'count']
+    ts_counts['cum_count'] = ts_counts['count'].cumsum()
+    ts_counts['split'] = np.where(
+        ts_counts['cum_count'] <= train_cut, 'train',
+        np.where(ts_counts['cum_count'] <= val_cut, 'val', 'test')
+    )
+
+    ts_to_split = dict(zip(ts_counts['Timestamp'], ts_counts['split']))
+    row_splits = ts_series.map(ts_to_split).values
+
+    tr_inds  = torch.where(torch.tensor(row_splits == 'train'))[0]
+    val_inds = torch.where(torch.tensor(row_splits == 'val'))[0]
+    te_inds  = torch.where(torch.tensor(row_splits == 'test'))[0]
+
+    return tr_inds, val_inds, te_inds
+
 
 def get_data(args, data_config):
     '''Loads the AML transaction data.
 
     1. The data is loaded from the csv and the necessary features are chosen.
-    2. The data is split into training, validation and test data.
+    2. The data is split into training, validation and test data (timestamp 누적 행 수 기준 60/20/20).
     3. PyG Data objects are created with the respective data splits.
     '''
 
@@ -39,55 +72,12 @@ def get_data(args, data_config):
     edge_index = torch.LongTensor(df_edges.loc[:, ['from_id', 'to_id']].to_numpy().T)
     edge_attr = torch.tensor(df_edges.loc[:, edge_features].to_numpy()).float()
 
-    n_days = int(timestamps.max() / (3600 * 24) + 1)
-    n_samples = y.shape[0]
-    logging.info(f'number of days and transactions in the data: {n_days} days, {n_samples} transactions')
+    # Train/Val/Test split (timestamp 누적 행 수 기준 60/20/20)
+    tr_inds, val_inds, te_inds = _time_split(df_edges['Timestamp'].to_numpy())
 
-    daily_irs, weighted_daily_irs, daily_inds, daily_trans = [], [], [], []
-    for day in range(n_days):
-        l = day * 24 * 3600
-        r = (day + 1) * 24 * 3600
-        day_inds = torch.where((timestamps >= l) & (timestamps < r))[0]
-        daily_irs.append(y[day_inds].float().mean())
-        weighted_daily_irs.append(y[day_inds].float().mean() * day_inds.shape[0] / n_samples)
-        daily_inds.append(day_inds)
-        daily_trans.append(day_inds.shape[0])
-
-    split_per = [0.6, 0.2, 0.2]
-    daily_totals = np.array(daily_trans)
-    d_ts = daily_totals
-    I = list(range(len(d_ts)))
-    split_scores = dict()
-    for i,j in itertools.combinations(I, 2):
-        if j >= i:
-            split_totals = [d_ts[:i].sum(), d_ts[i:j].sum(), d_ts[j:].sum()]
-            split_totals_sum = np.sum(split_totals)
-            split_props = [v/split_totals_sum for v in split_totals]
-            split_error = [abs(v-t)/t for v,t in zip(split_props, split_per)]
-            score = max(split_error)
-            split_scores[(i,j)] = score
-        else:
-            continue
-
-    i,j = min(split_scores, key=split_scores.get)
-    split = [list(range(i)), list(range(i, j)), list(range(j, len(daily_totals)))]
-    logging.info(f'Calculate split: {split}')
-
-    split_inds = {k: [] for k in range(3)}
-    for i in range(3):
-        for day in split[i]:
-            split_inds[i].append(daily_inds[day])
-
-    tr_inds = torch.cat(split_inds[0])
-    val_inds = torch.cat(split_inds[1])
-    te_inds = torch.cat(split_inds[2])
-
-    logging.info(f"Total train samples: {tr_inds.shape[0] / y.shape[0] * 100 :.2f}% || IR: "
-            f"{y[tr_inds].float().mean() * 100 :.2f}% || Train days: {split[0][:5]}")
-    logging.info(f"Total val samples: {val_inds.shape[0] / y.shape[0] * 100 :.2f}% || IR: "
-        f"{y[val_inds].float().mean() * 100:.2f}% || Val days: {split[1][:5]}")
-    logging.info(f"Total test samples: {te_inds.shape[0] / y.shape[0] * 100 :.2f}% || IR: "
-        f"{y[te_inds].float().mean() * 100:.2f}% || Test days: {split[2][:5]}")
+    logging.info(f"Total train samples: {tr_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[tr_inds].float().mean() * 100:.2f}%")
+    logging.info(f"Total val samples:   {val_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[val_inds].float().mean() * 100:.2f}%")
+    logging.info(f"Total test samples:  {te_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[te_inds].float().mean() * 100:.2f}%")
 
     tr_x, val_x, te_x = x, x, x
     e_tr = tr_inds.numpy()
