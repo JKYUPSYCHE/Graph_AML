@@ -69,17 +69,9 @@ def get_data(args, data_config):
     logging.info(f"Number of nodes (holdings doing transcations) = {df_nodes.shape[0]}")
     logging.info(f"Number of transactions = {df_edges.shape[0]}")
 
-    amount_recv_col = (
-        'amount_received__current__log1p'
-        if 'amount_received__current__log1p' in df_edges.columns
-        else 'amount__current__log1p'
-    )
-    if amount_recv_col == 'amount__current__log1p':
-        logging.warning('amount_received__current__log1p not found -> falling back to amount__current__log1p')
     edge_features = [
         'amount__current__log1p',
         'cat__payment_currency__code',
-        amount_recv_col,
         'cat__receiving_currency__code',
         'cat__payment_format__code',
         'time__row__hour',
