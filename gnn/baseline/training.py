@@ -28,7 +28,7 @@ def _write_metrics(writer, tr_result, val_result, te_result, epoch):
         }, epoch)
 
 def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer):
-    best_val_f1 = 0
+    best_val_f1 = -1.0
     best_val_result = best_te_result = None
     best_epoch = 0
     patience_counter = 0
@@ -106,7 +106,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
     return model
 
 def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer):
-    best_val_f1 = 0
+    best_val_f1 = -1.0
     best_val_result = best_te_result = None
     best_epoch = 0
     patience_counter = 0

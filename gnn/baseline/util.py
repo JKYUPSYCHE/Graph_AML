@@ -12,11 +12,13 @@ _BASELINE_DIR = Path(__file__).resolve().parent
 def logger_setup():
     log_directory = _BASELINE_DIR / "logs"
     log_directory.mkdir(exist_ok=True)
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)-5.5s] %(message)s",
         handlers=[
-            logging.FileHandler(log_directory / "logs.log"),
+            logging.FileHandler(log_directory / "logs.log", encoding='utf-8'),
             logging.StreamHandler(sys.stdout)
         ]
     )
