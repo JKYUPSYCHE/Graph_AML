@@ -11,7 +11,7 @@ from torch_geometric.nn import to_hetero, summary
 from torch_geometric.utils import degree
 import logging
 
-def _log_best(best_epoch, best_val, best_te):
+def _log_best(best_epoch, best_val, best_te, total_time_s, peak_memory_mb):
     logging.info('Training complete.')
     logging.info(f'Best epoch: {best_epoch}')
     logging.info(f"  Val  — F1: {best_val['f1']:.4f} | Recall: {best_val['recall']:.4f} | Precision: {best_val['precision']:.4f} | AUPRC: {best_val['auprc']:.4f} | Mem: {best_val['memory_mb']:.1f}MB | Time: {best_val['time_s']:.1f}s")
@@ -30,6 +30,8 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
     best_val_result = best_te_result = None
     best_epoch = 0
     patience_counter = 0
+    memory_mb_list = []
+    t_train_start = time.perf_counter()
     for epoch in range(config.epochs):
         total_loss = total_examples = 0
         preds = []
@@ -92,7 +94,11 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
                 logging.info(f'Early stopping at epoch {epoch} (patience={args.patience})')
                 break
 
-    _log_best(best_epoch, best_val_result, best_te_result)
+    total_time_s = time.perf_counter() - t_train_start
+    avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list)
+    writer.add_scalar('Total/training_time_s', total_time_s, 0)
+    writer.add_scalar('Total/avg_memory_mb', avg_memory_mb, 0)
+    _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
     return model
 
 def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer):
@@ -100,6 +106,8 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
     best_val_result = best_te_result = None
     best_epoch = 0
     patience_counter = 0
+    memory_mb_list = []
+    t_train_start = time.perf_counter()
     for epoch in range(config.epochs):
         total_loss = total_examples = 0
         preds = []
@@ -164,7 +172,11 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
                 logging.info(f'Early stopping at epoch {epoch} (patience={args.patience})')
                 break
 
-    _log_best(best_epoch, best_val_result, best_te_result)
+    total_time_s = time.perf_counter() - t_train_start
+    avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list)
+    writer.add_scalar('Total/training_time_s', total_time_s, 0)
+    writer.add_scalar('Total/avg_memory_mb', avg_memory_mb, 0)
+    _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
     return model
 
 def get_model(sample_batch, config, args):
