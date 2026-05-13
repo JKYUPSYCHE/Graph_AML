@@ -1,6 +1,5 @@
 import torch
 import tqdm
-import time
 import datetime
 from types import SimpleNamespace
 from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score
@@ -17,7 +16,6 @@ def _log_best(best_epoch, best_val, best_te, total_time_s, peak_memory_mb):
     logging.info(f'Best epoch: {best_epoch}')
     logging.info(f"  Val  — F1: {best_val['f1']:.4f} | Recall: {best_val['recall']:.4f} | Precision: {best_val['precision']:.4f} | AUPRC: {best_val['auprc']:.4f} | Mem: {best_val['memory_mb']:.1f}MB | Time: {best_val['time_s']:.1f}s")
     logging.info(f"  Test — F1: {best_te['f1']:.4f} | Recall: {best_te['recall']:.4f} | Precision: {best_te['precision']:.4f} | AUPRC: {best_te['auprc']:.4f} | Mem: {best_te['memory_mb']:.1f}MB | Time: {best_te['time_s']:.1f}s")
-    logging.info(f"  Total training time: {total_time_s/3600:.2f}h ({total_time_s:.1f}s) | Avg memory: {peak_memory_mb:.1f}MB")
 
 def _write_metrics(writer, tr_result, val_result, te_result, epoch):
     for metric in ('f1', 'recall', 'precision', 'auprc'):
@@ -28,7 +26,7 @@ def _write_metrics(writer, tr_result, val_result, te_result, epoch):
         }, epoch)
 
 def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer):
-    best_val_f1 = -1.0
+    best_val_f1 = 0
     best_val_result = best_te_result = None
     best_epoch = 0
     patience_counter = 0
@@ -82,8 +80,6 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
 
         _write_metrics(writer, tr_result, val_result, te_result, epoch)
 
-        memory_mb_list.append(val_result['memory_mb'])
-
         if val_result['f1'] > best_val_f1:
             best_val_f1 = val_result['f1']
             best_val_result = val_result
@@ -106,7 +102,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
     return model
 
 def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer):
-    best_val_f1 = -1.0
+    best_val_f1 = 0
     best_val_result = best_te_result = None
     best_epoch = 0
     patience_counter = 0
@@ -161,8 +157,6 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
         logging.info(f"Test — F1: {te_result['f1']:.4f} | Recall: {te_result['recall']:.4f} | Precision: {te_result['precision']:.4f} | AUPRC: {te_result['auprc']:.4f} | Mem: {te_result['memory_mb']:.1f}MB | Time: {te_result['time_s']:.1f}s")
 
         _write_metrics(writer, tr_result, val_result, te_result, epoch)
-
-        memory_mb_list.append(val_result['memory_mb'])
 
         if val_result['f1'] > best_val_f1:
             best_val_f1 = val_result['f1']

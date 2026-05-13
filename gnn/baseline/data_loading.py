@@ -5,50 +5,45 @@ import logging
 from data_util import GraphData, HeteroData, z_norm, create_hetero_obj
 
 
+def _time_split(timestamps_np):
+    """Timestamp 누적 행 수 기준 60/20/20 split.
 
-def _build_node_map(df_edges: pd.DataFrame):
-    """Bank code + Account 복합 키를 정수 노드 ID로 매핑.
-
-    train에 등장한 키를 알파벳 정렬 후 0, 1, ... 순번 부여.
-    train에 없던 val/test 신규 노드는 -1로 표시.
+    동일 timestamp의 거래는 쪼개지 않는다.
+    반환: tr_inds, val_inds, te_inds (torch.LongTensor)
     """
-    from_key = df_edges['cat__from_bank__code'].astype(str) + '_' + df_edges['sender_account'].astype(str)
-    to_key   = df_edges['cat__to_bank__code'].astype(str)   + '_' + df_edges['receiver_account'].astype(str)
+    n = len(timestamps_np)
+    train_cut = n * 0.60
+    val_cut   = n * 0.80
 
-    train_mask = df_edges['split'] == 'train'
-    train_keys = sorted(set(
-        pd.concat([from_key[train_mask], to_key[train_mask]], ignore_index=True).unique()
-    ))
-    node_map = {k: i for i, k in enumerate(train_keys)}
+    ts_series = pd.Series(timestamps_np)
+    ts_counts = (
+        ts_series.value_counts()
+        .sort_index()
+        .reset_index()
+    )
+    ts_counts.columns = ['Timestamp', 'count']
+    ts_counts['cum_count'] = ts_counts['count'].cumsum()
+    ts_counts['split'] = np.where(
+        ts_counts['cum_count'] <= train_cut, 'train',
+        np.where(ts_counts['cum_count'] <= val_cut, 'val', 'test')
+    )
 
-    return from_key.map(node_map).fillna(-1).astype(int).to_numpy(), \
-           to_key.map(node_map).fillna(-1).astype(int).to_numpy(), \
-           len(node_map)
+    ts_to_split = dict(zip(ts_counts['Timestamp'], ts_counts['split']))
+    row_splits = ts_series.map(ts_to_split).values
 
+    tr_inds  = torch.where(torch.tensor(row_splits == 'train'))[0]
+    val_inds = torch.where(torch.tensor(row_splits == 'val'))[0]
+    te_inds  = torch.where(torch.tensor(row_splits == 'test'))[0]
 
-def _load_cardinality(data_dir):
-    """categorical_encoding_summary.csv에서 raw_column별 n_unique_train을 읽는다."""
-    from pathlib import Path
-    csv_path = Path(data_dir) / 'categorical_encoding_summary.csv'
-    df = pd.read_csv(csv_path)
-    return dict(zip(df['raw_column'], df['n_unique_train']))
-
-
-def _split_indices(split_col: pd.Series):
-    """parquet의 split 컬럼(train/val/test) 기준으로 index 반환."""
-    arr = split_col.to_numpy()
-    tr_inds  = torch.where(torch.tensor(arr == 'train'))[0]
-    val_inds = torch.where(torch.tensor(arr == 'val'))[0]
-    te_inds  = torch.where(torch.tensor(arr == 'test'))[0]
     return tr_inds, val_inds, te_inds
 
 
 def get_data(args, data_config):
     '''Loads the AML transaction data from preprocessed parquet (ml_exp00.parquet).
 
-    1. parquet를 읽어 필요한 피처를 선택한다.
-    2. parquet의 split 컬럼(train/val/test) 기준으로 엣지 마스크를 생성한다.
-    3. PyG Data 객체를 생성한다.
+    1. The data is loaded from the csv and the necessary features are chosen.
+    2. The data is split into training, validation and test data (timestamp 누적 행 수 기준 60/20/20).
+    3. PyG Data objects are created with the respective data splits.
     '''
 
     from pathlib import Path
@@ -111,23 +106,24 @@ def get_data(args, data_config):
     edge_index = torch.LongTensor(np.stack([from_id, to_id]))
     edge_attr = torch.tensor(df_edges.loc[:, edge_features].to_numpy()).float()
 
-    tr_inds, val_inds, te_inds = _split_indices(df_edges['split'])
+    # Train/Val/Test split (timestamp 누적 행 수 기준 60/20/20)
+    tr_inds, val_inds, te_inds = _time_split(df_edges['Timestamp'].to_numpy())
 
     logging.info(f"Total train samples: {tr_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[tr_inds].float().mean() * 100:.2f}%")
     logging.info(f"Total val samples:   {val_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[val_inds].float().mean() * 100:.2f}%")
     logging.info(f"Total test samples:  {te_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[te_inds].float().mean() * 100:.2f}%")
 
-    e_tr  = tr_inds.numpy()
-    e_val = val_inds.numpy()
-    e_te  = te_inds.numpy()
+    tr_x, val_x, te_x = x, x, x
+    e_tr = tr_inds.numpy()
+    e_val = np.concatenate([tr_inds, val_inds])
 
-    tr_edge_index,  tr_edge_attr,  tr_y,  tr_edge_times  = edge_index[:, e_tr],  edge_attr[e_tr],  y[e_tr],  timestamps[e_tr]
-    val_edge_index, val_edge_attr, val_y, val_edge_times = edge_index[:, e_val], edge_attr[e_val], y[e_val], timestamps[e_val]
-    te_edge_index,  te_edge_attr,  te_y,  te_edge_times  = edge_index[:, e_te],  edge_attr[e_te],  y[e_te],  timestamps[e_te]
+    tr_edge_index,  tr_edge_attr,  tr_y,  tr_edge_times  = edge_index[:,e_tr],  edge_attr[e_tr],  y[e_tr],  timestamps[e_tr]
+    val_edge_index, val_edge_attr, val_y, val_edge_times = edge_index[:,e_val], edge_attr[e_val], y[e_val], timestamps[e_val]
+    te_edge_index,  te_edge_attr,  te_y,  te_edge_times  = edge_index,          edge_attr,        y,        timestamps
 
-    tr_data  = GraphData(x=x, y=tr_y,  edge_index=tr_edge_index,  edge_attr=tr_edge_attr,  timestamps=tr_edge_times)
-    val_data = GraphData(x=x, y=val_y, edge_index=val_edge_index, edge_attr=val_edge_attr, timestamps=val_edge_times)
-    te_data  = GraphData(x=x, y=te_y,  edge_index=te_edge_index,  edge_attr=te_edge_attr,  timestamps=te_edge_times)
+    tr_data  = GraphData(x=tr_x,  y=tr_y,  edge_index=tr_edge_index,  edge_attr=tr_edge_attr,  timestamps=tr_edge_times)
+    val_data = GraphData(x=val_x, y=val_y, edge_index=val_edge_index, edge_attr=val_edge_attr, timestamps=val_edge_times)
+    te_data  = GraphData(x=te_x,  y=te_y,  edge_index=te_edge_index,  edge_attr=te_edge_attr,  timestamps=te_edge_times)
 
     if args.ports:
         logging.info(f"Start: adding ports")

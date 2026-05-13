@@ -10,7 +10,6 @@ NODE_FEATURE_COLS = [
     'train_only_out_degree',
     'train_only_in_amount_sum',
     'train_only_out_amount_sum',
-    'train_only_tx_count',
     'is_new_in_val_test',
 ]
 

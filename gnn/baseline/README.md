@@ -59,7 +59,27 @@ tensorboard --logdir runs
 브라우저에서 `http://localhost:6006` 으로 접속하면 에폭별 지표 그래프를 확인할 수 있다.
 로그는 `runs/{데이터}_{모델}_{날짜시간}/` 폴더에 저장되며, 실험을 여러 번 돌렸을 때 TensorBoard에서 실험별로 비교할 수 있다.
 
-### 3. 학습 실행
+### 3. TensorBoard 설치 (에폭별 지표 시각화)
+
+학습 중 Train/Val/Test의 F1·Recall·Precision·AUPRC를 실시간으로 그래프로 확인하려면 아래 패키지가 필요하다.
+
+```bash
+pip install tensorboard "setuptools<70"
+```
+
+> `setuptools<70` 이 필요한 이유: tensorboard가 내부적으로 `pkg_resources`를 사용하는데, setuptools 70 이상에서는 해당 모듈이 제거되어 실행 오류가 발생한다.
+
+학습 실행 후 (또는 실행 중) 별도 터미널에서 아래 명령어로 TensorBoard를 실행한다.
+
+```bash
+# gnn/baseline/ 디렉토리에서 실행
+tensorboard --logdir runs
+```
+
+브라우저에서 `http://localhost:6006` 으로 접속하면 에폭별 지표 그래프를 확인할 수 있다.
+로그는 `runs/{데이터}_{모델}_{날짜시간}/` 폴더에 저장되며, 실험을 여러 번 돌렸을 때 TensorBoard에서 실험별로 비교할 수 있다.
+
+### 4. 학습 실행
 
 `gnn/baseline/` 디렉토리에서 실행한다.
 
@@ -77,7 +97,7 @@ python main.py --data Small_LI --model pna --emlps --reverse_mp --ego --ports --
 python main.py --data Small_LI --model pna --emlps --reverse_mp --ego --ports --inference --unique_name pna_run1
 ```
 
-### 4. CLI 플래그 전체 목록
+### 5. CLI 플래그 전체 목록
 
 **필수 인자**
 
