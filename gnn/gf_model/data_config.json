@@ -1,7 +1,7 @@
 {
     "paths": {
       "aml_data": "../../data",
-      "node_features": "../../data",
+      "gnn_inputs": "../../data/processed/gnn_inputs",
       "model_to_load": "../../experiments/gf_model/models",
       "model_to_save": "../../experiments/gf_model/models"
     }

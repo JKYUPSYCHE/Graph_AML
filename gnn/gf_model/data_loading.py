@@ -3,46 +3,20 @@ import numpy as np
 import torch
 import logging
 from pathlib import Path
+from sklearn.preprocessing import LabelEncoder
 from data_util import GraphData, HeteroData, z_norm, create_hetero_obj
 
 NODE_FEATURE_COLS = [
     'train_only_pagerank',
     'train_only_in_degree',
     'train_only_out_degree',
-    'train_only_in_amount_sum',
-    'train_only_out_amount_sum',
+    'train_only_in_amount_sum_log1p',
+    'train_only_out_amount_sum_log1p',
 ]
 
 
-def _build_node_map(df_edges: pd.DataFrame):
-    """Bank code + Account 복합 키를 정수 노드 ID로 매핑.
-
-    train에 등장한 키를 알파벳 정렬 후 0, 1, ... 순번 부여.
-    train에 없던 val/test 신규 노드는 -1로 표시.
-    """
-    from_key = df_edges['cat__from_bank__code'].astype(str) + '_' + df_edges['sender_account'].astype(str)
-    to_key   = df_edges['cat__to_bank__code'].astype(str)   + '_' + df_edges['receiver_account'].astype(str)
-
-    train_mask = df_edges['split'] == 'train'
-    train_keys = sorted(set(
-        pd.concat([from_key[train_mask], to_key[train_mask]], ignore_index=True).unique()
-    ))
-    node_map = {k: i for i, k in enumerate(train_keys)}
-
-    return from_key.map(node_map).fillna(-1).astype(int).to_numpy(), \
-           to_key.map(node_map).fillna(-1).astype(int).to_numpy(), \
-           len(node_map)
-
-
-def _load_cardinality(data_dir):
-    """categorical_encoding_summary.csv에서 raw_column별 n_unique_train을 읽는다."""
-    csv_path = Path(data_dir) / 'categorical_encoding_summary.csv'
-    df = pd.read_csv(csv_path)
-    return dict(zip(df['raw_column'], df['n_unique_train']))
-
-
 def _split_indices(split_col: pd.Series):
-    """parquet의 split 컬럼(train/val/test) 기준으로 index 반환."""
+    """split 컬럼(train/val/test) 기준으로 index 반환."""
     arr = split_col.to_numpy()
     tr_inds  = torch.where(torch.tensor(arr == 'train'))[0]
     val_inds = torch.where(torch.tensor(arr == 'val'))[0]
@@ -50,44 +24,74 @@ def _split_indices(split_col: pd.Series):
     return tr_inds, val_inds, te_inds
 
 
-def get_data(args, data_config):
-    '''Loads the AML transaction data from preprocessed parquet (ml_exp00.parquet).
+def _encode_categoricals(df_edges, tr_inds):
+    """train rows 기준으로 LabelEncoder fit 후 전체 적용. 미등장 카테고리 → n_unique_train."""
+    cat_cols = [
+        'cat__payment_currency__code',
+        'cat__receiving_currency__code',
+        'cat__payment_format__code',
+    ]
+    for col in cat_cols:
+        if col not in df_edges.columns:
+            continue
+        le = LabelEncoder()
+        le.fit(df_edges.iloc[tr_inds][col].astype(str))
+        n_unique = len(le.classes_)
 
-    1. parquet를 읽어 필요한 피처를 선택한다.
-    2. parquet의 split 컬럼(train/val/test) 기준으로 엣지 마스크를 생성한다.
-    3. PyG Data 객체를 생성한다.
+        arr = df_edges[col].astype(str).to_numpy()
+        known = np.isin(arr, le.classes_)
+        encoded = np.where(
+            known,
+            le.transform(np.where(known, arr, le.classes_[0])),
+            n_unique,
+        )
+        df_edges[col] = encoded
+    return df_edges
+
+
+def get_data(args, data_config):
+    '''Loads the AML transaction data from 04_gnn_graph_process.ipynb outputs.
+
+    - formatted_transactions_gf.csv : edge features, split, label, from_id/to_id
+    - formatted_transactions.csv    : timestamp (ports/tds 계산용, 모델 입력 아님)
+    - account_mapping.csv           : from_id/to_id → node_idx 매핑
+    - account_node_features.csv     : node feature (항상 로드)
     '''
 
-    parquet_file = Path(data_config['paths']['aml_data']) / args.data / 'ml_exp00.parquet'
-    df_edges = pd.read_parquet(parquet_file)
+    gnn_dir = Path(data_config['paths']['gnn_inputs'])
+
+    df_edges = pd.read_csv(gnn_dir / 'formatted_transactions_gf.csv')
+    df_ts    = pd.read_csv(gnn_dir / 'formatted_transactions.csv', usecols=['timestamp'])
+    mapping  = pd.read_csv(gnn_dir / 'account_mapping.csv')
 
     logging.info(f'Available Edge Features: {df_edges.columns.tolist()}')
 
-    # timestamp(datetime) → 경과 초 (ports/time-delta 내부 계산용, 모델 입력 아님)
-    ts = pd.to_datetime(df_edges['timestamp'])
+    # timestamp → 경과 초 (ports/time-delta 내부 계산용, 모델 입력 아님)
+    ts = pd.to_datetime(df_ts['timestamp'])
     ts_elapsed = (ts - ts.min()).dt.total_seconds()
-
-    from_id, to_id, max_n_id = _build_node_map(df_edges)
-    # 미등장 노드(-1) → unknown token 인덱스(max_n_id)로 치환
-    from_id = np.where(from_id == -1, max_n_id, from_id)
-    to_id   = np.where(to_id   == -1, max_n_id, to_id)
-
     timestamps = torch.tensor(ts_elapsed.to_numpy()).float()
+
+    # from_id/to_id → node_idx (account_mapping.csv 기준)
+    id_to_idx = dict(zip(mapping['account_id'].astype(str), mapping['node_idx']))
+    max_n_id  = int(mapping['node_idx'].max()) + 1  # unknown token index
+
+    from_id = df_edges['from_id'].astype(str).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
+    to_id   = df_edges['to_id'].astype(str).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
+
     y = torch.LongTensor(df_edges['label'].to_numpy())
 
     logging.info(f"Illicit ratio = {sum(y)} / {len(y)} = {sum(y) / len(y) * 100:.2f}%")
-    logging.info(f"Number of transactions = {df_edges.shape[0]}")
+    logging.info(f"Number of transactions = {len(df_edges)}")
 
-    # categorical edge feature -1 → cardinality(unknown token) 치환
-    cat_cardinality = _load_cardinality(Path(data_config['paths']['aml_data']) / args.data)
-    CAT_COL_MAP = {
-        'cat__payment_currency__code':  'payment_currency',
-        'cat__receiving_currency__code': 'receiving_currency',
-        'cat__payment_format__code':     'payment_format',
-    }
-    for feat_col, raw_col in CAT_COL_MAP.items():
-        if feat_col in df_edges.columns and raw_col in cat_cardinality:
-            df_edges[feat_col] = df_edges[feat_col].replace(-1, int(cat_cardinality[raw_col]))
+    # split
+    tr_inds, val_inds, te_inds = _split_indices(df_edges['split'])
+
+    logging.info(f"Total train samples: {tr_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[tr_inds].float().mean() * 100:.2f}%")
+    logging.info(f"Total val samples:   {val_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[val_inds].float().mean() * 100:.2f}%")
+    logging.info(f"Total test samples:  {te_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[te_inds].float().mean() * 100:.2f}%")
+
+    # categorical encoding: train 기준 fit, 미등장 카테고리 → unknown token
+    df_edges = _encode_categoricals(df_edges, tr_inds.numpy())
 
     edge_features = [
         'amount__current__log1p',
@@ -100,35 +104,21 @@ def get_data(args, data_config):
     ]
     logging.info(f'Edge features being used: {edge_features}')
 
-    # Node features
-    # node feature matrix: train 노드 + unknown token 슬롯(마지막 행)
-    if args.node_features:
-        node_features_file = f"{data_config['paths']['node_features']}/{args.data}/account_node_features.csv"
-        df_node_feats = pd.read_csv(node_features_file)
-        df_nodes = pd.DataFrame({'NodeID': np.arange(max_n_id + 1)})
-        df_nodes = df_nodes.merge(
-            df_node_feats[['node_idx'] + NODE_FEATURE_COLS],
-            left_on='NodeID', right_on='node_idx', how='left'
-        )
-        df_nodes[NODE_FEATURE_COLS] = df_nodes[NODE_FEATURE_COLS].fillna(0).astype(float)
-        node_features = NODE_FEATURE_COLS
-        logging.info(f'Node features being used: {node_features}')
-    else:
-        df_nodes = pd.DataFrame({'NodeID': np.arange(max_n_id + 1), 'Feature': np.ones(max_n_id + 1)})
-        node_features = ['Feature']
-        logging.info(f'Node features being used: {node_features} ("Feature" is a placeholder feature of all 1s)')
+    # node features: 항상 account_node_features.csv 로드
+    df_node_feats = pd.read_csv(gnn_dir / 'account_node_features.csv')
+    n_nodes = max_n_id + 1
+    df_nodes = pd.DataFrame({'NodeID': np.arange(n_nodes)})
+    df_nodes = df_nodes.merge(
+        df_node_feats[['node_idx'] + NODE_FEATURE_COLS],
+        left_on='NodeID', right_on='node_idx', how='left',
+    )
+    df_nodes[NODE_FEATURE_COLS] = df_nodes[NODE_FEATURE_COLS].fillna(0).astype(float)
+    logging.info(f'Node features being used: {NODE_FEATURE_COLS}')
+    logging.info(f"Number of nodes = {n_nodes}")
 
-    logging.info(f"Number of nodes (holdings doing transactions) = {df_nodes.shape[0]}")
-
-    x = torch.tensor(df_nodes.loc[:, node_features].to_numpy()).float()
+    x          = torch.tensor(df_nodes[NODE_FEATURE_COLS].to_numpy()).float()
     edge_index = torch.LongTensor(np.stack([from_id, to_id]))
-    edge_attr  = torch.tensor(df_edges.loc[:, edge_features].to_numpy()).float()
-
-    tr_inds, val_inds, te_inds = _split_indices(df_edges['split'])
-
-    logging.info(f"Total train samples: {tr_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[tr_inds].float().mean() * 100:.2f}%")
-    logging.info(f"Total val samples:   {val_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[val_inds].float().mean() * 100:.2f}%")
-    logging.info(f"Total test samples:  {te_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[te_inds].float().mean() * 100:.2f}%")
+    edge_attr  = torch.tensor(df_edges[edge_features].to_numpy()).float()
 
     e_tr  = tr_inds.numpy()
     e_val = val_inds.numpy()
