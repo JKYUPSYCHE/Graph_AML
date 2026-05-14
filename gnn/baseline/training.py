@@ -1,3 +1,4 @@
+import time
 import torch
 import tqdm
 import datetime
@@ -14,6 +15,7 @@ import logging
 def _log_best(best_epoch, best_val, best_te, total_time_s, peak_memory_mb):
     logging.info('Training complete.')
     logging.info(f'Best epoch: {best_epoch}')
+    logging.info(f'Total training time: {total_time_s:.1f}s | Avg epoch memory: {peak_memory_mb:.1f}MB')
     logging.info(f"  Val  — F1: {best_val['f1']:.4f} | Recall: {best_val['recall']:.4f} | Precision: {best_val['precision']:.4f} | AUPRC: {best_val['auprc']:.4f} | Mem: {best_val['memory_mb']:.1f}MB | Time: {best_val['time_s']:.1f}s")
     logging.info(f"  Test — F1: {best_te['f1']:.4f} | Recall: {best_te['recall']:.4f} | Precision: {best_te['precision']:.4f} | AUPRC: {best_te['auprc']:.4f} | Mem: {best_te['memory_mb']:.1f}MB | Time: {best_te['time_s']:.1f}s")
 
@@ -33,6 +35,8 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
     memory_mb_list = []
     t_train_start = time.perf_counter()
     for epoch in range(config.epochs):
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
         total_loss = total_examples = 0
         preds = []
         pred_probas = []
@@ -60,6 +64,11 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
 
             total_loss += float(loss) * pred.numel()
             total_examples += pred.numel()
+
+        if torch.cuda.is_available():
+            memory_mb_list.append(torch.cuda.max_memory_allocated(device) / 1024 ** 2)
+        else:
+            memory_mb_list.append(0.0)
 
         pred = torch.cat(preds, dim=0).detach().cpu().numpy()
         pred_proba = torch.cat(pred_probas, dim=0).numpy()
@@ -95,7 +104,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
                 break
 
     total_time_s = time.perf_counter() - t_train_start
-    avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list)
+    avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list) if memory_mb_list else 0.0
     writer.add_scalar('Total/training_time_s', total_time_s, 0)
     writer.add_scalar('Total/avg_memory_mb', avg_memory_mb, 0)
     _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
@@ -109,6 +118,8 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
     memory_mb_list = []
     t_train_start = time.perf_counter()
     for epoch in range(config.epochs):
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
         total_loss = total_examples = 0
         preds = []
         pred_probas = []
@@ -138,6 +149,11 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
 
             total_loss += float(loss) * pred.numel()
             total_examples += pred.numel()
+
+        if torch.cuda.is_available():
+            memory_mb_list.append(torch.cuda.max_memory_allocated(device) / 1024 ** 2)
+        else:
+            memory_mb_list.append(0.0)
 
         pred = torch.cat(preds, dim=0).detach().cpu().numpy()
         pred_proba = torch.cat(pred_probas, dim=0).numpy()
@@ -173,7 +189,7 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
                 break
 
     total_time_s = time.perf_counter() - t_train_start
-    avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list)
+    avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list) if memory_mb_list else 0.0
     writer.add_scalar('Total/training_time_s', total_time_s, 0)
     writer.add_scalar('Total/avg_memory_mb', avg_memory_mb, 0)
     _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)

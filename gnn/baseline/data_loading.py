@@ -108,7 +108,7 @@ def get_data(args, data_config):
     edge_attr  = torch.tensor(df_edges[edge_features].to_numpy()).float()
 
     e_tr  = tr_inds.numpy()
-    e_val = np.concatenate([tr_inds.numpy(), val_inds.numpy()])
+    e_val = val_inds.numpy()
     e_te  = np.arange(len(df_edges))
 
     tr_edge_index,  tr_edge_attr,  tr_y,  tr_edge_times  = edge_index[:, e_tr],  edge_attr[e_tr],  y[e_tr],  timestamps[e_tr]
