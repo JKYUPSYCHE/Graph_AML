@@ -13,3 +13,6 @@ logs/
 
 # TensorBoard
 gnn/gf_model/runs/
+
+# Claude Code
+.claude/

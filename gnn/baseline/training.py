@@ -104,7 +104,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
                 break
 
     total_time_s = time.perf_counter() - t_train_start
-    avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list) if memory_mb_list else 0.0
+    avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list)
     writer.add_scalar('Total/training_time_s', total_time_s, 0)
     writer.add_scalar('Total/avg_memory_mb', avg_memory_mb, 0)
     _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
@@ -189,7 +189,7 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
                 break
 
     total_time_s = time.perf_counter() - t_train_start
-    avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list) if memory_mb_list else 0.0
+    avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list)
     writer.add_scalar('Total/training_time_s', total_time_s, 0)
     writer.add_scalar('Total/avg_memory_mb', avg_memory_mb, 0)
     _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
