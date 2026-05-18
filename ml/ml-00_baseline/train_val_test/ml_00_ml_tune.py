@@ -2,10 +2,10 @@
 ML-00 XGBoost random search tuning runner 모듈
 
 전체 흐름
-1. ml_search_spaces.py의 discrete search space preset을 읽음
+1. ml_00_ml_search_spaces.py의 discrete search space preset을 읽음
 2. random_search_seed 기준으로 중복 없는 hyperparameter 조합을 샘플링
 3. trial별 하위 디렉터리를 만들고 trial_params.json을 저장
-4. 각 trial에서 ml_train.train_xgb()와 ml_val.validate_xgb()를 순차 실행
+4. 각 trial에서 ml_00_ml_train.train_xgb()와 ml_00_ml_val.validate_xgb()를 순차 실행
 5. trial별 validation metric을 모아 trials_summary.csv와 tuning_summary.json을 저장
 
 중요한 전제
@@ -25,10 +25,10 @@ from typing import Any, Optional, Union
 
 import pandas as pd
 
-from ml_io import load_json, resolve_project_path, save_json
-from ml_search_spaces import Number, get_search_space
-from ml_train import XGBTrainConfig, train_xgb
-from ml_val import ValidationConfig, validate_xgb
+from ml_00_ml_io import load_json, resolve_project_path, save_json
+from ml_00_ml_search_spaces import Number, get_search_space
+from ml_00_ml_train import XGBTrainConfig, train_xgb
+from ml_00_ml_val import ValidationConfig, validate_xgb
 
 
 ALLOWED_SELECTION_METRICS = {"average_precision", "f1", "recall", "precision"}
@@ -43,7 +43,7 @@ class XGBTuneConfig:
     random search tuning 실행에 필요한 입력 경로와 옵션 묶음
 
     주요 옵션
-    - search_space_name: ml_search_spaces.py에 정의된 preset 이름
+    - search_space_name: ml_00_ml_search_spaces.py에 정의된 preset 이름
     - trial_count: 샘플링할 unique hyperparameter 조합 수
     - random_search_seed: trial 조합 샘플링 재현성 제어
     - selection_metric: best trial 선택 기준 metric
@@ -179,8 +179,8 @@ def run_xgb_random_search(config: XGBTuneConfig) -> XGBTuneResult:
     2. search space preset 로드
     3. trial_count만큼 중복 없는 parameter 조합 샘플링
     4. trial별 디렉터리에 trial_params.json 저장
-    5. trial별 ml_train.train_xgb() 실행
-    6. trial별 ml_val.validate_xgb() 실행
+    5. trial별 ml_00_ml_train.train_xgb() 실행
+    6. trial별 ml_00_ml_val.validate_xgb() 실행
     7. selection_metric 기준 best trial 선택
     8. trials_summary.csv와 tuning_summary.json 저장
 

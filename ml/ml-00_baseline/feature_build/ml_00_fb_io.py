@@ -13,7 +13,7 @@ Feature build 입출력 유틸리티 모듈
 --------------
 - 절대경로는 그대로 정규화해서 사용한다.
 - 상대경로와 base_dir이 함께 들어오면 base_dir 기준으로 해석한다.
-- 상대경로인데 base_dir이 없으면 `fb_utils.BASE_DIR`, 즉 Git 프로젝트 루트 기준으로 해석한다.
+- 상대경로인데 base_dir이 없으면 `ml_00_fb_utils.BASE_DIR`, 즉 Git 프로젝트 루트 기준으로 해석한다.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from typing import Any, Iterable, Mapping, Optional, Union
 import pandas as pd
 import pyarrow.parquet as pq
 
-from fb_utils import BASE_DIR, PROCESSED_DIR
+from ml_00_fb_utils import BASE_DIR, PROCESSED_DIR
 
 
 # -----------------------------------------------------------------------------
@@ -38,8 +38,8 @@ from fb_utils import BASE_DIR, PROCESSED_DIR
 DEFAULT_INPUT_PATH = PROCESSED_DIR / "step01_clean_base" / "clean_base.parquet"
 
 # 기본 출력은 feature build 실행 결과 검토용 폴더다.
-# 검토 후 ML 입력으로 확정한 파일은 사용자가 ml/ml-00_baseline/inputs/ 아래로 직접 옮긴다.
-DEFAULT_OUTPUT_DIR = BASE_DIR / "ml" / "ml-00_baseline" / "outputs" / "feature_build"
+# 검토 후 ML 입력으로 확정한 파일은 사용자가 ml/ml-00_baseline/ml_inputs/ 아래로 복사한다.
+DEFAULT_OUTPUT_DIR = BASE_DIR / "ml" / "ml-00_baseline" / "fb_outputs"
 
 
 # -----------------------------------------------------------------------------

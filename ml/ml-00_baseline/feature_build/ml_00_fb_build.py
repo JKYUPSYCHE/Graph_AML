@@ -26,8 +26,8 @@ from typing import Any, Mapping, Optional, Tuple, Union
 
 import pandas as pd
 
-from fb_catalog import make_feature_catalog, make_feature_columns_table, make_split_summary
-from fb_io import (
+from ml_00_fb_catalog import make_feature_catalog, make_feature_columns_table, make_split_summary
+from ml_00_fb_io import (
     DEFAULT_INPUT_PATH,
     DEFAULT_OUTPUT_DIR,
     FeatureBuildOutputPaths,
@@ -41,13 +41,13 @@ from fb_io import (
     save_json,
     utc_now_iso,
 )
-from fb_operations import execute_feature_specs
-from fb_schema import (
+from ml_00_fb_operations import execute_feature_specs
+from ml_00_fb_schema import (
     resolve_requested_columns,
     standardize_input_frame,
     validate_no_forbidden_input_columns,
 )
-from fb_specs import (
+from ml_00_fb_specs import (
     FeatureSpec,
     default_feature_specs,
     feature_columns,
@@ -86,7 +86,7 @@ class FeatureBuildConfig:
     input_path: Optional[Union[str, Path]] = DEFAULT_INPUT_PATH
     output_dir: Optional[Union[str, Path]] = DEFAULT_OUTPUT_DIR
     # base_dir: input_path/output_dir이 상대경로일 때 해석 기준이 되는 루트.
-    # None이면 fb_io.resolve_path() 내부에서 fb_utils.BASE_DIR(=Git 루트)를 사용한다.
+    # None이면 ml_00_fb_io.resolve_path() 내부에서 ml_00_fb_utils.BASE_DIR(=Git 루트)를 사용한다.
     base_dir: Optional[Union[str, Path]] = None
     
     # --- 실행 식별자 (재현성 메타데이터 + 산출물 파일명 prefix) ---
@@ -102,7 +102,7 @@ class FeatureBuildConfig:
     
     # --- 컬럼명 매핑 ---
     # 노트북의 COLUMN_MAP이 그대로 들어온다. 예: {"amount": "Amount Paid"}.
-    # 여기 없는 logical key는 fb_schema.COLUMN_CANDIDATES로 자동 fallback된다.
+    # 여기 없는 logical key는 ml_00_fb_schema.COLUMN_CANDIDATES로 자동 fallback된다.
     # 명시성을 위해 모든 key를 직접 넘기는 것을 권장.
     column_map: Optional[Mapping[str, str]] = None
     
@@ -310,13 +310,13 @@ def _assign_time_split(df: pd.DataFrame, config: FeatureBuildConfig) -> pd.DataF
 
 def _validate_time_split(df: pd.DataFrame) -> None:
     """
-    split 결과가 train ≤ val ≤ test 시간 순서를 만족하는지 검사
+    split 결과가 train < val < test 시간 순서를 만족하는지 검사
 
     검사 항목
     --------
     1. train/val/test 세 split이 모두 존재 (어느 하나도 비어서는 안 됨)
-    2. max(train.timestamp) ≤ min(val.timestamp)
-    3. max(val.timestamp)   ≤ min(test.timestamp)
+    2. max(train.timestamp) < min(val.timestamp)
+    3. max(val.timestamp)   < min(test.timestamp)
     """
 
     # [1] 세 split이 모두 존재하는지 확인. 누락 시 이후 학습 단계에서 KeyError가 나므로 여기서 잡는다.
@@ -325,18 +325,17 @@ def _validate_time_split(df: pd.DataFrame) -> None:
     if missing:
         raise ValueError(f"Missing split values after split assignment: {sorted(missing)}")
 
-    # [2] 인접 split 경계에서 시간 역전이 없는지 검사.
-    # 같은 timestamp가 train과 val에 동시에 있는 경우 train_max == val_min이 되어 허용
-    # (boundary가 그룹 한가운데를 가른 경우인데, 시계열 leakage 관점에서 보수적으로 보면
-    #  preserve_timestamp_groups=True로 막아야 함. 여기서는 strictly greater일 때만 에러.)
+    # [2] 인접 split 경계에서 시간 역전 또는 같은 timestamp 공유가 없는지 검사.
+    # temporal/history feature의 과거 기준은 past_timestamp < current_timestamp로 고정한다.
+    # 따라서 같은 timestamp가 split 경계 양쪽에 있으면 보수적으로 실패시킨다.
     train_max = df.loc[df["split"] == "train", "timestamp"].max()
     val_min = df.loc[df["split"] == "val", "timestamp"].min()
     val_max = df.loc[df["split"] == "val", "timestamp"].max()
     test_min = df.loc[df["split"] == "test", "timestamp"].min()
-    if train_max > val_min:
-        raise ValueError(f"Time split order violation: train_max={train_max}, val_min={val_min}")
-    if val_max > test_min:
-        raise ValueError(f"Time split order violation: val_max={val_max}, test_min={test_min}")
+    if train_max >= val_min:
+        raise ValueError(f"Time split boundary violation: train_max={train_max}, val_min={val_min}")
+    if val_max >= test_min:
+        raise ValueError(f"Time split boundary violation: val_max={val_max}, test_min={test_min}")
 
 
 
@@ -573,14 +572,12 @@ def split_single_parquet_by_existing_split(
     )
 
     output_df = full_df.copy()
-    # ml_io.load_split(... expected_split=...)가 검사할 수 있도록 canonical split 컬럼을 보장한다.
+    # 검증은 canonical metadata로 수행했으므로 저장 parquet도 같은 값을 사용한다.
+    # 원본 컬럼명이 이미 표준이어도 dtype/표현 불일치를 남기지 않도록 항상 덮어쓴다.
+    output_df["tx_id"] = metadata["tx_id"]
+    output_df["timestamp"] = metadata["timestamp"]
+    output_df["label"] = metadata["label"]
     output_df["split"] = metadata["split"].astype("string")
-    if tx_id_col != "tx_id":
-        output_df["tx_id"] = metadata["tx_id"]
-    if timestamp_col != "timestamp":
-        output_df["timestamp"] = metadata["timestamp"]
-    if label_col != "label":
-        output_df["label"] = metadata["label"]
 
     split_frames = {
         "train": output_df.loc[metadata["split"] == "train"].reset_index(drop=True),
@@ -1224,7 +1221,7 @@ def _unknown_category_total(unknown_summary: pd.DataFrame) -> int:
 
     if unknown_summary.empty:
         return 0
-    # 빈 frame이 아닌데 컬럼이 없다면 fb_operations.py의 schema가 깨진 것 → 즉시 중단.
+    # 빈 frame이 아닌데 컬럼이 없다면 ml_00_fb_operations.py의 schema가 깨진 것 → 즉시 중단.
     if "unknown_count" not in unknown_summary.columns:
         raise ValueError("category_unknown_summary artifact is missing unknown_count column.")
     return int(unknown_summary["unknown_count"].sum())

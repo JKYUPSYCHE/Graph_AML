@@ -12,7 +12,7 @@ Feature catalog와 요약 테이블 생성 모듈
 - `ml_feature_columns.csv`: 모델 입력 truth source. column_name과 used_in_ml만 중요하다.
   used_in_ml은 문자열 "TRUE" / "FALSE"로 저장한다.
 - `feature_catalog.csv`: 설명/관리용. operation, params, leakage_policy 등을 사람이 검토한다.
-- `feature_info.csv`: 실제 생성된 컬럼의 분포/품질 정보. 이 파일은 fb_operations.py에서 만든다.
+- `feature_info.csv`: 실제 생성된 컬럼의 분포/품질 정보. 이 파일은 ml_00_fb_operations.py에서 만든다.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from typing import Any, Mapping, Tuple
 
 import pandas as pd
 
-from fb_schema import validate_no_forbidden_feature_columns
-from fb_specs import FeatureSpec, feature_columns, validate_feature_specs
+from ml_00_fb_schema import validate_no_forbidden_feature_columns
+from ml_00_fb_specs import FeatureSpec, feature_columns, validate_feature_specs
 
 
 def _json_dumps(payload: Mapping[str, Any]) -> str:

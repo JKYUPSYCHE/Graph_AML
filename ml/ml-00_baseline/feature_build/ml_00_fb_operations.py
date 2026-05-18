@@ -26,8 +26,8 @@ from typing import Any, Callable, Mapping, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from fb_schema import normalize_category_strict, parse_datetime_strict, parse_numeric_strict
-from fb_specs import FeatureOpResult, FeatureSpec, META_COLUMNS, feature_columns, validate_feature_specs
+from ml_00_fb_schema import normalize_category_strict, parse_datetime_strict, parse_numeric_strict
+from ml_00_fb_specs import FeatureOpResult, FeatureSpec, META_COLUMNS, feature_columns, validate_feature_specs
 
 
 # -----------------------------------------------------------------------------
@@ -57,6 +57,8 @@ CATEGORY_UNKNOWN_COLUMNS: Tuple[str, ...] = (
 
 # operation 함수의 표준 타입이다. 모든 operation은 같은 입력/출력 계약을 따른다.
 OperationRunner = Callable[[pd.DataFrame, FeatureSpec], FeatureOpResult]
+SUPPORTED_ROLLING_AGGS: Tuple[str, ...] = ("sum", "mean", "std", "min", "max", "count")
+RollingAggGroupKey = Tuple[str, str, str, int, str, Tuple[str, str]]
 
 
 # -----------------------------------------------------------------------------
@@ -460,6 +462,49 @@ def _parse_window(window: Any, operation: str, output_col: str) -> pd.Timedelta:
     return parsed
 
 
+def _param_group_value(value: Any) -> tuple[str, str]:
+    """batch group key에서 spec별 scalar parameter를 보수적으로 구분한다."""
+
+    return (type(value).__name__, repr(value))
+
+
+def _rolling_agg_spec_parts(spec: FeatureSpec) -> tuple[dict[str, str], pd.Timedelta, str, str, Any, str]:
+    """rolling_agg spec의 공통 검증과 정규화된 실행 파라미터를 반환한다."""
+
+    _require_allowed_params(spec, ("window", "agg", "closed", "fill_value", "dtype"))
+    roles = _require_roles(spec, ("entity_col", "timestamp_col", "value_col"))
+    window = _parse_window(_param_value(spec, "window", ""), spec.operation, spec.output_col)
+    agg = str(_param_value(spec, "agg", "")).strip().lower()
+    closed = str(_param_value(spec, "closed", "left")).strip().lower()
+    if closed != "left":
+        raise ValueError(
+            "Feature operation failed: rolling_agg only supports closed='left' to avoid current/future leakage. "
+            f"observed_closed={closed!r}"
+        )
+    if agg not in SUPPORTED_ROLLING_AGGS:
+        raise ValueError(
+            "Feature operation failed: unsupported rolling agg. "
+            f"agg={agg!r}, supported={list(SUPPORTED_ROLLING_AGGS)}"
+        )
+    fill_value = _param_value(spec, "fill_value", 0.0)
+    dtype = str(_param_value(spec, "dtype", "float32"))
+    return roles, window, agg, closed, fill_value, dtype
+
+
+def _rolling_agg_group_key(spec: FeatureSpec) -> RollingAggGroupKey:
+    """같은 raw rolling history를 공유할 수 있는 rolling_agg spec 묶음 key를 만든다."""
+
+    roles, window, _agg, closed, fill_value, _dtype = _rolling_agg_spec_parts(spec)
+    return (
+        roles["entity_col"],
+        roles["timestamp_col"],
+        roles["value_col"],
+        int(window.value),
+        closed,
+        _param_group_value(fill_value),
+    )
+
+
 # -----------------------------------------------------------------------------
 # 6. rolling aggregation operation
 # -----------------------------------------------------------------------------
@@ -475,27 +520,15 @@ def op_rolling_agg(df: pd.DataFrame, spec: FeatureSpec) -> FeatureOpResult:
     누수 방지 정책
     ---------------
     - `closed='left'`만 허용한다.
-    - 현재 row의 value와 미래 row의 value는 rolling window에 포함하지 않는다.
+    - 과거는 `past_timestamp < current_timestamp`로 고정한다.
+    - 같은 timestamp group 안의 row끼리는 서로 과거로 보지 않는다.
     """
 
-    _require_allowed_params(spec, ("window", "agg", "closed", "fill_value", "dtype"))
-    roles = _require_roles(spec, ("entity_col", "timestamp_col", "value_col"))
+    roles, window, agg, closed, fill_value, dtype = _rolling_agg_spec_parts(spec)
     entity_col = roles["entity_col"]
     timestamp_col = roles["timestamp_col"]
     value_col = roles["value_col"]
     _require_columns(df, (entity_col, timestamp_col, value_col), spec.operation)
-
-    window = _parse_window(_param_value(spec, "window", ""), spec.operation, spec.output_col)
-    agg = str(_param_value(spec, "agg", "")).strip().lower()
-    closed = str(_param_value(spec, "closed", "left")).strip().lower()
-    if closed != "left":
-        raise ValueError(
-            "Feature operation failed: rolling_agg only supports closed='left' to avoid current/future leakage. "
-            f"observed_closed={closed!r}"
-        )
-    supported_aggs = {"sum", "mean", "std", "min", "max", "count"}
-    if agg not in supported_aggs:
-        raise ValueError(f"Feature operation failed: unsupported rolling agg. agg={agg!r}, supported={sorted(supported_aggs)}")
 
     # entity는 계좌 ID처럼 범주형 key 역할을 하므로 결측/공백을 엄격히 차단한다.
     entity = normalize_category_strict(df[entity_col], source_col=entity_col)
@@ -512,32 +545,69 @@ def op_rolling_agg(df: pd.DataFrame, spec: FeatureSpec) -> FeatureOpResult:
         }
     ).sort_values(["_entity", "_timestamp", "_row_order"], kind="mergesort")
 
-    parts: list[pd.DataFrame] = []
+    result_values = np.full(len(df), np.nan, dtype="float64")
     for _entity_value, group in work.groupby("_entity", sort=False):
-        # entity별로 timestamp index를 만들고 pandas rolling window를 적용한다.
-        # closed='left' 때문에 현재 timestamp row는 집계에서 제외된다.
-        indexed = group.set_index("_timestamp")
-        rolling = indexed["_value"].rolling(window=window, closed="left")
-        if agg == "sum":
-            rolled = rolling.sum()
-        elif agg == "mean":
-            rolled = rolling.mean()
-        elif agg == "std":
-            rolled = rolling.std()
-        elif agg == "min":
-            rolled = rolling.min()
-        elif agg == "max":
-            rolled = rolling.max()
-        else:
-            rolled = rolling.count()
-        parts.append(pd.DataFrame({"_row_order": group["_row_order"].to_numpy(), spec.output_col: rolled.to_numpy()}))
+        # 같은 timestamp group은 먼저 현재까지의 과거 집계를 출력한 뒤 history에 추가한다.
+        # 따라서 duplicate timestamp 안의 앞 row가 뒤 row의 과거가 되는 누수를 막는다.
+        event_queue: deque[tuple[pd.Timestamp, float, int]] = deque()
+        min_queue: deque[tuple[float, int]] = deque()
+        max_queue: deque[tuple[float, int]] = deque()
+        running_sum = 0.0
+        running_sum_sq = 0.0
+        event_count = 0
+        sequence_id = 0
 
-    # entity별로 나뉘어 계산된 결과를 원본 row 순서로 되돌린다.
-    result = pd.concat(parts, ignore_index=True).sort_values("_row_order", kind="mergesort")
-    values_out = pd.Series(result[spec.output_col].to_numpy(), index=df.index)
-    fill_value = _param_value(spec, "fill_value", 0.0)
+        for timestamp_value, time_group in group.groupby("_timestamp", sort=False):
+            lower_bound = timestamp_value - window
+            # closed='left'의 window는 [current-window, current)이다. lower bound는 포함한다.
+            while event_queue and event_queue[0][0] < lower_bound:
+                _old_timestamp, old_value, old_sequence_id = event_queue.popleft()
+                running_sum -= old_value
+                running_sum_sq -= old_value * old_value
+                event_count -= 1
+                if min_queue and min_queue[0][1] == old_sequence_id:
+                    min_queue.popleft()
+                if max_queue and max_queue[0][1] == old_sequence_id:
+                    max_queue.popleft()
+
+            if event_count == 0:
+                aggregate_value = np.nan
+            elif agg == "sum":
+                aggregate_value = running_sum
+            elif agg == "mean":
+                aggregate_value = running_sum / event_count
+            elif agg == "std":
+                if event_count <= 1:
+                    aggregate_value = np.nan
+                else:
+                    variance_numerator = running_sum_sq - (running_sum * running_sum / event_count)
+                    aggregate_value = float(np.sqrt(max(variance_numerator, 0.0) / (event_count - 1)))
+            elif agg == "min":
+                aggregate_value = min_queue[0][0]
+            elif agg == "max":
+                aggregate_value = max_queue[0][0]
+            else:
+                aggregate_value = float(event_count)
+
+            row_orders = time_group["_row_order"].to_numpy()
+            result_values[row_orders] = aggregate_value
+
+            for event_time, event_value in zip(time_group["_timestamp"], time_group["_value"]):
+                value_float = float(event_value)
+                event_queue.append((event_time, value_float, sequence_id))
+                running_sum += value_float
+                running_sum_sq += value_float * value_float
+                event_count += 1
+                while min_queue and min_queue[-1][0] > value_float:
+                    min_queue.pop()
+                min_queue.append((value_float, sequence_id))
+                while max_queue and max_queue[-1][0] < value_float:
+                    max_queue.pop()
+                max_queue.append((value_float, sequence_id))
+                sequence_id += 1
+
+    values_out = pd.Series(result_values, index=df.index)
     values_out = values_out.fillna(fill_value)
-    dtype = str(_param_value(spec, "dtype", "float32"))
     params = {"window": str(window), "agg": agg, "closed": closed, "fill_value": fill_value}
     return _finalize_result(
         values_out,
@@ -547,6 +617,156 @@ def op_rolling_agg(df: pd.DataFrame, spec: FeatureSpec) -> FeatureOpResult:
         params=params,
         dtype=dtype,
     )
+
+
+def _execute_rolling_agg_group(df: pd.DataFrame, specs: Tuple[FeatureSpec, ...]) -> dict[str, FeatureOpResult]:
+    """
+    같은 entity/timestamp/value/window 설정을 공유하는 rolling_agg spec 묶음을 한 번에 계산한다.
+
+    agg별 raw series만 공유하며, output_col, dtype, fill_value 후처리는 spec별로 유지한다.
+    """
+
+    if not specs:
+        return {}
+
+    group_key = _rolling_agg_group_key(specs[0])
+    first_roles, window, _first_agg, closed, _first_fill_value, _first_dtype = _rolling_agg_spec_parts(specs[0])
+    for spec in specs:
+        if spec.operation != "rolling_agg":
+            raise ValueError(
+                "Feature build failed: rolling batch received a non-rolling spec. "
+                f"operation={spec.operation!r}, output_col={spec.output_col!r}"
+            )
+        if _rolling_agg_group_key(spec) != group_key:
+            raise ValueError(
+                "Feature build failed: rolling batch group contains incompatible specs. "
+                f"first_output_col={specs[0].output_col!r}, observed_output_col={spec.output_col!r}"
+            )
+
+    entity_col = first_roles["entity_col"]
+    timestamp_col = first_roles["timestamp_col"]
+    value_col = first_roles["value_col"]
+    _require_columns(df, (entity_col, timestamp_col, value_col), "rolling_agg")
+
+    entity = normalize_category_strict(df[entity_col], source_col=entity_col)
+    timestamps = parse_datetime_strict(df, timestamp_col, specs[0].output_col)
+    values = parse_numeric_strict(df, value_col, specs[0].output_col)
+    work = pd.DataFrame(
+        {
+            "_entity": entity,
+            "_timestamp": timestamps,
+            "_value": values.astype("float64"),
+            "_row_order": np.arange(len(df)),
+        }
+    ).sort_values(["_entity", "_timestamp", "_row_order"], kind="mergesort")
+
+    required_aggs = tuple(dict.fromkeys(_rolling_agg_spec_parts(spec)[2] for spec in specs))
+    raw_results = {agg: np.full(len(df), np.nan, dtype="float64") for agg in required_aggs}
+
+    for _entity_value, group in work.groupby("_entity", sort=False):
+        event_queue: deque[tuple[pd.Timestamp, float, int]] = deque()
+        min_queue: deque[tuple[float, int]] = deque()
+        max_queue: deque[tuple[float, int]] = deque()
+        running_sum = 0.0
+        running_sum_sq = 0.0
+        event_count = 0
+        sequence_id = 0
+
+        for timestamp_value, time_group in group.groupby("_timestamp", sort=False):
+            lower_bound = timestamp_value - window
+            while event_queue and event_queue[0][0] < lower_bound:
+                _old_timestamp, old_value, old_sequence_id = event_queue.popleft()
+                running_sum -= old_value
+                running_sum_sq -= old_value * old_value
+                event_count -= 1
+                if min_queue and min_queue[0][1] == old_sequence_id:
+                    min_queue.popleft()
+                if max_queue and max_queue[0][1] == old_sequence_id:
+                    max_queue.popleft()
+
+            aggregate_values: dict[str, float] = {}
+            if event_count == 0:
+                for agg in required_aggs:
+                    aggregate_values[agg] = np.nan
+            else:
+                if "sum" in raw_results:
+                    aggregate_values["sum"] = running_sum
+                if "mean" in raw_results:
+                    aggregate_values["mean"] = running_sum / event_count
+                if "std" in raw_results:
+                    if event_count <= 1:
+                        aggregate_values["std"] = np.nan
+                    else:
+                        variance_numerator = running_sum_sq - (running_sum * running_sum / event_count)
+                        aggregate_values["std"] = float(np.sqrt(max(variance_numerator, 0.0) / (event_count - 1)))
+                if "min" in raw_results:
+                    aggregate_values["min"] = min_queue[0][0]
+                if "max" in raw_results:
+                    aggregate_values["max"] = max_queue[0][0]
+                if "count" in raw_results:
+                    aggregate_values["count"] = float(event_count)
+
+            row_orders = time_group["_row_order"].to_numpy()
+            for agg, raw_values in raw_results.items():
+                raw_values[row_orders] = aggregate_values[agg]
+
+            for event_time, event_value in zip(time_group["_timestamp"], time_group["_value"]):
+                value_float = float(event_value)
+                event_queue.append((event_time, value_float, sequence_id))
+                running_sum += value_float
+                running_sum_sq += value_float * value_float
+                event_count += 1
+                while min_queue and min_queue[-1][0] > value_float:
+                    min_queue.pop()
+                min_queue.append((value_float, sequence_id))
+                while max_queue and max_queue[-1][0] < value_float:
+                    max_queue.pop()
+                max_queue.append((value_float, sequence_id))
+                sequence_id += 1
+
+    results: dict[str, FeatureOpResult] = {}
+    for spec in specs:
+        roles, _window, agg, _closed, fill_value, dtype = _rolling_agg_spec_parts(spec)
+        values_out = pd.Series(raw_results[agg].copy(), index=df.index).fillna(fill_value)
+        params = {"window": str(window), "agg": agg, "closed": closed, "fill_value": fill_value}
+        results[spec.output_col] = _finalize_result(
+            values_out,
+            spec,
+            row_count=len(df),
+            input_columns=roles,
+            params=params,
+            dtype=dtype,
+        )
+    return results
+
+
+def execute_rolling_agg_specs_batched(
+    df: pd.DataFrame,
+    specs: Tuple[FeatureSpec, ...],
+) -> dict[str, FeatureOpResult]:
+    """rolling_agg spec 목록을 group key별로 묶어 실행하고 output_col별 결과를 반환한다."""
+
+    if not specs:
+        return {}
+    validate_feature_specs(specs)
+
+    grouped_specs: dict[RollingAggGroupKey, list[FeatureSpec]] = {}
+    for spec in specs:
+        if spec.operation != "rolling_agg":
+            raise ValueError(
+                "Feature build failed: execute_rolling_agg_specs_batched only accepts rolling_agg specs. "
+                f"operation={spec.operation!r}, output_col={spec.output_col!r}"
+            )
+        grouped_specs.setdefault(_rolling_agg_group_key(spec), []).append(spec)
+
+    results: dict[str, FeatureOpResult] = {}
+    for group_specs in grouped_specs.values():
+        group_results = _execute_rolling_agg_group(df, tuple(group_specs))
+        overlap = set(results) & set(group_results)
+        if overlap:
+            raise ValueError(f"Feature build failed: duplicate rolling batch results. output_cols={sorted(overlap)}")
+        results.update(group_results)
+    return results
 
 
 # -----------------------------------------------------------------------------
@@ -768,9 +988,11 @@ def execute_feature_specs(
     feature_info_parts: list[pd.DataFrame] = []
     category_mapping_parts: list[pd.DataFrame] = []
     category_unknown_parts: list[pd.DataFrame] = []
+    rolling_specs = tuple(spec for spec in feature_specs if spec.operation == "rolling_agg")
+    rolling_results = execute_rolling_agg_specs_batched(df, rolling_specs)
     for spec in feature_specs:
-        # FeatureSpec 하나당 operation 하나를 실행한다.
-        result = run_operation(df, spec)
+        # rolling_agg는 같은 history 계산을 공유하기 위해 batch 결과를 사용한다.
+        result = rolling_results[spec.output_col] if spec.operation == "rolling_agg" else run_operation(df, spec)
         expected = [spec.output_col]
 
         # operation이 선언한 output_col만 정확히 만들었는지 확인한다.
