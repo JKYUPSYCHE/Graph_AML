@@ -51,7 +51,9 @@ def _drive_list(q: str) -> list[dict]:
         },
         timeout=15,
     )
-    r.raise_for_status()
+    if not r.ok:
+        st.error(f"Drive API 오류 {r.status_code}: {r.text}")
+        st.stop()
     return r.json().get("files", [])
 
 
