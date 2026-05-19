@@ -145,17 +145,19 @@ st.caption(
 )
 
 # ── 실험별 IV 바 차트 ───────────────────────────────────────────────────────
-left, right = st.columns([1, 3])
+ctrl_left, ctrl_right = st.columns([1, 3])
 
-with left:
-    sel_exp     = st.selectbox("실험 선택", exp_names, label_visibility="collapsed")
-    meta        = all_meta[sel_exp]
-    iv_df       = all_iv[sel_exp]
-    top_n       = st.slider("Top N", 10, min(50, len(iv_df)), 20)
+with ctrl_left:
+    sel_exp = st.selectbox("실험 선택", exp_names, label_visibility="collapsed")
 
-    n_rows    = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
-    n_features = len(all_iv[sel_exp])
-    st.markdown(f"""
+with ctrl_right:
+    meta   = all_meta[sel_exp]
+    iv_df  = all_iv[sel_exp]
+    top_n  = st.slider("Top N", 10, min(50, len(iv_df)), 20)
+
+n_rows     = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
+n_features = len(iv_df)
+st.markdown(f"""
 | 항목 | 값 |
 |------|-----|
 | 계산일 | {meta.get('computed_at','')[:19]} |
@@ -167,54 +169,53 @@ with left:
 
 IV_CUT = 1.5
 
-with right:
-    top_df = (
-        iv_df.dropna(subset=["iv"])
-        .head(top_n)
-        .sort_values("iv")
-        .reset_index(drop=True)
-    )
-    top_df["_iv_bar"] = top_df["iv"].clip(upper=IV_CUT)
-    has_overflow = (top_df["iv"] > IV_CUT).any()
+top_df = (
+    iv_df.dropna(subset=["iv"])
+    .head(top_n)
+    .sort_values("iv")
+    .reset_index(drop=True)
+)
+top_df["_iv_bar"] = top_df["iv"].clip(upper=IV_CUT)
+has_overflow = (top_df["iv"] > IV_CUT).any()
 
-    fig = px.bar(
-        top_df,
-        x="_iv_bar", y="feature_name",
-        orientation="h",
-        color="iv_strength",
-        color_discrete_map=IV_COLORS,
-        custom_data=["iv"],
-        labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
-        title=f"{sel_exp} — Top {top_n} Features by IV",
-    )
-    fig.update_traces(
-        hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>"
-    )
-    fig.update_layout(
-        height=max(420, top_n * 40),
-        yaxis={"categoryorder": "total ascending"},
-        xaxis={
-            "range": [0, IV_CUT + (0.35 if has_overflow else 0.05)],
-            "tickvals": [0, 0.5, 1.0, 1.5],
-            "ticktext": ["0", "0.5", "1.0", "1.5"],
-            "title": "IV",
-        },
-        legend_title_text="IV 강도",
+fig = px.bar(
+    top_df,
+    x="_iv_bar", y="feature_name",
+    orientation="h",
+    color="iv_strength",
+    color_discrete_map=IV_COLORS,
+    custom_data=["iv"],
+    labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
+    title=f"{sel_exp} — Top {top_n} Features by IV",
+)
+fig.update_traces(
+    hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>"
+)
+fig.update_layout(
+    height=max(420, top_n * 40),
+    yaxis={"categoryorder": "total ascending"},
+    xaxis={
+        "range": [0, IV_CUT + (0.35 if has_overflow else 0.05)],
+        "tickvals": [0, 0.5, 1.0, 1.5],
+        "ticktext": ["0", "0.5", "1.0", "1.5"],
+        "title": "IV",
+    },
+    legend_title_text="IV 강도",
+)
+
+for i, row in top_df[top_df["iv"] > IV_CUT].iterrows():
+    fig.add_annotation(
+        x=IV_CUT + 0.04, y=i,
+        text=f"{row['iv']:.4f}",
+        showarrow=False,
+        xanchor="left",
+        font=dict(size=10),
     )
 
-    for i, row in top_df[top_df["iv"] > IV_CUT].iterrows():
-        fig.add_annotation(
-            x=IV_CUT + 0.04, y=i,
-            text=f"{row['iv']:.4f}",
-            showarrow=False,
-            xanchor="left",
-            font=dict(size=10),
-        )
-
-    for val, label, color in [
-        (0.02, "weak", "#aaaaaa"), (0.10, "medium", "#888888"),
-        (0.30, "strong", "#555555"), (0.50, "suspicious", "#222222"),
-    ]:
-        fig.add_vline(x=val, line_dash="dot", line_color=color,
-                      annotation_text=label, annotation_font_size=10)
-    st.plotly_chart(fig, use_container_width=True)
+for val, label, color in [
+    (0.02, "weak", "#aaaaaa"), (0.10, "medium", "#888888"),
+    (0.30, "strong", "#555555"), (0.50, "suspicious", "#222222"),
+]:
+    fig.add_vline(x=val, line_dash="dot", line_color=color,
+                  annotation_text=label, annotation_font_size=10)
+st.plotly_chart(fig, use_container_width=True)
