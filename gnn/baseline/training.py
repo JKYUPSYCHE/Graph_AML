@@ -42,6 +42,8 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
         pred_probas = []
         ground_truths = []
         for batch in tqdm.tqdm(tr_loader, disable=not args.tqdm):
+            if batch.x.shape[0] <= 1:
+                continue
             optimizer.zero_grad()
             inds = tr_inds.detach().cpu()
             batch_edge_inds = inds[batch.input_id.detach().cpu()]
@@ -125,6 +127,8 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
         pred_probas = []
         ground_truths = []
         for batch in tqdm.tqdm(tr_loader, disable=not args.tqdm):
+            if batch['node'].x.shape[0] <= 1:
+                continue
             optimizer.zero_grad()
             inds = tr_inds.detach().cpu()
             batch_edge_inds = inds[batch['node', 'to', 'node'].input_id.detach().cpu()]
