@@ -9,7 +9,7 @@ from utils import set_seed  # noqa: E402
 _BASELINE_DIR = Path(__file__).resolve().parent
 
 
-def logger_setup(log_dir=None):
+def logger_setup(log_dir=None, log_name='logs'):
     log_directory = Path(log_dir) if log_dir else _BASELINE_DIR / "logs"
     log_directory.mkdir(parents=True, exist_ok=True)
     if hasattr(sys.stdout, 'reconfigure'):
@@ -22,7 +22,7 @@ def logger_setup(log_dir=None):
         level=logging.INFO,
         format="%(asctime)s [%(levelname)-5.5s] %(message)s",
         handlers=[
-            logging.FileHandler(log_directory / "logs.log", encoding='utf-8'),
+            logging.FileHandler(log_directory / f"{log_name}.log", encoding='utf-8'),
             logging.StreamHandler(sys.stdout)
         ]
     )
