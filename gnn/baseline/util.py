@@ -9,9 +9,9 @@ from utils import set_seed  # noqa: E402
 _BASELINE_DIR = Path(__file__).resolve().parent
 
 
-def logger_setup():
-    log_directory = _BASELINE_DIR / "logs"
-    log_directory.mkdir(exist_ok=True)
+def logger_setup(log_dir=None):
+    log_directory = Path(log_dir) if log_dir else _BASELINE_DIR / "logs"
+    log_directory.mkdir(parents=True, exist_ok=True)
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
     # basicConfig은 기존 핸들러가 있으면 무시됨 (Colab 등) → 강제 초기화
