@@ -16,9 +16,10 @@ Streamlit Community Cloud에 배포해서 팀원 누구나 링크로 접근 가�
 """
 from __future__ import annotations
 
+import numpy as np
 import requests
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(page_title="WOE/IV Leaderboard", layout="wide", page_icon="📊")
@@ -160,55 +161,133 @@ with left:
 | 소요 | {meta.get('elapsed_seconds','?')}초 |
 """)
 
-IV_CUT     = 1.44  # bar 절취 지점
-IV_DISPLAY = 1.6   # x축 최대 범위
-WAVE_AMP   = 0.025
-BAR_HALF_H = 0.35
+# ── Broken-axis chart constants ────────────────────────────────────────────
+LOW_MAX    = 1.5   # left region shows 0 … LOW_MAX
+GAP        = 0.2   # visual gap width in display coords
+HIGH_START = LOW_MAX + GAP          # 1.7 — right region starts here
+WAVE_AMP   = 0.015
+N_WAVES    = 8
+
+
+def _wave_path(x_center: float, y_bot: float, y_top: float) -> str:
+    ys = np.linspace(y_bot, y_top, N_WAVES * 2 + 1)
+    pts = [f"M {x_center - WAVE_AMP} {ys[0]}"]
+    for k, y in enumerate(ys[1:]):
+        x = x_center + WAVE_AMP if k % 2 == 0 else x_center - WAVE_AMP
+        pts.append(f"L {x} {y}")
+    return " ".join(pts)
+
 
 with right:
-    top_df = iv_df.dropna(subset=["iv"]).head(top_n).sort_values("iv").reset_index(drop=True)
-    top_df["_iv_bar"] = top_df["iv"].clip(upper=IV_CUT)
+    top_df = (
+        iv_df.dropna(subset=["iv"])
+        .head(top_n)
+        .sort_values("iv")
+        .reset_index(drop=True)
+    )
+    n_feats   = len(top_df)
+    has_break = (top_df["iv"] > LOW_MAX).any()
 
-    fig = px.bar(
-        top_df,
-        x="_iv_bar", y="feature_name",
-        orientation="h",
-        color="iv_strength",
-        color_discrete_map=IV_COLORS,
-        custom_data=["iv"],
-        labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
-        title=f"{sel_exp} — Top {top_n} Features by IV",
-    )
-    fig.update_traces(
-        hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>"
-    )
+    # overflow amount in display coords (1 real-IV unit = 1 display unit after HIGH_START)
+    overflow_max = (top_df["iv"] - LOW_MAX).clip(lower=0).max() if has_break else 0
+    x_max = HIGH_START + overflow_max + 0.1 if has_break else LOW_MAX + 0.1
+
+    # ── colour list preserving category order ──────────────────────────────
+    strength_order = ["suspicious", "strong", "medium", "weak", "useless", "na"]
+    legend_seen: set[str] = set()
+    traces = []
+
+    for strength in strength_order:
+        sub = top_df[top_df["iv_strength"] == strength]
+        if sub.empty:
+            continue
+        color = IV_COLORS.get(strength, "#cccccc")
+
+        # left bar: clipped at LOW_MAX
+        traces.append(go.Bar(
+            x=sub["iv"].clip(upper=LOW_MAX),
+            y=sub["feature_name"],
+            orientation="h",
+            marker_color=color,
+            name=strength,
+            legendgroup=strength,
+            showlegend=True,
+            customdata=sub[["iv"]].values,
+            hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>",
+        ))
+
+        # right bar: overflow portion starting at HIGH_START
+        overflow_sub = sub[sub["iv"] > LOW_MAX]
+        if not overflow_sub.empty:
+            traces.append(go.Bar(
+                x=overflow_sub["iv"] - LOW_MAX,          # width = actual overflow
+                y=overflow_sub["feature_name"],
+                base=[HIGH_START] * len(overflow_sub),   # start at HIGH_START
+                orientation="h",
+                marker_color=color,
+                name=strength,
+                legendgroup=strength,
+                showlegend=False,
+                customdata=overflow_sub[["iv"]].values,
+                hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>",
+            ))
+
+    fig = go.Figure(data=traces)
+
+    # ── x-axis ticks ───────────────────────────────────────────────────────
+    left_ticks  = [v for v in [0.0, 0.5, 1.0, 1.5] if v <= LOW_MAX]
+    right_step  = 0.5
+    right_reals = np.arange(LOW_MAX + right_step, top_df["iv"].max() + right_step, right_step) if has_break else []
+    tickvals = left_ticks + [HIGH_START + (r - LOW_MAX) for r in right_reals]
+    ticktext = [str(v) for v in left_ticks] + [f"{r:.1f}" for r in right_reals]
+
+    # threshold vlines (left region only)
+    iv_thresholds = [
+        (0.02, "weak",       "#aaaaaa"),
+        (0.10, "medium",     "#888888"),
+        (0.30, "strong",     "#555555"),
+        (0.50, "suspicious", "#222222"),
+    ]
+
     fig.update_layout(
-        height=max(420, top_n * 24),
+        title=f"{sel_exp} — Top {top_n} Features by IV",
+        barmode="overlay",
+        height=max(420, n_feats * 24),
         yaxis={"categoryorder": "total ascending"},
-        xaxis={"range": [0, IV_DISPLAY], "title": "IV"},
+        xaxis={"range": [0, x_max], "tickvals": tickvals, "ticktext": ticktext, "title": "IV"},
         legend_title_text="IV 강도",
+        shapes=[],
     )
 
-    # 절취 표시: bar가 IV_CUT 초과인 경우 물결선 + 실제값 텍스트
-    for i, row in top_df[top_df["iv"] > IV_CUT].iterrows():
-        y_top = i + BAR_HALF_H
-        y_bot = i - BAR_HALF_H
-        n_waves = 5
-        step = (y_top - y_bot) / (n_waves * 2)
-        pts = [f"M {IV_CUT - WAVE_AMP} {y_bot}"]
-        for k in range(n_waves * 2):
-            x_k = IV_CUT + WAVE_AMP if k % 2 == 0 else IV_CUT - WAVE_AMP
-            pts.append(f"L {x_k} {y_bot + (k + 1) * step}")
-        fig.add_shape(type="path", path=" ".join(pts),
-                      line=dict(color="gray", width=1.5), layer="above")
-        fig.add_annotation(x=IV_CUT + WAVE_AMP * 4, y=i,
-                           text=f"{row['iv']:.4f}", showarrow=False,
-                           xanchor="left", font=dict(size=10))
+    for val, _, color in iv_thresholds:
+        if val <= LOW_MAX:
+            fig.add_vline(x=val, line_dash="dot", line_color=color)
 
-    for val, label, color in [
-        (0.02, "weak", "#aaaaaa"), (0.10, "medium", "#888888"),
-        (0.30, "strong", "#555555"), (0.50, "suspicious", "#222222"),
-    ]:
-        fig.add_vline(x=val, line_dash="dot", line_color=color,
-                      annotation_text=label, annotation_font_size=10)
+    if has_break:
+        # gap background rectangle
+        fig.add_shape(
+            type="rect",
+            x0=LOW_MAX, x1=HIGH_START,
+            y0=-0.5, y1=n_feats - 0.5,
+            fillcolor="white", line_width=0, layer="above",
+        )
+        # two wave lines spanning full chart height
+        for x_c in [LOW_MAX + GAP * 0.3, LOW_MAX + GAP * 0.7]:
+            fig.add_shape(
+                type="path",
+                path=_wave_path(x_c, -0.5, n_feats - 0.5),
+                line=dict(color="#555555", width=1.5),
+                layer="above",
+            )
+        # actual IV value labels for clipped bars
+        for _, row in top_df[top_df["iv"] > LOW_MAX].iterrows():
+            fig.add_annotation(
+                x=HIGH_START + (row["iv"] - LOW_MAX) + 0.02,
+                y=row["feature_name"],
+                text=f"{row['iv']:.4f}",
+                showarrow=False,
+                xanchor="left",
+                font=dict(size=10),
+            )
+
     st.plotly_chart(fig, use_container_width=True)
