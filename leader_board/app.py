@@ -93,7 +93,7 @@ def load_experiment(folder_id: str) -> tuple[dict | None, pd.DataFrame | None]:
 # ── UI ─────────────────────────────────────────────────────────────────────
 
 col_title, col_btn = st.columns([8, 1])
-col_title.title("📊 WOE/IV Leaderboard")
+col_title.title("돈무브 프로젝트 리더보드")
 if col_btn.button("🔄 새로고침", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
@@ -138,7 +138,6 @@ if not all_iv:
 exp_names = list(all_iv.keys())
 
 # ── 실험 카드 ───────────────────────────────────────────────────────────────
-st.subheader("실험 요약")
 cols = st.columns(min(len(all_meta), 4))
 for i, (name, meta) in enumerate(all_meta.items()):
     n_rows     = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
@@ -160,7 +159,6 @@ st.divider()
 left, right = st.columns([1, 3])
 
 with left:
-    st.subheader("실험별 상세")
     sel_exp     = st.selectbox("실험 선택", exp_names, label_visibility="collapsed")
     meta        = all_meta[sel_exp]
     iv_df       = all_iv[sel_exp]
