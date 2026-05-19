@@ -145,16 +145,13 @@ st.caption(
 )
 
 # ── 실험별 IV 바 차트 ───────────────────────────────────────────────────────
-ctrl_left, ctrl_right = st.columns([1, 3])
+ctrl_left, _ = st.columns([1, 3])
 
 with ctrl_left:
     sel_exp = st.selectbox("실험 선택", exp_names, label_visibility="collapsed")
 
-with ctrl_right:
-    meta   = all_meta[sel_exp]
-    iv_df  = all_iv[sel_exp]
-    top_n  = st.slider("Top N", 10, min(50, len(iv_df)), 20)
-
+meta       = all_meta[sel_exp]
+iv_df      = all_iv[sel_exp]
 n_rows     = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
 n_features = len(iv_df)
 st.markdown(f"""
@@ -166,6 +163,8 @@ st.markdown(f"""
 | 행 수 | {n_rows:,} |
 | positive | {meta.get('positive_rate', 0):.5f} |
 """)
+
+top_n = st.slider("Top N", 10, min(50, len(iv_df)), 20)
 
 IV_CUT = 1.5
 
