@@ -42,8 +42,6 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
         pred_probas = []
         ground_truths = []
         for batch in tqdm.tqdm(tr_loader, disable=not args.tqdm):
-            if batch.x.shape[0] <= 1:
-                continue
             optimizer.zero_grad()
             inds = tr_inds.detach().cpu()
             batch_edge_inds = inds[batch.input_id.detach().cpu()]
@@ -53,7 +51,13 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
             batch.edge_attr = batch.edge_attr[:, 1:]
 
             batch.to(device)
-            out = model(batch.x, batch.edge_index, batch.edge_attr)
+            try:
+                out = model(batch.x, batch.edge_index, batch.edge_attr)
+            except ValueError as e:
+                if 'Expected more than 1 value per channel' in str(e):
+                    logging.warning(f"Small batch skipped (BatchNorm): {e}")
+                    continue
+                raise
             pred = out[mask]
             ground_truth = batch.y[mask]
             preds.append(pred.argmax(dim=-1))
@@ -127,8 +131,6 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
         pred_probas = []
         ground_truths = []
         for batch in tqdm.tqdm(tr_loader, disable=not args.tqdm):
-            if batch['node'].x.shape[0] <= 1:
-                continue
             optimizer.zero_grad()
             inds = tr_inds.detach().cpu()
             batch_edge_inds = inds[batch['node', 'to', 'node'].input_id.detach().cpu()]
@@ -139,7 +141,13 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
             batch['node', 'rev_to', 'node'].edge_attr = batch['node', 'rev_to', 'node'].edge_attr[:, 1:]
 
             batch.to(device)
-            out = model(batch.x_dict, batch.edge_index_dict, batch.edge_attr_dict)
+            try:
+                out = model(batch.x_dict, batch.edge_index_dict, batch.edge_attr_dict)
+            except ValueError as e:
+                if 'Expected more than 1 value per channel' in str(e):
+                    logging.warning(f"Small batch skipped (BatchNorm): {e}")
+                    continue
+                raise
             out = out[('node', 'to', 'node')]
             pred = out[mask]
             ground_truth = batch['node', 'to', 'node'].y[mask]
