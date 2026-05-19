@@ -137,24 +137,6 @@ if not all_iv:
 
 exp_names = list(all_iv.keys())
 
-# ── 실험 카드 ───────────────────────────────────────────────────────────────
-cols = st.columns(min(len(all_meta), 4))
-for i, (name, meta) in enumerate(all_meta.items()):
-    n_rows     = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
-    pos_rate   = meta.get("positive_rate", 0)
-    n_features = meta.get("n_features_analyzed", "?")
-    elapsed    = meta.get("elapsed_seconds", "?")
-    date       = meta.get("computed_at", "")[:10]
-    full_run   = meta.get("full_run", True)
-    with cols[i % 4]:
-        st.metric(name, f"{n_features}개 feature")
-        st.caption(
-            f"📅 {date}  |  {'전체' if full_run else '샘플'} {n_rows:,}행\n\n"
-            f"positive {pos_rate:.4%}  |  {elapsed}초"
-        )
-
-st.divider()
-
 # ── 실험별 IV 바 차트 ───────────────────────────────────────────────────────
 left, right = st.columns([1, 3])
 
