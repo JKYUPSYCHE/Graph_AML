@@ -156,39 +156,6 @@ for i, (name, meta) in enumerate(all_meta.items()):
 
 st.divider()
 
-# ── Feature IV 비교 테이블 ─────────────────────────────────────────────────
-st.subheader("Feature IV 비교")
-
-merged: pd.DataFrame | None = None
-for name, iv_df in all_iv.items():
-    tmp = (
-        iv_df[["feature_name", "feature_type", "iv"]]
-        .rename(columns={"iv": f"iv_{name}"})
-    )
-    merged = tmp if merged is None else merged.merge(tmp, on=["feature_name", "feature_type"], how="outer")
-
-iv_cols = [c for c in merged.columns if c.startswith("iv_")]
-merged["_max"] = merged[iv_cols].max(axis=1)
-merged = merged.sort_values("_max", ascending=False).drop(columns=["_max"])
-
-def _color(val):
-    if pd.isna(val):  return ""
-    if val >= 0.5:    return "background-color: #ffcccc"
-    if val >= 0.3:    return "background-color: #ffe0b2"
-    if val >= 0.1:    return "background-color: #fff9c4"
-    if val >= 0.02:   return "background-color: #e8f5e9"
-    return ""
-
-display = merged[["feature_name", "feature_type"] + iv_cols]
-try:
-    styled = display.style.map(_color, subset=iv_cols)
-except AttributeError:
-    styled = display.style.applymap(_color, subset=iv_cols)
-styled = styled.format({c: lambda v: f"{v:.4f}" if pd.notna(v) else "-" for c in iv_cols})
-st.dataframe(styled, use_container_width=True, height=480)
-
-st.divider()
-
 # ── 실험별 IV 바 차트 ───────────────────────────────────────────────────────
 left, right = st.columns([1, 3])
 
