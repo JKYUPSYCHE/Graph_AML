@@ -42,70 +42,53 @@ def _encode_categoricals(df_edges, tr_inds):
 
 
 def get_data(args, data_config):
-    '''Loads the AML transaction data from preprocessed parquet (ml_exp00.parquet).
+    '''Loads the AML transaction data from 04_gnn_graph_process.ipynb outputs.
 
     - formatted_transactions_gf.csv : edge features, split, label, from_id/to_id
     - formatted_transactions.csv    : timestamp (ports/tds 계산용, 모델 입력 아님)
     - account_mapping.csv           : from_id/to_id → node_idx 매핑
     '''
 
-    from pathlib import Path
-    parquet_file = Path(data_config['paths']['aml_data']) / args.data / 'ml_exp00_sample10k.parquet'
-    df_edges = pd.read_parquet(parquet_file)
+    gnn_dir = Path(data_config['paths']['gnn_inputs'])
+
+    df_edges = pd.read_csv(gnn_dir / 'formatted_transactions_gf.csv')
+    df_ts    = pd.read_csv(gnn_dir / 'formatted_transactions.csv', usecols=['timestamp'])
+    mapping  = pd.read_csv(gnn_dir / 'account_mapping.csv')
 
     logging.info(f'Available Edge Features: {df_edges.columns.tolist()}')
 
-    # timestamp(datetime) → 경과 초 (ports/time-delta 내부 계산용, 모델 입력 아님)
-    ts = pd.to_datetime(df_edges['timestamp'])
+    # timestamp → 경과 초 (ports/time-delta 내부 계산용, 모델 입력 아님)
+    ts = pd.to_datetime(df_ts['timestamp'])
     ts_elapsed = (ts - ts.min()).dt.total_seconds()
-
-    from_id, to_id, max_n_id = _build_node_map(df_edges)
-    # 미등장 노드(-1) → unknown token 인덱스(max_n_id)로 치환
-    from_id = np.where(from_id == -1, max_n_id, from_id)
-    to_id   = np.where(to_id   == -1, max_n_id, to_id)
-    # node feature matrix: train 노드 + unknown token 슬롯(마지막 행)
-    df_nodes = pd.DataFrame({'NodeID': np.arange(max_n_id + 1), 'Feature': np.ones(max_n_id + 1)})
     timestamps = torch.tensor(ts_elapsed.to_numpy()).float()
+
+    # from_id/to_id → node_idx (account_mapping.csv 기준)
+    id_to_idx = dict(zip(mapping['account_id'].astype(str), mapping['node_idx']))
+    max_n_id  = int(mapping['node_idx'].max()) + 1  # unknown token index
+
+    def _to_str_id(series):
+        try:
+            return series.astype(float).astype(int).astype(str)
+        except (ValueError, TypeError):
+            return series.astype(str)
+
+    from_id = _to_str_id(df_edges['from_id']).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
+    to_id   = _to_str_id(df_edges['to_id']).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
+
+    n_unk_from = int((from_id == max_n_id).sum())
+    n_unk_to   = int((to_id   == max_n_id).sum())
+    logging.info(f"Unknown from_id: {n_unk_from}/{len(from_id)} ({n_unk_from/len(from_id)*100:.1f}%)")
+    logging.info(f"Unknown to_id:   {n_unk_to}/{len(to_id)} ({n_unk_to/len(to_id)*100:.1f}%)")
+
+    # node feature matrix: all nodes + unknown token slot (placeholder 1s)
+    n_nodes  = max_n_id + 1
+    df_nodes = pd.DataFrame({'Feature': np.ones(n_nodes)})
+
     y = torch.LongTensor(df_edges['label'].to_numpy())
 
-    from_id = df_edges['from_id'].astype(str).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
-    to_id   = df_edges['to_id'].astype(str).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
-
-    amount_recv_col = (
-        'amount_received__current__log1p'
-        if 'amount_received__current__log1p' in df_edges.columns
-        else 'amount__current__log1p'
-    )
-    if amount_recv_col == 'amount__current__log1p':
-        logging.warning('amount_received__current__log1p not found -> falling back to amount__current__log1p')
-    edge_features = [
-        'amount__current__log1p',
-        'cat__payment_currency__code',
-        amount_recv_col,
-        'cat__receiving_currency__code',
-        'cat__payment_format__code',
-        'time__row__hour',
-        'time__row__dayofweek',
-        'time__row__is_weekend',
-    ]
-    node_features = ['Feature']
-
-    y = torch.LongTensor(df_edges['label'].to_numpy())
-
-    # categorical edge feature -1 → cardinality(unknown token) 치환
-    cat_cardinality = _load_cardinality(Path(data_config['paths']['aml_data']) / args.data)
-    CAT_COL_MAP = {
-        'cat__payment_currency__code':  'payment_currency',
-        'cat__receiving_currency__code': 'receiving_currency',
-        'cat__payment_format__code':     'payment_format',
-    }
-    for feat_col, raw_col in CAT_COL_MAP.items():
-        if feat_col in df_edges.columns and raw_col in cat_cardinality:
-            df_edges[feat_col] = df_edges[feat_col].replace(-1, int(cat_cardinality[raw_col]))
-
-    x = torch.tensor(df_nodes.loc[:, node_features].to_numpy()).float()
-    edge_index = torch.LongTensor(np.stack([from_id, to_id]))
-    edge_attr = torch.tensor(df_edges.loc[:, edge_features].to_numpy()).float()
+    logging.info(f"Illicit ratio = {sum(y)} / {len(y)} = {sum(y) / len(y) * 100:.2f}%")
+    logging.info(f"Number of nodes = {n_nodes}")
+    logging.info(f"Number of transactions = {len(df_edges)}")
 
     # split
     tr_inds, val_inds, te_inds = _split_indices(df_edges['split'])
@@ -175,7 +158,6 @@ def get_data(args, data_config):
     logging.info(f'validation data object: {val_data}')
     logging.info(f'test data object: {te_data}')
 
-    # 각 data 객체는 자신의 엣지만 보유하므로 로컬 0-based 인덱스로 반환
     return tr_data, val_data, te_data, \
            torch.arange(len(e_tr)), \
            torch.arange(len(e_val)), \

@@ -98,6 +98,7 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
 @torch.no_grad()
 def evaluate_homo(loader, inds, model, data, device, args):
     '''Evaluates the model performance for homogenous graph data.'''
+    model.eval()
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(device)
     t_start = time.perf_counter()
@@ -146,6 +147,7 @@ def evaluate_homo(loader, inds, model, data, device, args):
     else:
         memory_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2
 
+    model.train()
     pred = torch.cat(preds, dim=0).cpu().numpy()
     pred_proba = torch.cat(pred_probas, dim=0).cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
@@ -162,6 +164,7 @@ def evaluate_homo(loader, inds, model, data, device, args):
 @torch.no_grad()
 def evaluate_hetero(loader, inds, model, data, device, args):
     '''Evaluates the model performance for heterogenous graph data.'''
+    model.eval()
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(device)
     t_start = time.perf_counter()
@@ -212,6 +215,7 @@ def evaluate_hetero(loader, inds, model, data, device, args):
     else:
         memory_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2
 
+    model.train()
     pred = torch.cat(preds, dim=0).cpu().numpy()
     pred_proba = torch.cat(pred_probas, dim=0).cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
