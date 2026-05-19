@@ -1,6 +1,7 @@
 {
     "paths": {
       "aml_data": "../../data",
+      "gnn_inputs": "../../data/processed/gnn_inputs",
       "model_to_load": "../../experiments/multi_pna_eu/models",
       "model_to_save": "../../experiments/multi_pna_eu/models"
     }
