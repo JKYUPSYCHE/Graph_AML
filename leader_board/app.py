@@ -140,11 +140,8 @@ exp_names = list(all_iv.keys())
 st.divider()
 st.markdown("#### WOE/IV")
 st.caption(
-    "**useless** IV < 0.02 &nbsp;·&nbsp; "
-    "**weak** 0.02–0.10 &nbsp;·&nbsp; "
-    "**medium** 0.10–0.30 &nbsp;·&nbsp; "
-    "**strong** 0.30–0.50 &nbsp;·&nbsp; "
-    "**suspicious** IV ≥ 0.50"
+    "**WOE(Weight of Evidence)**: 각 구간에서 fraud 비율과 정상 비율의 로그 비 — 변수가 타겟을 어느 방향으로 얼마나 분리하는지 나타냄. &nbsp;|&nbsp; "
+    "**IV(Information Value)**: WOE를 전체 구간에 걸쳐 집계한 변수 단위 예측력 요약 지표 — 값이 클수록 타겟 분류에 유용한 변수."
 )
 
 # ── 실험별 IV 바 차트 ───────────────────────────────────────────────────────
