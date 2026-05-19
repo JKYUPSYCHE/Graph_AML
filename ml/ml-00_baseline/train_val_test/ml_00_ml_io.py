@@ -85,6 +85,7 @@ class InputPaths:
     # 예: validation threshold tuning 단계에서는 test를 아직 사용하지 않을 수 있다.
     test_path: Path | None
     feature_columns_path: Path
+    encoding_manifest_path: Path | None = None
     
 
 def print_input_paths(paths: InputPaths) -> None:
@@ -95,6 +96,8 @@ def print_input_paths(paths: InputPaths) -> None:
     print("val_path            :", paths.val_path)
     print("test_path           :", paths.test_path)
     print("feature_columns_path:", paths.feature_columns_path)
+    if paths.encoding_manifest_path is not None:
+        print("encoding_manifest_path:", paths.encoding_manifest_path)
     
     
 def require_input_files(paths: InputPaths, require_test: bool = False) -> None:
@@ -116,6 +119,8 @@ def require_input_files(paths: InputPaths, require_test: bool = False) -> None:
         "val": paths.val_path,
         "feature_columns": paths.feature_columns_path,
     }
+    if paths.encoding_manifest_path is not None:
+        required["encoding_manifest"] = paths.encoding_manifest_path
     
     # test 평가는 최종 평가 단계에서만 필요할 수 있으므로 옵션으로 검사한다.
     if require_test:
@@ -453,6 +458,66 @@ def load_feature_columns(
     return result.selected_columns
 
 
+def load_encoding_manifest(path: str | Path | None) -> dict[str, Any] | None:
+    """encoding_manifest.json을 읽고 native categorical 메타데이터를 검증한다."""
+
+    if path is None:
+        return None
+    manifest_path = Path(path).expanduser().resolve()
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"encoding manifest not found: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError(f"encoding manifest must be a JSON object: {manifest_path}")
+    feature_types = manifest.get("feature_types")
+    if not isinstance(feature_types, dict):
+        raise ValueError(f"encoding manifest is missing feature_types object: {manifest_path}")
+    category_values = manifest.get("category_values", {})
+    if category_values is not None and not isinstance(category_values, dict):
+        raise ValueError(f"encoding manifest category_values must be an object: {manifest_path}")
+    manifest["_manifest_path"] = str(manifest_path)
+    return manifest
+
+
+def categorical_columns_from_manifest(
+    encoding_manifest: dict[str, Any] | None,
+    feature_columns: list[str],
+) -> list[str]:
+    """feature_columns 중 XGBoost native categorical 컬럼만 반환한다."""
+
+    if encoding_manifest is None:
+        return []
+    feature_types = encoding_manifest.get("feature_types", {})
+    return [column for column in feature_columns if feature_types.get(column) == "c"]
+
+
+def apply_encoding_manifest(
+    x: pd.DataFrame,
+    encoding_manifest: dict[str, Any] | None,
+    feature_columns: list[str],
+) -> pd.DataFrame:
+    """manifest 기준으로 native categorical 컬럼 dtype을 복원한다."""
+
+    categorical_columns = categorical_columns_from_manifest(encoding_manifest, feature_columns)
+    if not categorical_columns:
+        return x
+
+    category_values = encoding_manifest.get("category_values", {}) if encoding_manifest is not None else {}
+    missing_categories = [column for column in categorical_columns if column not in category_values]
+    if missing_categories:
+        raise ValueError(
+            "encoding manifest is missing category values for categorical columns. "
+            f"missing={missing_categories}"
+        )
+
+    converted = x.copy()
+    for column in categorical_columns:
+        categories = [str(value) for value in category_values[column]]
+        values = converted[column].astype("string")
+        converted[column] = pd.Categorical(values.where(values.isin(categories)), categories=categories)
+    return converted
+
+
 def validate_no_forbidden_features(feature_columns: list[str], label_col: str = "label") -> None:
     """
     feature column 목록에 정답 누수 위험이 있는 이름이 들어갔는지 검사
@@ -674,6 +739,7 @@ def validate_features(
     x: pd.DataFrame,
     source_path: str | Path,
     allow_nan: bool = False,
+    categorical_columns: list[str] | None = None,
 ) -> None:
     """
     모델 입력 feature matrix X가 학습 가능한 형태인지 검사
@@ -692,15 +758,25 @@ def validate_features(
     if x.empty:
         raise ValueError(f"Feature matrix is empty. source={source_path}")
     
-    # 모델 입력 feature는 모두 숫자형이어야 한다.
-    # 문자열 category를 쓰려면 이 함수 이전 단계에서 encoding을 끝내야 한다.
-    non_numeric = [column for column in x.columns if not pd.api.types.is_numeric_dtype(x[column])]
+    categorical_set = set(categorical_columns or [])
+    unknown_categorical = sorted(categorical_set - set(x.columns))
+    if unknown_categorical:
+        raise ValueError(f"categorical columns are missing from X. source={source_path}, missing={unknown_categorical}")
+
+    # 기본은 숫자형만 허용한다. native categorical manifest가 있는 컬럼만 pandas category dtype을 허용한다.
+    non_numeric = [
+        column
+        for column in x.columns
+        if not pd.api.types.is_numeric_dtype(x[column])
+        and not (column in categorical_set and pd.api.types.is_categorical_dtype(x[column]))
+    ]
     if non_numeric:
         raise ValueError(f"All features must be numeric. source={source_path}, non_numeric={non_numeric}")
     
     # NaN 허용 여부는 모델에 따라 다르다. allow_nan=False가 기본값이므로, 결측치가 있으면 학습 전에 명시적으로 실패한다.
     if not allow_nan:
-        missing_counts = x.isna().sum()
+        nan_checked = x.drop(columns=list(categorical_set), errors="ignore")
+        missing_counts = nan_checked.isna().sum()
         missing_counts = missing_counts[missing_counts > 0]
         if not missing_counts.empty:
             raise ValueError(
@@ -709,8 +785,9 @@ def validate_features(
             )
             
     # inf/-inf는 대부분의 ML 모델에서 오류나 비정상 학습을 유발한다.
-    # float64 ndarray로 변환해 전체 feature matrix에서 무한대 값을 센다.
-    infinite_counts = np.isinf(x.to_numpy(dtype="float64", copy=False)).sum()
+    # category 컬럼은 숫자 변환하지 않고, numeric feature만 검사한다.
+    numeric_x = x.drop(columns=list(categorical_set), errors="ignore")
+    infinite_counts = 0 if numeric_x.empty else np.isinf(numeric_x.to_numpy(dtype="float64", copy=False)).sum()
     if infinite_counts:
         raise ValueError(f"Feature matrix contains infinite values. source={source_path}, count={int(infinite_counts)}")
     
@@ -843,6 +920,7 @@ def load_split(
     sample_rows: int | None = None,
     allow_nan: bool = False,
     expected_split: str | None = None,
+    encoding_manifest: dict[str, Any] | None = None,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """
     하나의 ML split 파일을 읽어 X, y로 반환
@@ -920,9 +998,11 @@ def load_split(
     # feature_columns 순서를 그대로 유지하는 것이 중요, 모델 입력이 이 순서를 기준으로 해석되기 때문
     # 예: 학습 때 ["amount", "degree"]였는데 평가 때 ["degree", "amount"]가 되면 모델 입력 의미가 완전히 바뀐다.
     x = df[feature_columns].copy()
+    x = apply_encoding_manifest(x, encoding_manifest, feature_columns)
+    categorical_columns = categorical_columns_from_manifest(encoding_manifest, feature_columns)
     
     # X가 숫자형이고, 필요한 경우 NaN이 없고, inf/-inf가 없는지 최종 검증한다.
-    validate_features(x, path, allow_nan=allow_nan)
+    validate_features(x, path, allow_nan=allow_nan, categorical_columns=categorical_columns)
     
     return x, y # 모델 학습/평가 함수가 바로 사용할 수 있는 X, y를 반환한다.
 # -----------------------------------------------------------------------------

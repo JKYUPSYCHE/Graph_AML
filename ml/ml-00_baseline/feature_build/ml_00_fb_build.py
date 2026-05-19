@@ -1110,7 +1110,7 @@ def _build_from_split_frame(
 
     # [6] catalog / 요약 테이블 생성.
     # selected_feature_columns:    모델 입력 truth source용 컬럼 목록
-    # feature_columns_table:       ml_feature_columns.csv (column_name + used_in_ml)
+    # feature_columns_table:       feature_contract.csv (column_name + used_in_ml)
     # feature_catalog:             feature_catalog.csv    (사람이 검토하는 설명서)
     # split_summary:               split_summary.csv      (기간, row 수, label 분포)
     selected_feature_columns = feature_columns(specs)

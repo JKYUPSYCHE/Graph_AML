@@ -90,7 +90,7 @@ def make_output_paths(output_dir: Union[str, Path], experiment_id: str) -> Featu
         train_path=base / f"{experiment_id}_Xy_train.parquet",
         val_path=base / f"{experiment_id}_Xy_val.parquet",
         test_path=base / f"{experiment_id}_Xy_test.parquet",
-        feature_columns_path=base / "ml_feature_columns.csv",
+        feature_columns_path=base / "feature_contract.csv",
         feature_catalog_path=base / "feature_catalog.csv",
         split_summary_path=base / "split_summary.csv",
         feature_info_path=base / "feature_info.csv",
@@ -219,7 +219,7 @@ def save_dataframe_csv(df: pd.DataFrame, path: Union[str, Path]) -> None:
     DataFrame을 CSV로 저장
     사용 위치
     ---------
-    - ml_feature_columns.csv
+    - feature_contract.csv
     - feature_catalog.csv
     - split_summary.csv
     - feature_info.csv

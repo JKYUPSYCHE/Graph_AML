@@ -28,6 +28,7 @@ from ml_00_ml_io import (
     feature_columns_hash,
     file_sha256,
     label_summary,
+    load_encoding_manifest,
     load_json,
     load_saved_feature_columns,
     load_split,
@@ -73,6 +74,7 @@ class TestConfig:
     threshold_file_name: str = "threshold.json"
     metrics_file_name: str = "metrics_test.json"
     confusion_matrix_file_name: str = "confusion_matrix_test.csv"
+    encoding_manifest_path: Path | str | None = None
 
     def __post_init__(self) -> None:
         """dataclass 생성 직후 경로를 정규화하고 sample_rows 값을 검증"""
@@ -86,6 +88,12 @@ class TestConfig:
             "output_dir",
             resolve_project_path(self.output_dir, self.project_root),
         )
+        if self.encoding_manifest_path is not None:
+            object.__setattr__(
+                self,
+                "encoding_manifest_path",
+                resolve_project_path(self.encoding_manifest_path, self.project_root),
+            )
         if self.sample_rows is not None and self.sample_rows <= 0:
             raise ValueError("sample_rows must be a positive integer.")
 
@@ -273,6 +281,14 @@ def test_xgb(config: TestConfig) -> TestResult:
                 train_summary_sha256,
                 config,
             )
+            encoding_manifest_path = config.encoding_manifest_path
+            if encoding_manifest_path is None and train_summary.get("encoding_manifest_path") is not None:
+                encoding_manifest_path = Path(str(train_summary["encoding_manifest_path"])).expanduser().resolve()
+            encoding_manifest = load_encoding_manifest(encoding_manifest_path)
+            if encoding_manifest_path is not None and train_summary.get("encoding_manifest_sha256") is not None:
+                encoding_manifest_sha256 = file_sha256(encoding_manifest_path)
+                if train_summary.get("encoding_manifest_sha256") != encoding_manifest_sha256:
+                    raise ValueError("Final test provenance check failed: encoding_manifest_sha256 mismatch.")
             threshold = float(threshold_payload["threshold"])
             model = joblib.load(model_path)
         memory_tracker.snapshot("after_artifact_load")
@@ -285,6 +301,7 @@ def test_xgb(config: TestConfig) -> TestResult:
                 sample_rows=config.sample_rows,
                 allow_nan=config.allow_nan,
                 expected_split="test",
+                encoding_manifest=encoding_manifest,
             )
         memory_tracker.snapshot("after_test_load")
 
@@ -326,6 +343,7 @@ def test_xgb(config: TestConfig) -> TestResult:
         "sampled": config.sample_rows is not None,
         "feature_count": len(feature_columns),
         "feature_columns_hash": features_hash,
+        "encoding_manifest_path": None if encoding_manifest_path is None else str(encoding_manifest_path),
         "model_sha256": model_sha256,
         "feature_columns_file_sha256": feature_columns_file_sha256,
         "train_summary_sha256": train_summary_sha256,

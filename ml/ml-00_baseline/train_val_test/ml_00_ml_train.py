@@ -56,9 +56,11 @@ from ml_00_ml_utils import set_seed
 # - load_split()의 결측치/타입/expected_split 검증 규칙이 바뀌면 학습 가능 데이터가 달라진다.
 # 확인 필요: 각 함수의 세부 검증 기준은 ml_00_ml_io 구현을 확인해야 한다.
 from ml_00_ml_io import (
+    categorical_columns_from_manifest,
     feature_columns_hash,
     file_sha256,
     label_summary,
+    load_encoding_manifest,
     load_feature_columns,
     load_split,
     resolve_project_path,
@@ -127,6 +129,7 @@ class XGBTrainConfig:
     gamma: float = 0.0                      # 추가 split을 만들기 위한 최소 손실 감소량.
     early_stopping_rounds: int = 30         # validation AUPRC 개선이 멈췄을 때 학습을 중단하는 기준.
     n_jobs: int = -1                        # -1은 사용 가능한 모든 코어 사용.
+    encoding_manifest_path: Path | str | None = None  # native categorical dtype 복원용 manifest. None이면 기존 numeric-only 흐름.
     
 
     def __post_init__(self) -> None:
@@ -171,6 +174,12 @@ class XGBTrainConfig:
             "output_dir",
             resolve_project_path(self.output_dir, self.project_root),
         )
+        if self.encoding_manifest_path is not None:
+            object.__setattr__(
+                self,
+                "encoding_manifest_path",
+                resolve_project_path(self.encoding_manifest_path, self.project_root),
+            )
         
         # sample_rows는 일부 데이터만 읽는 디버깅 옵션이다. 0 이하이면 즉시 차단한다.
         # sample_rows가 설정되면 train뿐 아니라 validation에도 동일하게 적용된다.
@@ -283,7 +292,7 @@ def get_xgb_classifier_class() -> type[Any]:
     return XGBClassifier # 호출부에서는 이 클래스를 받아 XGBClassifier(...) 형태로 실제 모델 객체 생성
 
 
-def build_xgb_model(config: XGBTrainConfig, scale_pos_weight: float) -> Any:
+def build_xgb_model(config: XGBTrainConfig, scale_pos_weight: float, enable_categorical: bool = False) -> Any:
     """
     XGBClassifier 모델 객체를 생성하고 학습 설정을 적용한다.
     매개변수
@@ -323,6 +332,7 @@ def build_xgb_model(config: XGBTrainConfig, scale_pos_weight: float) -> Any:
         random_state=config.seed,                 # XGBoost 내부 난수 고정.
         n_jobs=config.n_jobs,                     # 병렬 학습에 사용할 CPU worker 수.
         early_stopping_rounds=config.early_stopping_rounds,
+        enable_categorical=enable_categorical,
     )
 
 
@@ -384,6 +394,8 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
                 config.feature_columns_path,
                 label_col=config.label_col,
             )
+            encoding_manifest = load_encoding_manifest(config.encoding_manifest_path)
+            categorical_feature_columns = categorical_columns_from_manifest(encoding_manifest, feature_columns)
             
         # train split을 X, y로 로드한다.
         # expected_split="train"은 parquet 내부 split 컬럼이 있을 경우 train인지 확인하는 용도다.
@@ -396,6 +408,7 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
                 sample_rows=config.sample_rows,
                 allow_nan=config.allow_nan,
                 expected_split="train",
+                encoding_manifest=encoding_manifest,
             )
             
         # train 로드 직후 메모리 스냅샷을 남긴다.
@@ -413,6 +426,7 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
                 sample_rows=config.sample_rows,
                 allow_nan=config.allow_nan,
                 expected_split="val",
+                encoding_manifest=encoding_manifest,
             )
     
         memory_tracker.snapshot("after_val_load")    # validation 로드 직후 메모리 스냅샷을 남긴다.
@@ -420,7 +434,11 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         with runtime_tracker.measure("build_model"):              # 모델 생성 전 필요한 파생값을 만든다.
             features_hash = feature_columns_hash(feature_columns) # feature 순서까지 반영한 hash다.
             scale_pos_weight = compute_scale_pos_weight(y_train)
-            model = build_xgb_model(config, scale_pos_weight=scale_pos_weight)
+            model = build_xgb_model(
+                config,
+                scale_pos_weight=scale_pos_weight,
+                enable_categorical=bool(categorical_feature_columns),
+            )
             
         # 실제 모델 학습 지점이다.
         # eval_set으로 validation 데이터를 넘겨 early stopping과 validation AUPRC 계산에 사용한다.
@@ -531,6 +549,8 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         "train_path": str(config.train_path),                        # 학습에 사용한 train parquet 경로.
         "val_path": str(config.val_path),                            # 학습에 사용한 validation parquet 경로.
         "feature_columns_source": str(config.feature_columns_path),  # feature 목록 CSV 원본 경로.
+        "encoding_manifest_path": None if config.encoding_manifest_path is None else str(config.encoding_manifest_path),
+        "encoding_manifest_sha256": None if config.encoding_manifest_path is None else file_sha256(config.encoding_manifest_path),
         
         # 후속 모듈이 참조할 artifact 파일명이다.
         # output_dir와 조합해 실제 파일 경로를 만들 수 있다.
@@ -550,6 +570,7 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         "feature_count": len(feature_columns),
         "feature_columns": feature_columns,
         "feature_columns_hash": features_hash,
+        "categorical_feature_columns": categorical_feature_columns,
         
         # 실제 로드된 train/validation row 수와 label 분포다.
         # sample_rows가 설정된 경우 전체 parquet row 수가 아니라 로드된 row 수로 기록된다.
@@ -588,6 +609,7 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
             "early_stopping_rounds": config.early_stopping_rounds,
             "tree_method": "hist",
             "eval_metric": "aucpr",
+            "enable_categorical": bool(categorical_feature_columns),
         },
         
         # fit 단계 소요 시간이다. 기존 필드명을 유지한다.

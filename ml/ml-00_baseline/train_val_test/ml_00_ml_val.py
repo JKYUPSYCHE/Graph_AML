@@ -77,6 +77,7 @@ from ml_00_ml_io import (
     feature_columns_hash,
     file_sha256,
     label_summary,
+    load_encoding_manifest,
     load_json,
     load_saved_feature_columns,
     load_split,
@@ -130,7 +131,6 @@ class ValidationConfig:
     
     # 상대경로 해석 기준. None이면 resolve_project_path()의 기본 기준을 따른다.
     project_root: Path | str | None = None
-    
     label_col: str = "label"        # 정답 라벨 컬럼명.
     sample_rows: int | None = None  # validation 전체 대신 앞쪽 일부 row만 읽는 옵션. 빠른 smoke test 용 
     allow_nan: bool = False         # feature 결측치 허용 여부. 
@@ -148,6 +148,7 @@ class ValidationConfig:
     
     threshold_strategy: str = "max_f1"    # threshold 선택 정책
     manual_threshold: float | None = None # manual 전략일 때만 쓰는 고정 threshold.
+    encoding_manifest_path: Path | str | None = None
 
     def __post_init__(self) -> None:
         """dataclass 생성 직후 경로를 정규화하고 sample_rows 값을 검증"""
@@ -162,6 +163,12 @@ class ValidationConfig:
             "output_dir",
             resolve_project_path(self.output_dir, self.project_root),
         )
+        if self.encoding_manifest_path is not None:
+            object.__setattr__(
+                self,
+                "encoding_manifest_path",
+                resolve_project_path(self.encoding_manifest_path, self.project_root),
+            )
         
         # sample_rows는 validation 일부만 읽는 옵션이므로 1 이상이 아니면 중단시킨다.
         if self.sample_rows is not None and self.sample_rows <= 0:
@@ -348,6 +355,15 @@ def validate_xgb(config: ValidationConfig) -> ValidationResult:
                     "Training artifact provenance check failed: feature_columns_file_sha256 mismatch. "
                     f"train_summary={expected_feature_columns_file_sha256!r}, current_feature_columns={feature_columns_file_sha256!r}"
                 )
+
+            encoding_manifest_path = config.encoding_manifest_path
+            if encoding_manifest_path is None and train_summary.get("encoding_manifest_path") is not None:
+                encoding_manifest_path = Path(str(train_summary["encoding_manifest_path"])).expanduser().resolve()
+            encoding_manifest = load_encoding_manifest(encoding_manifest_path)
+            if encoding_manifest_path is not None and train_summary.get("encoding_manifest_sha256") is not None:
+                encoding_manifest_sha256 = file_sha256(encoding_manifest_path)
+                if train_summary.get("encoding_manifest_sha256") != encoding_manifest_sha256:
+                    raise ValueError("Training artifact provenance check failed: encoding_manifest_sha256 mismatch.")
                 
             # train_summary.json 자체의 sha256을 저장해 validation 결과가 어떤 학습 summary를 기준으로 만들어졌는지 남긴다.
             train_summary_sha256 = file_sha256(train_summary_path)
@@ -370,6 +386,7 @@ def validate_xgb(config: ValidationConfig) -> ValidationResult:
                 # expected_split="val"은 parquet 내부 split 컬럼이 val인지 확인하는 용도로 보인다.
                 # split 컬럼이 없을 때의 동작은 load_split() 구현 확인 필요.
                 expected_split="val",
+                encoding_manifest=encoding_manifest,
             )
             
         # validation parquet를 메모리에 올린 뒤의 메모리 스냅샷.
@@ -451,6 +468,7 @@ def validate_xgb(config: ValidationConfig) -> ValidationResult:
             "val_path": str(config.val_path),
             "feature_count": len(feature_columns),
             "feature_columns_hash": features_hash,
+            "encoding_manifest_path": None if encoding_manifest_path is None else str(encoding_manifest_path),
             
             # 학습 산출물 무결성 추적용 hash.
             "model_sha256": model_sha256,
@@ -520,6 +538,7 @@ def validate_xgb(config: ValidationConfig) -> ValidationResult:
         # feature 정합성 추적 정보.
         "feature_count": len(feature_columns),
         "feature_columns_hash": features_hash,
+        "encoding_manifest_path": None if encoding_manifest_path is None else str(encoding_manifest_path),
         
         # validation label 분포 요약.
         # 클래스 불균형 확인에 중요하며, Accuracy 단독 해석을 피하는 근거가 된다.
