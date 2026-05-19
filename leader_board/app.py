@@ -197,16 +197,7 @@ with right:
         legend_title_text="IV 강도",
     )
 
-    # 절취 표시: bar 끝에 // 모양 흰 슬래시 + 실제값 텍스트
     for i, row in top_df[top_df["iv"] > IV_CUT].iterrows():
-        for dy in [-0.1, 0.1]:
-            fig.add_shape(
-                type="line",
-                x0=IV_CUT - 0.025, x1=IV_CUT + 0.025,
-                y0=i + dy + 0.15, y1=i + dy - 0.15,
-                line=dict(color="white", width=2.5),
-                layer="above",
-            )
         fig.add_annotation(
             x=IV_CUT + 0.04, y=i,
             text=f"{row['iv']:.4f}",
