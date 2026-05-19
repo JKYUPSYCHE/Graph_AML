@@ -191,7 +191,7 @@ with right:
         hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>"
     )
     fig.update_layout(
-        height=max(420, top_n * 24),
+        height=max(420, top_n * 40),
         yaxis={"categoryorder": "total ascending"},
         xaxis={
             "range": [0, IV_CUT + (0.35 if has_overflow else 0.05)],
