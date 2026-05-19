@@ -16,10 +16,9 @@ Streamlit Community Cloud에 배포해서 팀원 누구나 링크로 접근 가�
 """
 from __future__ import annotations
 
-import numpy as np
 import requests
 import pandas as pd
-import plotly.graph_objects as go
+import plotly.express as px
 import streamlit as st
 
 st.set_page_config(page_title="WOE/IV Leaderboard", layout="wide", page_icon="📊")
@@ -161,25 +160,7 @@ with left:
 | 소요 | {meta.get('elapsed_seconds','?')}초 |
 """)
 
-# ── IV bar chart constants ─────────────────────────────────────────────────
-IV_CUT      = 1.5
-_WAVE1_X    = 1.57
-_WAVE2_X    = 1.63
-_SHORT_ST   = 1.68
-_SHORT_W    = 0.20
-_W_AMP      = 0.012
-_N_WAVES    = 7
-_BAR_HH     = 0.35
-
-
-def _wave(x_c: float, y_mid: float) -> str:
-    ys = np.linspace(y_mid - _BAR_HH, y_mid + _BAR_HH, _N_WAVES * 2 + 1)
-    pts = [f"M {x_c - _W_AMP} {ys[0]}"]
-    for k, y in enumerate(ys[1:]):
-        x = x_c + _W_AMP if k % 2 == 0 else x_c - _W_AMP
-        pts.append(f"L {x} {y}")
-    return " ".join(pts)
-
+IV_CUT = 1.5
 
 with right:
     top_df = (
@@ -188,55 +169,27 @@ with right:
         .sort_values("iv")
         .reset_index(drop=True)
     )
+    top_df["_iv_bar"] = top_df["iv"].clip(upper=IV_CUT)
     has_overflow = (top_df["iv"] > IV_CUT).any()
-    x_max = _SHORT_ST + _SHORT_W + 0.35 if has_overflow else IV_CUT + 0.1
 
-    strength_order = ["suspicious", "strong", "medium", "weak", "useless", "na"]
-    traces = []
-
-    for strength in strength_order:
-        sub = top_df[top_df["iv_strength"] == strength]
-        if sub.empty:
-            continue
-        color = IV_COLORS.get(strength, "#cccccc")
-
-        # 메인 bar (0 → IV_CUT 클립)
-        traces.append(go.Bar(
-            x=sub["iv"].clip(upper=IV_CUT),
-            y=sub["feature_name"],
-            orientation="h",
-            marker_color=color,
-            name=strength,
-            legendgroup=strength,
-            showlegend=True,
-            customdata=sub[["iv"]].values,
-            hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>",
-        ))
-
-        # 짧은 bar (물결 이후 고정 너비)
-        overflow_sub = sub[sub["iv"] > IV_CUT]
-        if not overflow_sub.empty:
-            traces.append(go.Bar(
-                x=[_SHORT_W] * len(overflow_sub),
-                y=overflow_sub["feature_name"],
-                base=[_SHORT_ST] * len(overflow_sub),
-                orientation="h",
-                marker_color=color,
-                name=strength,
-                legendgroup=strength,
-                showlegend=False,
-                customdata=overflow_sub[["iv"]].values,
-                hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>",
-            ))
-
-    fig = go.Figure(data=traces)
-    fig.update_layout(
+    fig = px.bar(
+        top_df,
+        x="_iv_bar", y="feature_name",
+        orientation="h",
+        color="iv_strength",
+        color_discrete_map=IV_COLORS,
+        custom_data=["iv"],
+        labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
         title=f"{sel_exp} — Top {top_n} Features by IV",
-        barmode="overlay",
-        height=max(420, len(top_df) * 24),
+    )
+    fig.update_traces(
+        hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>"
+    )
+    fig.update_layout(
+        height=max(420, top_n * 24),
         yaxis={"categoryorder": "total ascending"},
         xaxis={
-            "range": [0, x_max],
+            "range": [0, IV_CUT + (0.35 if has_overflow else 0.05)],
             "tickvals": [0, 0.5, 1.0, 1.5],
             "ticktext": ["0", "0.5", "1.0", "1.5"],
             "title": "IV",
@@ -244,37 +197,28 @@ with right:
         legend_title_text="IV 강도",
     )
 
-    for val, label, color in [
-        (0.02, "weak",       "#aaaaaa"),
-        (0.10, "medium",     "#888888"),
-        (0.30, "strong",     "#555555"),
-        (0.50, "suspicious", "#222222"),
-    ]:
-        fig.add_vline(x=val, line_dash="dot", line_color=color,
-                      annotation_text=label, annotation_font_size=10)
-
+    # 절취 표시: bar 끝에 // 모양 흰 슬래시 + 실제값 텍스트
     for i, row in top_df[top_df["iv"] > IV_CUT].iterrows():
-        # 흰 직사각형으로 갭 가리기
-        fig.add_shape(
-            type="rect",
-            x0=IV_CUT, x1=_SHORT_ST,
-            y0=i - _BAR_HH, y1=i + _BAR_HH,
-            fillcolor="white", line_width=0, layer="above",
-        )
-        # 두 물결선
-        for x_c in [_WAVE1_X, _WAVE2_X]:
+        for dy in [-0.1, 0.1]:
             fig.add_shape(
-                type="path",
-                path=_wave(x_c, i),
-                line=dict(color="#555555", width=1.5),
+                type="line",
+                x0=IV_CUT - 0.025, x1=IV_CUT + 0.025,
+                y0=i + dy + 0.15, y1=i + dy - 0.15,
+                line=dict(color="white", width=2.5),
                 layer="above",
             )
-        # 실제값 텍스트
         fig.add_annotation(
-            x=_SHORT_ST + _SHORT_W + 0.02, y=i,
+            x=IV_CUT + 0.04, y=i,
             text=f"{row['iv']:.4f}",
-            showarrow=False, xanchor="left",
+            showarrow=False,
+            xanchor="left",
             font=dict(size=10),
         )
 
+    for val, label, color in [
+        (0.02, "weak", "#aaaaaa"), (0.10, "medium", "#888888"),
+        (0.30, "strong", "#555555"), (0.50, "suspicious", "#222222"),
+    ]:
+        fig.add_vline(x=val, line_dash="dot", line_color=color,
+                      annotation_text=label, annotation_font_size=10)
     st.plotly_chart(fig, use_container_width=True)
