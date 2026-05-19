@@ -137,6 +137,9 @@ if not all_iv:
 
 exp_names = list(all_iv.keys())
 
+st.divider()
+st.markdown("#### WOE/IV")
+
 # ── 실험별 IV 바 차트 ───────────────────────────────────────────────────────
 left, right = st.columns([1, 3])
 
