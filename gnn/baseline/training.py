@@ -314,7 +314,7 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
 
     loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config.w_ce1, config.w_ce2]).to(device))
 
-    run_name = f"{args.data}_{args.model}_{datetime.datetime.now().strftime('%m%d_%H%M%S')}"
+    run_name = f"{args.unique_name}_{datetime.datetime.now().strftime('%m%d_%H%M%S')}"
     writer = SummaryWriter(log_dir=f"runs/{run_name}")
     logging.info(f"TensorBoard log dir: runs/{run_name}")
 
