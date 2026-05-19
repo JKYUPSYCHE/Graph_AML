@@ -160,27 +160,60 @@ with left:
 | 소요 | {meta.get('elapsed_seconds','?')}초 |
 """)
 
+IV_CUT = 1.5
+
 with right:
-    top_df = iv_df.dropna(subset=["iv"]).head(top_n).sort_values("iv").reset_index(drop=True)
+    top_df = (
+        iv_df.dropna(subset=["iv"])
+        .head(top_n)
+        .sort_values("iv")
+        .reset_index(drop=True)
+    )
+    top_df["_iv_bar"] = top_df["iv"].clip(upper=IV_CUT)
+    has_overflow = (top_df["iv"] > IV_CUT).any()
 
     fig = px.bar(
         top_df,
-        x="iv", y="feature_name",
+        x="_iv_bar", y="feature_name",
         orientation="h",
         color="iv_strength",
         color_discrete_map=IV_COLORS,
-        labels={"iv": "IV", "feature_name": "Feature", "iv_strength": "강도"},
+        custom_data=["iv"],
+        labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
         title=f"{sel_exp} — Top {top_n} Features by IV",
     )
     fig.update_traces(
-        hovertemplate="<b>%{y}</b><br>IV: %{x:.4f}<extra></extra>"
+        hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>"
     )
     fig.update_layout(
         height=max(420, top_n * 24),
         yaxis={"categoryorder": "total ascending"},
-        xaxis={"title": "IV"},
+        xaxis={
+            "range": [0, IV_CUT + (0.35 if has_overflow else 0.05)],
+            "tickvals": [0, 0.5, 1.0, 1.5],
+            "ticktext": ["0", "0.5", "1.0", "1.5"],
+            "title": "IV",
+        },
         legend_title_text="IV 강도",
     )
+
+    # 절취 표시: bar 끝에 // 모양 흰 슬래시 + 실제값 텍스트
+    for i, row in top_df[top_df["iv"] > IV_CUT].iterrows():
+        for dy in [-0.1, 0.1]:
+            fig.add_shape(
+                type="line",
+                x0=IV_CUT - 0.025, x1=IV_CUT + 0.025,
+                y0=i + dy + 0.15, y1=i + dy - 0.15,
+                line=dict(color="white", width=2.5),
+                layer="above",
+            )
+        fig.add_annotation(
+            x=IV_CUT + 0.04, y=i,
+            text=f"{row['iv']:.4f}",
+            showarrow=False,
+            xanchor="left",
+            font=dict(size=10),
+        )
 
     for val, label, color in [
         (0.02, "weak", "#aaaaaa"), (0.10, "medium", "#888888"),
