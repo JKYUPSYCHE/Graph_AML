@@ -14,6 +14,10 @@ def logger_setup():
     log_directory.mkdir(exist_ok=True)
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
+    # basicConfig은 기존 핸들러가 있으면 무시됨 (Colab 등) → 강제 초기화
+    root = logging.getLogger()
+    for h in root.handlers[:]:
+        root.removeHandler(h)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)-5.5s] %(message)s",
