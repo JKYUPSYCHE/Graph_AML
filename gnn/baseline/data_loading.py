@@ -66,8 +66,19 @@ def get_data(args, data_config):
     id_to_idx = dict(zip(mapping['account_id'].astype(str), mapping['node_idx']))
     max_n_id  = int(mapping['node_idx'].max()) + 1  # unknown token index
 
-    from_id = df_edges['from_id'].astype(str).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
-    to_id   = df_edges['to_id'].astype(str).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
+    def _to_str_id(series):
+        try:
+            return series.astype(float).astype(int).astype(str)
+        except (ValueError, TypeError):
+            return series.astype(str)
+
+    from_id = _to_str_id(df_edges['from_id']).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
+    to_id   = _to_str_id(df_edges['to_id']).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
+
+    n_unk_from = int((from_id == max_n_id).sum())
+    n_unk_to   = int((to_id   == max_n_id).sum())
+    logging.info(f"Unknown from_id: {n_unk_from}/{len(from_id)} ({n_unk_from/len(from_id)*100:.1f}%)")
+    logging.info(f"Unknown to_id:   {n_unk_to}/{len(to_id)} ({n_unk_to/len(to_id)*100:.1f}%)")
 
     # node feature matrix: all nodes + unknown token slot (placeholder 1s)
     n_nodes  = max_n_id + 1
