@@ -160,20 +160,27 @@ with left:
 | 소요 | {meta.get('elapsed_seconds','?')}초 |
 """)
 
+IV_CLIP = 1.5
+
 with right:
-    top_df = iv_df.dropna(subset=["iv"]).head(top_n).sort_values("iv")
+    top_df = iv_df.dropna(subset=["iv"]).head(top_n).sort_values("iv").copy()
+    clipped = top_df["iv"] > IV_CLIP
+    top_df["iv_label"] = top_df["iv"].map(lambda v: f"{v:.4f} ▶" if v > IV_CLIP else f"{v:.4f}")
     fig = px.bar(
         top_df,
         x="iv", y="feature_name",
         orientation="h",
         color="iv_strength",
         color_discrete_map=IV_COLORS,
+        text="iv_label",
         labels={"iv": "IV", "feature_name": "Feature", "iv_strength": "강도"},
         title=f"{sel_exp} — Top {top_n} Features by IV",
     )
+    fig.update_traces(textposition="outside", cliponaxis=False)
     fig.update_layout(
         height=max(420, top_n * 24),
         yaxis={"categoryorder": "total ascending"},
+        xaxis={"range": [0, IV_CLIP]},
         legend_title_text="IV 강도",
     )
     for val, label, color in [
