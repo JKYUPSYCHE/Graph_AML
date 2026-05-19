@@ -79,7 +79,7 @@ def list_experiments() -> list[dict]:
 def load_experiment(folder_id: str) -> tuple[dict | None, pd.DataFrame | None]:
     files = _drive_list(
         f"'{folder_id}' in parents"
-        " and name in ('iv_summary.json','meta.json')"
+        " and (name = 'iv_summary.json' or name = 'meta.json')"
         " and trashed=false"
     )
     file_map = {f["name"]: f["id"] for f in files}
