@@ -55,7 +55,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
                 out = model(batch.x, batch.edge_index, batch.edge_attr)
             except ValueError as e:
                 if 'Expected more than 1 value per channel' in str(e):
-                    logging.warning(f"Small batch skipped (BatchNorm): {e}")
+                    logging.warning(f"Small batch skipped (BatchNorm): {batch.x.shape[0]} nodes | {e}")
                     continue
                 raise
             pred = out[mask]
@@ -75,6 +75,10 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
             memory_mb_list.append(torch.cuda.max_memory_allocated(device) / 1024 ** 2)
         else:
             memory_mb_list.append(0.0)
+
+        if not preds:
+            logging.warning(f"Epoch {epoch}: 모든 배치 skip됨 (BatchNorm 오류). 다음 에폭으로 진행합니다.")
+            continue
 
         pred = torch.cat(preds, dim=0).detach().cpu().numpy()
         pred_proba = torch.cat(pred_probas, dim=0).numpy()
@@ -113,7 +117,10 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
     avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list) if memory_mb_list else 0.0
     writer.add_scalar('Total/training_time_s', total_time_s, 0)
     writer.add_scalar('Total/avg_memory_mb', avg_memory_mb, 0)
-    _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
+    if best_val_result is None:
+        logging.warning("학습 중 val F1 개선 없음. best 결과 없음.")
+    else:
+        _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
     return model
 
 def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer):
@@ -145,7 +152,8 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
                 out = model(batch.x_dict, batch.edge_index_dict, batch.edge_attr_dict)
             except ValueError as e:
                 if 'Expected more than 1 value per channel' in str(e):
-                    logging.warning(f"Small batch skipped (BatchNorm): {e}")
+                    n_nodes = batch['node'].x.shape[0]
+                    logging.warning(f"Small batch skipped (BatchNorm): {n_nodes} nodes | {e}")
                     continue
                 raise
             out = out[('node', 'to', 'node')]
@@ -166,6 +174,10 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
             memory_mb_list.append(torch.cuda.max_memory_allocated(device) / 1024 ** 2)
         else:
             memory_mb_list.append(0.0)
+
+        if not preds:
+            logging.warning(f"Epoch {epoch}: 모든 배치 skip됨 (BatchNorm 오류). 다음 에폭으로 진행합니다.")
+            continue
 
         pred = torch.cat(preds, dim=0).detach().cpu().numpy()
         pred_proba = torch.cat(pred_probas, dim=0).numpy()
@@ -204,7 +216,10 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
     avg_memory_mb = sum(memory_mb_list) / len(memory_mb_list) if memory_mb_list else 0.0
     writer.add_scalar('Total/training_time_s', total_time_s, 0)
     writer.add_scalar('Total/avg_memory_mb', avg_memory_mb, 0)
-    _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
+    if best_val_result is None:
+        logging.warning("학습 중 val F1 개선 없음. best 결과 없음.")
+    else:
+        _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
     return model
 
 def get_model(sample_batch, config, args):
