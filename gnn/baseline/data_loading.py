@@ -2,48 +2,51 @@ import pandas as pd
 import numpy as np
 import torch
 import logging
+from pathlib import Path
+from sklearn.preprocessing import LabelEncoder
 from data_util import GraphData, HeteroData, z_norm, create_hetero_obj
 
 
-def _time_split(timestamps_np):
-    """Timestamp 누적 행 수 기준 60/20/20 split.
-
-    동일 timestamp의 거래는 쪼개지 않는다.
-    반환: tr_inds, val_inds, te_inds (torch.LongTensor)
-    """
-    n = len(timestamps_np)
-    train_cut = n * 0.60
-    val_cut   = n * 0.80
-
-    ts_series = pd.Series(timestamps_np)
-    ts_counts = (
-        ts_series.value_counts()
-        .sort_index()
-        .reset_index()
-    )
-    ts_counts.columns = ['Timestamp', 'count']
-    ts_counts['cum_count'] = ts_counts['count'].cumsum()
-    ts_counts['split'] = np.where(
-        ts_counts['cum_count'] <= train_cut, 'train',
-        np.where(ts_counts['cum_count'] <= val_cut, 'val', 'test')
-    )
-
-    ts_to_split = dict(zip(ts_counts['Timestamp'], ts_counts['split']))
-    row_splits = ts_series.map(ts_to_split).values
-
-    tr_inds  = torch.where(torch.tensor(row_splits == 'train'))[0]
-    val_inds = torch.where(torch.tensor(row_splits == 'val'))[0]
-    te_inds  = torch.where(torch.tensor(row_splits == 'test'))[0]
-
+def _split_indices(split_col: pd.Series):
+    """split 컬럼(train/val/test) 기준으로 index 반환."""
+    arr = split_col.to_numpy()
+    tr_inds  = torch.where(torch.tensor(arr == 'train'))[0]
+    val_inds = torch.where(torch.tensor(arr == 'val'))[0]
+    te_inds  = torch.where(torch.tensor(arr == 'test'))[0]
     return tr_inds, val_inds, te_inds
+
+
+def _encode_categoricals(df_edges, tr_inds):
+    """train rows 기준으로 LabelEncoder fit 후 전체 적용. 미등장 카테고리 → n_unique_train."""
+    cat_cols = [
+        'cat__payment_currency__code',
+        'cat__receiving_currency__code',
+        'cat__payment_format__code',
+    ]
+    for col in cat_cols:
+        if col not in df_edges.columns:
+            continue
+        le = LabelEncoder()
+        le.fit(df_edges.iloc[tr_inds][col].astype(str))
+        n_unique = len(le.classes_)
+
+        arr = df_edges[col].astype(str).to_numpy()
+        known = np.isin(arr, le.classes_)
+        encoded = np.where(
+            known,
+            le.transform(np.where(known, arr, le.classes_[0])),
+            n_unique,
+        )
+        df_edges[col] = encoded
+    return df_edges
 
 
 def get_data(args, data_config):
     '''Loads the AML transaction data from preprocessed parquet (ml_exp00.parquet).
 
-    1. The data is loaded from the csv and the necessary features are chosen.
-    2. The data is split into training, validation and test data (timestamp 누적 행 수 기준 60/20/20).
-    3. PyG Data objects are created with the respective data splits.
+    - formatted_transactions_gf.csv : edge features, split, label, from_id/to_id
+    - formatted_transactions.csv    : timestamp (ports/tds 계산용, 모델 입력 아님)
+    - account_mapping.csv           : from_id/to_id → node_idx 매핑
     '''
 
     from pathlib import Path
@@ -65,9 +68,8 @@ def get_data(args, data_config):
     timestamps = torch.tensor(ts_elapsed.to_numpy()).float()
     y = torch.LongTensor(df_edges['label'].to_numpy())
 
-    logging.info(f"Illicit ratio = {sum(y)} / {len(y)} = {sum(y) / len(y) * 100:.2f}%")
-    logging.info(f"Number of nodes (holdings doing transcations) = {df_nodes.shape[0]}")
-    logging.info(f"Number of transactions = {df_edges.shape[0]}")
+    from_id = df_edges['from_id'].astype(str).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
+    to_id   = df_edges['to_id'].astype(str).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
 
     amount_recv_col = (
         'amount_received__current__log1p'
@@ -88,8 +90,7 @@ def get_data(args, data_config):
     ]
     node_features = ['Feature']
 
-    logging.info(f'Edge features being used: {edge_features}')
-    logging.info(f'Node features being used: {node_features} ("Feature" is a placeholder feature of all 1s)')
+    y = torch.LongTensor(df_edges['label'].to_numpy())
 
     # categorical edge feature -1 → cardinality(unknown token) 치환
     cat_cardinality = _load_cardinality(Path(data_config['paths']['aml_data']) / args.data)
@@ -106,37 +107,58 @@ def get_data(args, data_config):
     edge_index = torch.LongTensor(np.stack([from_id, to_id]))
     edge_attr = torch.tensor(df_edges.loc[:, edge_features].to_numpy()).float()
 
-    # Train/Val/Test split (timestamp 누적 행 수 기준 60/20/20)
-    tr_inds, val_inds, te_inds = _time_split(df_edges['Timestamp'].to_numpy())
+    # split
+    tr_inds, val_inds, te_inds = _split_indices(df_edges['split'])
 
     logging.info(f"Total train samples: {tr_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[tr_inds].float().mean() * 100:.2f}%")
     logging.info(f"Total val samples:   {val_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[val_inds].float().mean() * 100:.2f}%")
     logging.info(f"Total test samples:  {te_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[te_inds].float().mean() * 100:.2f}%")
 
-    tr_x, val_x, te_x = x, x, x
-    e_tr = tr_inds.numpy()
-    e_val = np.concatenate([tr_inds, val_inds])
+    # categorical encoding: train 기준 fit, 미등장 카테고리 → unknown token
+    df_edges = _encode_categoricals(df_edges, tr_inds.numpy())
 
-    tr_edge_index,  tr_edge_attr,  tr_y,  tr_edge_times  = edge_index[:,e_tr],  edge_attr[e_tr],  y[e_tr],  timestamps[e_tr]
-    val_edge_index, val_edge_attr, val_y, val_edge_times = edge_index[:,e_val], edge_attr[e_val], y[e_val], timestamps[e_val]
-    te_edge_index,  te_edge_attr,  te_y,  te_edge_times  = edge_index,          edge_attr,        y,        timestamps
+    edge_features = [
+        'amount__current__log1p',
+        'cat__payment_currency__code',
+        'cat__receiving_currency__code',
+        'cat__payment_format__code',
+        'time__row__hour',
+        'time__row__dayofweek',
+        'time__row__is_weekend',
+    ]
+    node_features = ['Feature']
 
-    tr_data  = GraphData(x=tr_x,  y=tr_y,  edge_index=tr_edge_index,  edge_attr=tr_edge_attr,  timestamps=tr_edge_times)
-    val_data = GraphData(x=val_x, y=val_y, edge_index=val_edge_index, edge_attr=val_edge_attr, timestamps=val_edge_times)
-    te_data  = GraphData(x=te_x,  y=te_y,  edge_index=te_edge_index,  edge_attr=te_edge_attr,  timestamps=te_edge_times)
+    logging.info(f'Edge features being used: {edge_features}')
+    logging.info(f'Node features being used: {node_features} (placeholder all 1s)')
+
+    x          = torch.tensor(df_nodes[node_features].to_numpy()).float()
+    edge_index = torch.LongTensor(np.stack([from_id, to_id]))
+    edge_attr  = torch.tensor(df_edges[edge_features].to_numpy()).float()
+
+    e_tr  = tr_inds.numpy()
+    e_val = val_inds.numpy()
+    e_te  = np.arange(len(df_edges))
+
+    tr_edge_index,  tr_edge_attr,  tr_y,  tr_edge_times  = edge_index[:, e_tr],  edge_attr[e_tr],  y[e_tr],  timestamps[e_tr]
+    val_edge_index, val_edge_attr, val_y, val_edge_times = edge_index[:, e_val], edge_attr[e_val], y[e_val], timestamps[e_val]
+    te_edge_index,  te_edge_attr,  te_y,  te_edge_times  = edge_index[:, e_te],  edge_attr[e_te],  y[e_te],  timestamps[e_te]
+
+    tr_data  = GraphData(x=x, y=tr_y,  edge_index=tr_edge_index,  edge_attr=tr_edge_attr,  timestamps=tr_edge_times)
+    val_data = GraphData(x=x, y=val_y, edge_index=val_edge_index, edge_attr=val_edge_attr, timestamps=val_edge_times)
+    te_data  = GraphData(x=x, y=te_y,  edge_index=te_edge_index,  edge_attr=te_edge_attr,  timestamps=te_edge_times)
 
     if args.ports:
-        logging.info(f"Start: adding ports")
+        logging.info("Start: adding ports")
         tr_data.add_ports()
         val_data.add_ports()
         te_data.add_ports()
-        logging.info(f"Done: adding ports")
+        logging.info("Done: adding ports")
     if args.tds:
-        logging.info(f"Start: adding time-deltas")
+        logging.info("Start: adding time-deltas")
         tr_data.add_time_deltas()
         val_data.add_time_deltas()
         te_data.add_time_deltas()
-        logging.info(f"Done: adding time-deltas")
+        logging.info("Done: adding time-deltas")
 
     tr_data.x = val_data.x = te_data.x = z_norm(tr_data.x)
     if not args.model == 'rgcn':
