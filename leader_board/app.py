@@ -139,6 +139,13 @@ exp_names = list(all_iv.keys())
 
 st.divider()
 st.markdown("#### WOE/IV")
+st.caption(
+    "**useless** IV < 0.02 &nbsp;·&nbsp; "
+    "**weak** 0.02–0.10 &nbsp;·&nbsp; "
+    "**medium** 0.10–0.30 &nbsp;·&nbsp; "
+    "**strong** 0.30–0.50 &nbsp;·&nbsp; "
+    "**suspicious** IV ≥ 0.50"
+)
 
 # ── 실험별 IV 바 차트 ───────────────────────────────────────────────────────
 left, right = st.columns([1, 3])
@@ -149,15 +156,16 @@ with left:
     iv_df       = all_iv[sel_exp]
     top_n       = st.slider("Top N", 10, min(50, len(iv_df)), 20)
 
-    n_rows = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
+    n_rows    = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
+    n_features = len(all_iv[sel_exp])
     st.markdown(f"""
 | 항목 | 값 |
 |------|-----|
 | 계산일 | {meta.get('computed_at','')[:19]} |
+| feature 수 | {n_features:,} |
 | 데이터 | {'전체' if meta.get('full_run') else '샘플'} |
 | 행 수 | {n_rows:,} |
 | positive | {meta.get('positive_rate', 0):.5f} |
-| 소요 | {meta.get('elapsed_seconds','?')}초 |
 """)
 
 IV_CUT = 1.5
