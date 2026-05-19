@@ -160,50 +160,27 @@ with left:
 | 소요 | {meta.get('elapsed_seconds','?')}초 |
 """)
 
-IV_CUT     = 1.44  # bar 절취 지점
-IV_DISPLAY = 1.6   # x축 최대 범위
-WAVE_AMP   = 0.025
-BAR_HALF_H = 0.35
-
 with right:
     top_df = iv_df.dropna(subset=["iv"]).head(top_n).sort_values("iv").reset_index(drop=True)
-    top_df["_iv_bar"] = top_df["iv"].clip(upper=IV_CUT)
 
     fig = px.bar(
         top_df,
-        x="_iv_bar", y="feature_name",
+        x="iv", y="feature_name",
         orientation="h",
         color="iv_strength",
         color_discrete_map=IV_COLORS,
-        custom_data=["iv"],
-        labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
+        labels={"iv": "IV", "feature_name": "Feature", "iv_strength": "강도"},
         title=f"{sel_exp} — Top {top_n} Features by IV",
     )
     fig.update_traces(
-        hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>"
+        hovertemplate="<b>%{y}</b><br>IV: %{x:.4f}<extra></extra>"
     )
     fig.update_layout(
         height=max(420, top_n * 24),
         yaxis={"categoryorder": "total ascending"},
-        xaxis={"range": [0, IV_DISPLAY], "title": "IV"},
+        xaxis={"title": "IV"},
         legend_title_text="IV 강도",
     )
-
-    # 절취 표시: bar가 IV_CUT 초과인 경우 물결선 + 실제값 텍스트
-    for i, row in top_df[top_df["iv"] > IV_CUT].iterrows():
-        y_top = i + BAR_HALF_H
-        y_bot = i - BAR_HALF_H
-        n_waves = 5
-        step = (y_top - y_bot) / (n_waves * 2)
-        pts = [f"M {IV_CUT - WAVE_AMP} {y_bot}"]
-        for k in range(n_waves * 2):
-            x_k = IV_CUT + WAVE_AMP if k % 2 == 0 else IV_CUT - WAVE_AMP
-            pts.append(f"L {x_k} {y_bot + (k + 1) * step}")
-        fig.add_shape(type="path", path=" ".join(pts),
-                      line=dict(color="gray", width=1.5), layer="above")
-        fig.add_annotation(x=IV_CUT + WAVE_AMP * 4, y=i,
-                           text=f"{row['iv']:.4f}", showarrow=False,
-                           xanchor="left", font=dict(size=10))
 
     for val, label, color in [
         (0.02, "weak", "#aaaaaa"), (0.10, "medium", "#888888"),
