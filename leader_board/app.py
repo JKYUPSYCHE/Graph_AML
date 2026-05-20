@@ -210,8 +210,8 @@ catalog_df = all_catalog.get(sel_exp)
 #   - catalog에 있고 used_in_ml=False → 제외
 #   - catalog에 없음                  → 포함 (미등록 피처 파악용)
 if catalog_df is not None:
-    used_cols     = set(catalog_df.loc[catalog_df["used_in_ml"] == True,  "feature_name"])
-    excluded_cols = set(catalog_df.loc[catalog_df["used_in_ml"] == False, "feature_name"])
+    _uml = catalog_df["used_in_ml"].astype(str).str.strip().str.lower()
+    excluded_cols = set(catalog_df.loc[_uml == "false", "feature_name"])
     iv_df = iv_df[~iv_df["feature_name"].isin(excluded_cols)]
 
 
