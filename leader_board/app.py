@@ -241,7 +241,7 @@ if catalog_df is not None:
 else:
     top_df["_desc"] = ""
 
-top_df["_iv_bar"] = top_df["iv"].clip(upper=IV_CUT)
+top_df["_iv_bar"] = top_df["iv"].clip(lower=0.003, upper=IV_CUT)
 has_overflow = (top_df["iv"] > IV_CUT).any()
 
 fig = px.bar(
