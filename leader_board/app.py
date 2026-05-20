@@ -228,7 +228,8 @@ top_n = st.slider("Top N", 10, min(50, len(iv_df)), 20)
 IV_CUT = 1.5
 
 top_df = (
-    iv_df.dropna(subset=["iv"])
+    iv_df.copy()
+    .assign(iv=lambda d: d["iv"].fillna(0))
     .head(top_n)
     .sort_values("iv")
     .reset_index(drop=True)
