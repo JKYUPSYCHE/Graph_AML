@@ -1,6 +1,5 @@
 """
 WOE/IV Leaderboard
-Streamlit Community Cloud에 배포해서 팀원 누구나 링크로 접근 가능합니다.
 
 필요한 Streamlit secrets:
     GOOGLE_API_KEY      Google Drive API key (공개 Drive 접근용)
@@ -76,18 +75,22 @@ def list_experiments() -> list[dict]:
 
 
 @st.cache_data(ttl=300)
-def load_experiment(folder_id: str) -> tuple[dict | None, pd.DataFrame | None]:
+def load_experiment(folder_id: str) -> tuple[dict | None, pd.DataFrame | None, pd.DataFrame | None]:
     files = _drive_list(
         f"'{folder_id}' in parents"
-        " and (name = 'iv_summary.json' or name = 'meta.json')"
+        " and (name = 'iv_summary.json' or name = 'meta.json' or name = 'bin_table.json')"
         " and trashed=false"
     )
     file_map = {f["name"]: f["id"] for f in files}
     if "iv_summary.json" not in file_map or "meta.json" not in file_map:
-        return None, None
+        return None, None, None
     meta  = _download_json(file_map["meta.json"])
     iv_df = pd.DataFrame(_download_json(file_map["iv_summary.json"]))
-    return meta, iv_df
+    bin_df = (
+        pd.DataFrame(_download_json(file_map["bin_table.json"]))
+        if "bin_table.json" in file_map else None
+    )
+    return meta, iv_df, bin_df
 
 
 # ── UI ─────────────────────────────────────────────────────────────────────
@@ -121,13 +124,16 @@ if not experiments:
 # ── 모든 실험 데이터 로드 ───────────────────────────────────────────────────
 all_meta: dict[str, dict]         = {}
 all_iv:   dict[str, pd.DataFrame] = {}
+all_bin:  dict[str, pd.DataFrame] = {}
 
 bar = st.progress(0, text="실험 데이터 로드 중...")
 for i, exp in enumerate(experiments):
-    meta, iv_df = load_experiment(exp["id"])
+    meta, iv_df, bin_df = load_experiment(exp["id"])
     if meta is not None and iv_df is not None:
         all_meta[exp["name"]] = meta
         all_iv[exp["name"]]   = iv_df
+        if bin_df is not None:
+            all_bin[exp["name"]] = bin_df
     bar.progress((i + 1) / len(experiments), text=f"로드: {exp['name']}")
 bar.empty()
 
@@ -217,4 +223,56 @@ for val, label, color in [
 ]:
     fig.add_vline(x=val, line_dash="dot", line_color=color,
                   annotation_text=label, annotation_font_size=10)
-st.plotly_chart(fig, use_container_width=True)
+iv_event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="iv_bar_chart")
+
+# ── 클릭된 피처의 WOE 차트 ─────────────────────────────────────────────────
+sel_feature: str | None = None
+pts = (iv_event.selection or {}).get("points", []) if iv_event else []
+if pts:
+    sel_feature = pts[0].get("label") or pts[0].get("y")
+
+bin_df_exp = all_bin.get(sel_exp)
+
+if sel_feature:
+    st.markdown(f"#### WOE — `{sel_feature}`")
+    if bin_df_exp is None:
+        st.info("bin_table.json이 없습니다. compute_woe_iv.ipynb를 다시 실행해 저장하세요.")
+    else:
+        feat_bins = bin_df_exp[bin_df_exp["feature_name"] == sel_feature].copy()
+        if feat_bins.empty:
+            st.info(f"'{sel_feature}'의 WOE 구간 데이터가 없습니다.")
+        else:
+            main_bins    = feat_bins[~feat_bins["missing_flag"]].sort_values("bin_id")
+            missing_bins = feat_bins[feat_bins["missing_flag"]]
+            feat_sorted  = pd.concat([main_bins, missing_bins], ignore_index=True)
+
+            feat_sorted["_color"] = feat_sorted["woe"].apply(
+                lambda w: "fraud↑" if w >= 0 else "fraud↓"
+            )
+
+            fig_woe = px.bar(
+                feat_sorted,
+                x="bin_label", y="woe",
+                color="_color",
+                color_discrete_map={"fraud↑": "#d62728", "fraud↓": "#2ca02c"},
+                custom_data=["count", "positive_count", "positive_rate", "iv_bin"],
+                labels={"bin_label": "구간", "woe": "WOE", "_color": ""},
+                title=f"{sel_feature} — WOE by Bin",
+            )
+            fig_woe.update_traces(
+                hovertemplate=(
+                    "<b>%{x}</b><br>"
+                    "WOE: %{y:.4f}<br>"
+                    "Count: %{customdata[0]:,}<br>"
+                    "Positive: %{customdata[1]:,}<br>"
+                    "Positive Rate: %{customdata[2]:.5f}<br>"
+                    "IV Bin: %{customdata[3]:.4f}<extra></extra>"
+                )
+            )
+            fig_woe.add_hline(y=0, line_dash="dash", line_color="#333333", line_width=1)
+            fig_woe.update_layout(
+                height=380,
+                xaxis_tickangle=-40,
+                legend_title_text="WOE 방향",
+            )
+            st.plotly_chart(fig_woe, use_container_width=True)
