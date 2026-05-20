@@ -43,7 +43,7 @@ def _drive_list(q: str) -> list[dict]:
         "https://www.googleapis.com/drive/v3/files",
         params={
             "q": q,
-            "fields": "files(id,name,modifiedTime)",
+            "fields": "files(id,name,modifiedTime,parents)",
             "key": API_KEY,
             "orderBy": "name",
             "pageSize": 200,
@@ -65,13 +65,32 @@ def _download_json(file_id: str) -> object:
     return r.json()
 
 
+def _get_folder_name(folder_id: str) -> str:
+    r = requests.get(
+        f"https://www.googleapis.com/drive/v3/files/{folder_id}",
+        params={"fields": "name", "key": API_KEY},
+        timeout=10,
+    )
+    return r.json().get("name", folder_id) if r.ok else folder_id
+
+
 @st.cache_data(ttl=300)
 def list_experiments() -> list[dict]:
-    return _drive_list(
-        f"'{RESULTS_FOLDER_ID}' in parents"
-        " and mimeType='application/vnd.google-apps.folder'"
+    # 루트 하위 어느 깊이든 iv_summary.json 이 있는 폴더를 실험으로 인식
+    iv_files = _drive_list(
+        f"'{RESULTS_FOLDER_ID}' in ancestors"
+        " and name = 'iv_summary.json'"
         " and trashed=false"
     )
+    seen: set[str] = set()
+    result = []
+    for f in iv_files:
+        folder_id = f.get("parents", [None])[0]
+        if not folder_id or folder_id in seen:
+            continue
+        seen.add(folder_id)
+        result.append({"id": folder_id, "name": _get_folder_name(folder_id)})
+    return sorted(result, key=lambda x: x["name"])
 
 
 @st.cache_data(ttl=300)
