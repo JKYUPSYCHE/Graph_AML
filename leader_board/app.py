@@ -214,6 +214,14 @@ if catalog_df is not None:
     excluded_cols = set(catalog_df.loc[_uml == "false", "feature_name"])
     iv_df = iv_df[~iv_df["feature_name"].isin(excluded_cols)]
 
+with st.expander("🔍 디버그", expanded=True):
+    st.write("catalog_df:", "None" if catalog_df is None else f"{len(catalog_df)}행 로드됨")
+    if catalog_df is not None:
+        st.write("used_in_ml 값 샘플:", catalog_df["used_in_ml"].tolist())
+        st.write("used_in_ml dtype:", str(catalog_df["used_in_ml"].dtype))
+        st.write("excluded_cols:", sorted(excluded_cols))
+    st.write("iv_df 피처 수 (필터 후):", len(iv_df))
+
 
 n_rows     = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
 n_features = len(iv_df)
