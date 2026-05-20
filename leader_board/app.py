@@ -205,22 +205,19 @@ meta       = all_meta[sel_exp]
 iv_df      = all_iv[sel_exp]
 catalog_df = all_catalog.get(sel_exp)
 
-# catalog 기준 필터:
-#   - catalog에 있고 used_in_ml=True  → 포함
-#   - catalog에 있고 used_in_ml=False → 제외
-#   - catalog에 없음                  → 포함 (미등록 피처 파악용)
+# session state 초기화: 실험별 used_in_ml 오버라이드 (앱 내에서만, 원본 미반영)
+ss_key = f"active_catalog_{sel_exp}"
 if catalog_df is not None:
-    _uml = catalog_df["used_in_ml"].astype(str).str.strip().str.lower()
-    excluded_cols = set(catalog_df.loc[_uml == "false", "feature_name"])
+    if ss_key not in st.session_state:
+        _init = catalog_df[["feature_name", "description", "data_type", "used_in_ml", "selection_status"]].copy() if "selection_status" in catalog_df.columns else catalog_df[["feature_name", "description", "data_type", "used_in_ml"]].copy()
+        _init["used_in_ml"] = _init["used_in_ml"].astype(bool)
+        st.session_state[ss_key] = _init
+    active_catalog = st.session_state[ss_key]
+    excluded_cols = set(active_catalog.loc[~active_catalog["used_in_ml"], "feature_name"])
     iv_df = iv_df[~iv_df["feature_name"].isin(excluded_cols)]
-
-with st.expander("🔍 디버그", expanded=True):
-    st.write("catalog_df:", "None" if catalog_df is None else f"{len(catalog_df)}행 로드됨")
-    if catalog_df is not None:
-        st.write("used_in_ml 값 샘플:", catalog_df["used_in_ml"].tolist())
-        st.write("used_in_ml dtype:", str(catalog_df["used_in_ml"].dtype))
-        st.write("excluded_cols:", sorted(excluded_cols))
-    st.write("iv_df 피처 수 (필터 후):", len(iv_df))
+else:
+    active_catalog = None
+    excluded_cols = set()
 
 
 n_rows     = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
@@ -235,14 +232,24 @@ st.markdown(f"""
 | positive | {meta.get('positive_rate', 0):.5f} |
 """)
 
-if catalog_df is not None:
+if active_catalog is not None:
     with st.expander("Feature Catalog"):
-        display_cols = ["feature_name", "description", "data_type", "used_in_ml", "selection_status"]
-        st.dataframe(
-            catalog_df[[c for c in display_cols if c in catalog_df.columns]],
+        edited = st.data_editor(
+            active_catalog,
             use_container_width=True,
             hide_index=True,
+            column_config={
+                "used_in_ml": st.column_config.CheckboxColumn("used_in_ml", help="체크 해제 시 차트에서 제외됩니다 (앱 내에서만 적용)"),
+                "feature_name":     st.column_config.TextColumn("feature_name",     disabled=True),
+                "description":      st.column_config.TextColumn("description",       disabled=True),
+                "data_type":        st.column_config.TextColumn("data_type",         disabled=True),
+                "selection_status": st.column_config.TextColumn("selection_status",  disabled=True),
+            },
+            key=f"editor_{sel_exp}",
         )
+        if not edited.equals(active_catalog):
+            st.session_state[ss_key] = edited
+            st.rerun()
 
 top_n = st.slider("Top N", 10, min(50, len(iv_df)), 20)
 
