@@ -2,16 +2,18 @@
 WOE/IV Leaderboard
 
 필요한 Streamlit secrets:
-    GOOGLE_API_KEY      Google Drive API key (공개 Drive 접근용)
-    RESULTS_FOLDER_ID   실험 결과 폴더의 Drive ID
+    GOOGLE_API_KEY       Google Drive API key (공개 Drive 접근용)
+    PROJECT_FOLDER_ID    프로젝트 루트 폴더의 Drive ID
 
-결과 폴더 구조:
-    woe_iv_results/          ← RESULTS_FOLDER_ID 가 가리키는 곳
-        ml_exp00/
-            iv_summary.json
-            meta.json
-        gnn_exp01/
-            ...
+결과 폴더 구조 (루트 하위 어느 깊이든 자동 탐색):
+    프로젝트 루트/          ← PROJECT_FOLDER_ID 가 가리키는 곳
+        leader_board/
+            ml_exp00/
+                iv_summary.json
+                meta.json
+        gnn/
+            gnn_exp01/
+                ...
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ st.set_page_config(page_title="돈무브 프로젝트 리더보드", layout="wid
 
 # ── Config ─────────────────────────────────────────────────────────────────
 API_KEY           = st.secrets.get("GOOGLE_API_KEY", "")
-RESULTS_FOLDER_ID = st.secrets.get("RESULTS_FOLDER_ID", "")
+PROJECT_FOLDER_ID = st.secrets.get("PROJECT_FOLDER_ID", "")
 
 IV_COLORS = {
     "suspicious": "#d62728",
@@ -78,7 +80,7 @@ def _get_folder_name(folder_id: str) -> str:
 def list_experiments() -> list[dict]:
     # 루트 하위 어느 깊이든 iv_summary.json 이 있는 폴더를 실험으로 인식
     iv_files = _drive_list(
-        f"'{RESULTS_FOLDER_ID}' in ancestors"
+        f"'{PROJECT_FOLDER_ID}' in ancestors"
         " and name = 'iv_summary.json'"
         " and trashed=false"
     )
@@ -120,13 +122,13 @@ if col_btn.button("🔄 새로고침", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
-if not API_KEY or not RESULTS_FOLDER_ID:
+if not API_KEY or not PROJECT_FOLDER_ID:
     st.error(
         "**Streamlit secrets 설정 필요** — `.streamlit/secrets.toml` 또는 "
         "Streamlit Cloud 대시보드에 아래 항목을 추가하세요.\n\n"
         "```toml\n"
         'GOOGLE_API_KEY    = "AIzaSy..."\n'
-        'RESULTS_FOLDER_ID = "1abc..."\n'
+        'PROJECT_FOLDER_ID = "1abc..."\n'
         "```\n\n"
         "Google API 키 발급: console.cloud.google.com → Drive API 활성화 → 사용자 인증 정보 → API 키"
     )
