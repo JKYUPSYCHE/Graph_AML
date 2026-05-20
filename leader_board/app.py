@@ -67,31 +67,37 @@ def _download_json(file_id: str) -> object:
     return r.json()
 
 
-def _get_folder_name(folder_id: str) -> str:
-    r = requests.get(
-        f"https://www.googleapis.com/drive/v3/files/{folder_id}",
-        params={"fields": "name", "key": API_KEY},
-        timeout=10,
+def _subfolders(parent_id: str) -> list[dict]:
+    return _drive_list(
+        f"'{parent_id}' in parents"
+        " and mimeType='application/vnd.google-apps.folder'"
+        " and trashed=false"
     )
-    return r.json().get("name", folder_id) if r.ok else folder_id
+
+
+def _has_iv_summary(folder_id: str) -> bool:
+    return bool(_drive_list(
+        f"'{folder_id}' in parents"
+        " and name = 'iv_summary.json'"
+        " and trashed=false"
+    ))
 
 
 @st.cache_data(ttl=300)
 def list_experiments() -> list[dict]:
-    # 루트 하위 어느 깊이든 iv_summary.json 이 있는 폴더를 실험으로 인식
-    iv_files = _drive_list(
-        f"'{PROJECT_FOLDER_ID}' in ancestors"
-        " and name = 'iv_summary.json'"
-        " and trashed=false"
-    )
+    # 루트 → depth1 → depth2 순으로 iv_summary.json 보유 폴더 수집
+    result: list[dict] = []
     seen: set[str] = set()
-    result = []
-    for f in iv_files:
-        folder_id = f.get("parents", [None])[0]
-        if not folder_id or folder_id in seen:
-            continue
-        seen.add(folder_id)
-        result.append({"id": folder_id, "name": _get_folder_name(folder_id)})
+
+    for d1 in _subfolders(PROJECT_FOLDER_ID):
+        if _has_iv_summary(d1["id"]) and d1["id"] not in seen:
+            seen.add(d1["id"])
+            result.append({"id": d1["id"], "name": d1["name"]})
+        for d2 in _subfolders(d1["id"]):
+            if _has_iv_summary(d2["id"]) and d2["id"] not in seen:
+                seen.add(d2["id"])
+                result.append({"id": d2["id"], "name": d2["name"]})
+
     return sorted(result, key=lambda x: x["name"])
 
 
