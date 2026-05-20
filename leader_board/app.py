@@ -101,23 +101,38 @@ def list_experiments() -> list[dict]:
     return sorted(result, key=lambda x: x["name"])
 
 
+def _download_csv(file_id: str) -> pd.DataFrame:
+    r = requests.get(
+        f"https://drive.google.com/uc?export=download&id={file_id}",
+        timeout=30,
+    )
+    r.raise_for_status()
+    from io import StringIO
+    return pd.read_csv(StringIO(r.text), encoding="utf-8-sig")
+
+
 @st.cache_data(ttl=300)
-def load_experiment(folder_id: str) -> tuple[dict | None, pd.DataFrame | None, pd.DataFrame | None]:
+def load_experiment(folder_id: str) -> tuple[dict | None, pd.DataFrame | None, pd.DataFrame | None, pd.DataFrame | None]:
     files = _drive_list(
         f"'{folder_id}' in parents"
-        " and (name = 'iv_summary.json' or name = 'meta.json' or name = 'bin_table.json')"
+        " and (name = 'iv_summary.json' or name = 'meta.json'"
+        "  or name = 'bin_table.json' or name = 'feature_catalog.csv')"
         " and trashed=false"
     )
     file_map = {f["name"]: f["id"] for f in files}
     if "iv_summary.json" not in file_map or "meta.json" not in file_map:
-        return None, None, None
+        return None, None, None, None
     meta  = _download_json(file_map["meta.json"])
     iv_df = pd.DataFrame(_download_json(file_map["iv_summary.json"]))
     bin_df = (
         pd.DataFrame(_download_json(file_map["bin_table.json"]))
         if "bin_table.json" in file_map else None
     )
-    return meta, iv_df, bin_df
+    catalog_df = (
+        _download_csv(file_map["feature_catalog.csv"])
+        if "feature_catalog.csv" in file_map else None
+    )
+    return meta, iv_df, bin_df, catalog_df
 
 
 # ── UI ─────────────────────────────────────────────────────────────────────
@@ -149,18 +164,21 @@ if not experiments:
     st.stop()
 
 # ── 모든 실험 데이터 로드 ───────────────────────────────────────────────────
-all_meta: dict[str, dict]         = {}
-all_iv:   dict[str, pd.DataFrame] = {}
-all_bin:  dict[str, pd.DataFrame] = {}
+all_meta:    dict[str, dict]         = {}
+all_iv:      dict[str, pd.DataFrame] = {}
+all_bin:     dict[str, pd.DataFrame] = {}
+all_catalog: dict[str, pd.DataFrame] = {}
 
 bar = st.progress(0, text="실험 데이터 로드 중...")
 for i, exp in enumerate(experiments):
-    meta, iv_df, bin_df = load_experiment(exp["id"])
+    meta, iv_df, bin_df, catalog_df = load_experiment(exp["id"])
     if meta is not None and iv_df is not None:
         all_meta[exp["name"]] = meta
         all_iv[exp["name"]]   = iv_df
         if bin_df is not None:
             all_bin[exp["name"]] = bin_df
+        if catalog_df is not None:
+            all_catalog[exp["name"]] = catalog_df
     bar.progress((i + 1) / len(experiments), text=f"로드: {exp['name']}")
 bar.empty()
 
@@ -185,13 +203,20 @@ with ctrl_left:
 
 meta       = all_meta[sel_exp]
 iv_df      = all_iv[sel_exp]
+catalog_df = all_catalog.get(sel_exp)
+
+# used_in_ml == True 필터
+if catalog_df is not None:
+    used_cols = set(catalog_df.loc[catalog_df["used_in_ml"] == True, "feature_name"])
+    iv_df = iv_df[iv_df["feature_name"].isin(used_cols)]
+
 n_rows     = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
 n_features = len(iv_df)
 st.markdown(f"""
 | 항목 | 값 |
 |------|-----|
 | 계산일 | {meta.get('computed_at','')[:19]} |
-| feature 수 | {n_features:,} |
+| 사용된 feature 수 | {n_features:,} |
 | 데이터 | {'전체' if meta.get('full_run') else '샘플'} |
 | 행 수 | {n_rows:,} |
 | positive | {meta.get('positive_rate', 0):.5f} |
@@ -207,6 +232,14 @@ top_df = (
     .sort_values("iv")
     .reset_index(drop=True)
 )
+
+# description 병합
+if catalog_df is not None:
+    desc_map = catalog_df.set_index("feature_name")["description"].to_dict()
+    top_df["_desc"] = top_df["feature_name"].map(desc_map).fillna("")
+else:
+    top_df["_desc"] = ""
+
 top_df["_iv_bar"] = top_df["iv"].clip(upper=IV_CUT)
 has_overflow = (top_df["iv"] > IV_CUT).any()
 
@@ -216,12 +249,12 @@ fig = px.bar(
     orientation="h",
     color="iv_strength",
     color_discrete_map=IV_COLORS,
-    custom_data=["iv"],
+    custom_data=["iv", "_desc"],
     labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
     title=f"{sel_exp} — Top {top_n} Features by IV",
 )
 fig.update_traces(
-    hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<extra></extra>"
+    hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<br>%{customdata[1]}<extra></extra>"
 )
 fig.update_layout(
     height=max(420, top_n * 40),
