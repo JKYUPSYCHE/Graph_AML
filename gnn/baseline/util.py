@@ -14,18 +14,23 @@ def logger_setup(log_dir=None, log_name='logs'):
     log_directory.mkdir(parents=True, exist_ok=True)
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
-    # basicConfig은 기존 핸들러가 있으면 무시됨 (Colab 등) → 강제 초기화
+
     root = logging.getLogger()
     for h in root.handlers[:]:
         root.removeHandler(h)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)-5.5s] %(message)s",
-        handlers=[
-            logging.FileHandler(log_directory / f"{log_name}.log", encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+    root.setLevel(logging.INFO)
+
+    fmt = logging.Formatter("%(asctime)s [%(levelname)-5.5s] %(message)s")
+
+    fh = logging.FileHandler(log_directory / f"{log_name}.log", encoding='utf-8')
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(fmt)
+    root.addHandler(fh)
+
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setLevel(logging.INFO)
+    sh.setFormatter(fmt)
+    root.addHandler(sh)
 
 def create_parser():
     parser = argparse.ArgumentParser()
