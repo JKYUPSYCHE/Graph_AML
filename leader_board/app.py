@@ -210,6 +210,15 @@ if catalog_df is not None:
     used_cols = set(catalog_df.loc[catalog_df["used_in_ml"] == True, "feature_name"])
     iv_df = iv_df[iv_df["feature_name"].isin(used_cols)]
 
+    with st.expander("🔍 디버그: feature 필터 점검", expanded=True):
+        st.write(f"**catalog used_in_ml=True**: {sorted(used_cols)}")
+        iv_all_cols = set(all_iv[sel_exp]["feature_name"])
+        st.write(f"**iv_summary 전체 feature 수**: {len(iv_all_cols)}")
+        missing = used_cols - iv_all_cols
+        st.write(f"**catalog에는 있지만 iv_summary에 없는 feature** ({len(missing)}개): {sorted(missing)}")
+        nan_feats = all_iv[sel_exp][all_iv[sel_exp]["feature_name"].isin(used_cols) & all_iv[sel_exp]["iv"].isna()]["feature_name"].tolist()
+        st.write(f"**iv가 NaN인 feature** ({len(nan_feats)}개): {nan_feats}")
+
 n_rows     = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
 n_features = len(iv_df)
 st.markdown(f"""
