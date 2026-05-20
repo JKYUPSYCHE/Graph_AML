@@ -1,5 +1,5 @@
 """
-WOE/IV Leaderboard
+WOE/IV Dashboard
 
 필요한 Streamlit secrets:
     GOOGLE_API_KEY       Google Drive API key (공개 Drive 접근용)
@@ -7,7 +7,7 @@ WOE/IV Leaderboard
 
 결과 폴더 구조 (루트 하위 어느 깊이든 자동 탐색):
     프로젝트 루트/          ← PROJECT_FOLDER_ID 가 가리키는 곳
-        leader_board/
+        dash_board/
             ml_exp00/
                 iv_summary.json
                 meta.json
@@ -22,7 +22,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="돈무브 프로젝트 리더보드", layout="wide", page_icon="📊")
+st.set_page_config(page_title="돈무브 프로젝트 대시보드", layout="wide", page_icon="📊")
 
 # ── Config ─────────────────────────────────────────────────────────────────
 API_KEY           = st.secrets.get("GOOGLE_API_KEY", "")
@@ -138,7 +138,7 @@ def load_experiment(folder_id: str) -> tuple[dict | None, pd.DataFrame | None, p
 # ── UI ─────────────────────────────────────────────────────────────────────
 
 col_title, col_btn = st.columns([8, 1])
-col_title.title("돈무브 프로젝트 리더보드")
+col_title.title("돈무브 프로젝트 대시보드")
 if col_btn.button("🔄 새로고침", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
