@@ -107,8 +107,8 @@ def _download_csv(file_id: str) -> pd.DataFrame:
         timeout=30,
     )
     r.raise_for_status()
-    from io import StringIO
-    return pd.read_csv(StringIO(r.text), encoding="utf-8-sig")
+    from io import BytesIO
+    return pd.read_csv(BytesIO(r.content), encoding="utf-8-sig")
 
 
 @st.cache_data(ttl=300)
