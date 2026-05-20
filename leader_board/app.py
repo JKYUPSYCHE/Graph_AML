@@ -205,10 +205,14 @@ meta       = all_meta[sel_exp]
 iv_df      = all_iv[sel_exp]
 catalog_df = all_catalog.get(sel_exp)
 
-# used_in_ml == True 필터
+# catalog 기준 필터:
+#   - catalog에 있고 used_in_ml=True  → 포함
+#   - catalog에 있고 used_in_ml=False → 제외
+#   - catalog에 없음                  → 포함 (미등록 피처 파악용)
 if catalog_df is not None:
-    used_cols = set(catalog_df.loc[catalog_df["used_in_ml"] == True, "feature_name"])
-    iv_df = iv_df[iv_df["feature_name"].isin(used_cols)]
+    used_cols     = set(catalog_df.loc[catalog_df["used_in_ml"] == True,  "feature_name"])
+    excluded_cols = set(catalog_df.loc[catalog_df["used_in_ml"] == False, "feature_name"])
+    iv_df = iv_df[~iv_df["feature_name"].isin(excluded_cols)]
 
 
 n_rows     = meta.get("n_rows") or (meta.get("run_shape") or [0])[0]
@@ -222,6 +226,15 @@ st.markdown(f"""
 | 행 수 | {n_rows:,} |
 | positive | {meta.get('positive_rate', 0):.5f} |
 """)
+
+if catalog_df is not None:
+    with st.expander("Feature Catalog"):
+        display_cols = ["feature_name", "description", "data_type", "used_in_ml", "selection_status"]
+        st.dataframe(
+            catalog_df[[c for c in display_cols if c in catalog_df.columns]],
+            use_container_width=True,
+            hide_index=True,
+        )
 
 top_n = st.slider("Top N", 10, min(50, len(iv_df)), 20)
 
@@ -238,7 +251,7 @@ top_df = (
 # description 병합
 if catalog_df is not None:
     desc_map = catalog_df.set_index("feature_name")["description"].to_dict()
-    top_df["_desc"] = top_df["feature_name"].map(desc_map).fillna("")
+    top_df["_desc"] = top_df["feature_name"].map(desc_map).fillna("카탈로그에 없는 피처입니다.")
 else:
     top_df["_desc"] = ""
 
