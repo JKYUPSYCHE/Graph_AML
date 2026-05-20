@@ -49,6 +49,8 @@ def infer_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
     logging.info("=> loaded checkpoint (epoch {})".format(start_epoch))
 
     if not args.reverse_mp:
-        te_f1, te_prec, te_rec = evaluate_homo(te_loader, te_inds, model, te_data, device, args, precrec=True)
+        te_result = evaluate_homo(te_loader, te_inds, model, te_data, device, args)
     else:
-        te_f1, te_prec, te_rec = evaluate_hetero(te_loader, te_inds, model, te_data, device, args, precrec=True)
+        te_result = evaluate_hetero(te_loader, te_inds, model, te_data, device, args)
+
+    logging.info(f"Test — F1: {te_result['f1']:.4f} | Recall: {te_result['recall']:.4f} | Precision: {te_result['precision']:.4f} | AUPRC: {te_result['auprc']:.4f} | Mem: {te_result['memory_mb']:.1f}MB | Time: {te_result['time_s']:.1f}s")
