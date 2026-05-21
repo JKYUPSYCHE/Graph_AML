@@ -470,6 +470,9 @@ with tab_ml:
                     st.session_state[f"fi_sel_{sel}"] = _clicked
             _sel_fi = st.session_state.get(f"fi_sel_{sel}")
 
+            st.divider()
+            st.markdown("##### Weight vs Gain")
+
             fig_scat = px.scatter(
                 fi_df, x="importance_gain", y="importance_weight",
                 size="importance_cover", hover_name="feature",
@@ -497,7 +500,14 @@ with tab_ml:
                 )
             fig_scat.update_layout(height=420, margin=dict(t=20, b=20))
             st.caption("버블 크기 = Cover")
-            st.plotly_chart(fig_scat, use_container_width=True, key=f"fi_scat_{sel}")
+            scat_event = st.plotly_chart(fig_scat, use_container_width=True, on_select="rerun", key=f"fi_scat_{sel}")
+
+            _scat_pts = (scat_event.selection or {}).get("points", []) if scat_event else []
+            if _scat_pts:
+                _scat_clicked = _scat_pts[0].get("hovertext") or _scat_pts[0].get("label")
+                if _scat_clicked:
+                    st.session_state[f"fi_sel_{sel}"] = _scat_clicked
+                    st.rerun()
         else:
             st.info("Feature importance 파일 없음")
 
@@ -689,19 +699,10 @@ with tab_woe:
         iv_event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="iv_chart")
 
         # ── WOE 구간 차트 ──────────────────────────────────────────────────────
-        _iv_pts = (iv_event.selection or {}).get("points", []) if iv_event else []
-        if _iv_pts:
-            _iv_clicked = _iv_pts[0].get("label") or _iv_pts[0].get("y")
-            if _iv_clicked:
-                st.session_state[f"woe_feat_dd_{sel_woe}"] = _iv_clicked
-
-        _all_feats = [""] + iv_df["feature_name"].tolist()
-        _dd_val = st.selectbox(
-            "피처 선택", _all_feats,
-            key=f"woe_feat_dd_{sel_woe}",
-            label_visibility="collapsed",
-        )
-        sel_feature: str | None = _dd_val or None
+        sel_feature: str | None = None
+        pts = (iv_event.selection or {}).get("points", []) if iv_event else []
+        if pts:
+            sel_feature = pts[0].get("label") or pts[0].get("y")
 
         if sel_feature:
             st.markdown(f"#### WOE — `{sel_feature}`")
