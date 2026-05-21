@@ -464,6 +464,11 @@ with tab_ml:
             # 바/버블 선택이 서로를 덮어쓰지 않도록 versioned key 사용
             _bar_ver  = st.session_state.get(f"fi_bar_ver_{sel}", 0)
             _scat_ver = st.session_state.get(f"fi_scat_ver_{sel}", 0)
+            _sel_fi_pre = st.session_state.get(f"fi_sel_{sel}")
+            if _sel_fi_pre and _sel_fi_pre in fi_df["feature"].values:
+                fig_fi.data[0].marker.opacity = [
+                    1.0 if f == _sel_fi_pre else 0.15 for f in fi_df["feature"]
+                ]
 
             fi_event = st.plotly_chart(fig_fi, use_container_width=True, on_select="rerun",
                                        key=f"fi_chart_{sel}_v{_bar_ver}")
@@ -475,7 +480,7 @@ with tab_ml:
                 if _c:
                     _from_bar = _c
 
-            _sel_fi = st.session_state.get(f"fi_sel_{sel}")
+            _sel_fi = _sel_fi_pre
 
             st.divider()
             st.markdown("##### Weight vs Gain")
