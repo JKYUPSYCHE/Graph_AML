@@ -39,6 +39,7 @@ import streamlit as st
 
 st.set_page_config(page_title="돈무브 프로젝트 대시보드", layout="wide", page_icon="📊")
 
+API_KEY           = st.secrets.get("GOOGLE_API_KEY", "")
 PROJECT_FOLDER_ID = st.secrets.get("PROJECT_FOLDER_ID", "")
 
 IV_COLORS = {
@@ -52,35 +53,15 @@ IV_COLORS = {
 IV_CUT = 1.5
 
 
-# ── Service Account Auth ───────────────────────────────────────────────────
-
-@st.cache_resource(ttl=3500)
-def _get_sa_creds():
-    import google.oauth2.service_account
-    sa_info = dict(st.secrets["gcp_service_account"])
-    return google.oauth2.service_account.Credentials.from_service_account_info(
-        sa_info,
-        scopes=["https://www.googleapis.com/auth/drive"],
-    )
-
-
-def _auth_header() -> dict:
-    import google.auth.transport.requests
-    creds = _get_sa_creds()
-    if not creds.valid:
-        creds.refresh(google.auth.transport.requests.Request())
-    return {"Authorization": f"Bearer {creds.token}"}
-
-
 # ── Drive helpers ──────────────────────────────────────────────────────────
 
 def _drive_list(q: str) -> list[dict]:
     r = requests.get(
         "https://www.googleapis.com/drive/v3/files",
-        headers=_auth_header(),
         params={
             "q": q,
             "fields": "files(id,name,modifiedTime)",
+            "key": API_KEY,
             "orderBy": "name",
             "pageSize": 200,
         },
@@ -94,9 +75,7 @@ def _drive_list(q: str) -> list[dict]:
 
 def _download_json(file_id: str) -> object:
     r = requests.get(
-        f"https://www.googleapis.com/drive/v3/files/{file_id}",
-        headers=_auth_header(),
-        params={"alt": "media"},
+        f"https://drive.google.com/uc?export=download&id={file_id}",
         timeout=30,
     )
     r.raise_for_status()
@@ -105,9 +84,7 @@ def _download_json(file_id: str) -> object:
 
 def _download_csv(file_id: str) -> pd.DataFrame:
     r = requests.get(
-        f"https://www.googleapis.com/drive/v3/files/{file_id}",
-        headers=_auth_header(),
-        params={"alt": "media"},
+        f"https://drive.google.com/uc?export=download&id={file_id}",
         timeout=30,
     )
     r.raise_for_status()
@@ -213,14 +190,13 @@ if col_btn.button("🔄 새로고침", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
-if not PROJECT_FOLDER_ID or "gcp_service_account" not in st.secrets:
+if not API_KEY or not PROJECT_FOLDER_ID:
     st.error(
-        "**Streamlit secrets 설정 필요** — `.streamlit/secrets.toml`에 아래 항목을 추가하세요.\n\n"
+        "**Streamlit secrets 설정 필요** — `.streamlit/secrets.toml` 또는 "
+        "`~/.streamlit/secrets.toml`에 아래 항목을 추가하세요.\n\n"
         "```toml\n"
-        'PROJECT_FOLDER_ID = "1abc..."\n\n'
-        "[gcp_service_account]\n"
-        'type = "service_account"\n'
-        "...\n"
+        'GOOGLE_API_KEY    = "AIzaSy..."\n'
+        'PROJECT_FOLDER_ID = "1abc..."\n'
         "```"
     )
     st.stop()
