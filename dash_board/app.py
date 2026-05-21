@@ -91,7 +91,7 @@ def _download_csv(file_id: str) -> pd.DataFrame:
     return pd.read_csv(BytesIO(r.content), encoding="utf-8-sig")
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def _get_folder_id(parent_id: str, name: str) -> str:
     folders = _drive_list(
         f"'{parent_id}' in parents"
@@ -102,7 +102,7 @@ def _get_folder_id(parent_id: str, name: str) -> str:
     return folders[0]["id"] if folders else ""
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def _list_files(folder_id: str) -> dict[str, str]:
     return {f["name"]: f["id"] for f in _drive_list(f"'{folder_id}' in parents and trashed=false")}
 
@@ -145,7 +145,7 @@ def _exp_label(rep: dict) -> str:
 
 # ── Data loaders ───────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def _load_representatives(ml_folder_id: str) -> list[dict]:
     files = _drive_list(
         f"'{ml_folder_id}' in parents"
@@ -155,7 +155,7 @@ def _load_representatives(ml_folder_id: str) -> list[dict]:
     return _download_json(files[0]["id"]) if files else []
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def _load_ml_results(folder_id: str, prefix: str) -> dict:
     fm  = _list_files(folder_id)
     out: dict = {}
@@ -166,7 +166,7 @@ def _load_ml_results(folder_id: str, prefix: str) -> dict:
     return out
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def _get_woe_iv_root_id(project_folder_id: str) -> str:
     data_id = _get_folder_id(project_folder_id, "data")
     if not data_id: return ""
@@ -175,7 +175,7 @@ def _get_woe_iv_root_id(project_folder_id: str) -> str:
     return _get_folder_id(ml_id, "woe_iv")
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def _load_woe_results(woe_iv_folder_id: str) -> dict:
     if not woe_iv_folder_id:
         return {}
@@ -204,7 +204,7 @@ def _read_catalog_bytes(content: bytes) -> pd.DataFrame | None:
     return None
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
     if not folder_id:
         return None
