@@ -574,6 +574,7 @@ with tab_woe:
                     st.session_state[ss_key] = edited
                     st.rerun()
 
+        st.markdown("##### Information Value")
         _col_n, _col_s = st.columns([4, 1])
         top_n    = _col_n.slider("N Features", 10, max(10, len(iv_df)), min(20, len(iv_df)), key="woe_top_n", label_visibility="collapsed")
         woe_desc = _col_s.radio("정렬", ["높은 순", "낮은 순"], horizontal=True, key="woe_sort") == "높은 순"
