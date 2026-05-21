@@ -486,6 +486,8 @@ with tab_ml:
             ))
             fig_scat.update_coloraxes(showscale=False)
             if _sel_fi and _sel_fi in fi_df["feature"].values:
+                _opacities = [1.0 if f == _sel_fi else 0.12 for f in fi_df["feature"]]
+                fig_scat.data[0].marker.opacity = _opacities
                 _row = fi_df[fi_df["feature"] == _sel_fi].iloc[0]
                 _desc_txt = _row["_desc"]
                 _ann_text = (
