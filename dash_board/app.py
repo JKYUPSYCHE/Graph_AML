@@ -107,6 +107,18 @@ def _list_files(folder_id: str) -> dict[str, str]:
     return {f["name"]: f["id"] for f in _drive_list(f"'{folder_id}' in parents and trashed=false")}
 
 
+# ── UI helpers ────────────────────────────────────────────────────────────
+
+def _metric(container, label: str, value: str, sub: str = "") -> None:
+    sub_html = (f" <span style='font-size:0.78rem;font-weight:400;color:#888'>{sub}</span>"
+                if sub else "")
+    container.markdown(
+        f"<div style='font-size:0.875rem;margin-bottom:2px'>{label}</div>"
+        f"<div style='font-size:1.75rem;font-weight:600;line-height:1.2'>{value}{sub_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 # ── Experiment helpers ─────────────────────────────────────────────────────
 
 def _artifact_prefix(rep: dict) -> str:
@@ -120,7 +132,6 @@ def _woe_iv_folder_name(ml_folder: str) -> str:
 
 def _catalog_filename(ml_folder: str) -> str:
     return _woe_iv_folder_name(ml_folder).replace("-", "") + "_feature_catalog.csv"
-
 
 def _is_valid_rep(rep: dict) -> bool:
     woe_folder = _woe_iv_folder_name(rep.get("ml_folder", ""))
@@ -165,7 +176,7 @@ def _get_woe_iv_root_id(project_folder_id: str) -> str:
 
 
 @st.cache_data(ttl=300)
-def _load_woe_results(woe_iv_folder_id: str, catalog_fn: str) -> dict:
+def _load_woe_results(woe_iv_folder_id: str) -> dict:
     if not woe_iv_folder_id:
         return {}
     fm  = _list_files(woe_iv_folder_id)
@@ -177,9 +188,15 @@ def _load_woe_results(woe_iv_folder_id: str, catalog_fn: str) -> dict:
     meta_key = "woe_meta.json" if "woe_meta.json" in fm else ("meta.json" if "meta.json" in fm else None)
     if meta_key:
         out["meta"] = _download_json(fm[meta_key])
-    if catalog_fn in fm:
-        out["catalog"] = _download_csv(fm[catalog_fn])
     return out
+
+
+@st.cache_data(ttl=300)
+def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
+    if not folder_id:
+        return None
+    fm = _list_files(folder_id)
+    return _download_csv(fm[catalog_fn]) if catalog_fn in fm else None
 
 
 # ── Page header ────────────────────────────────────────────────────────────
@@ -233,7 +250,8 @@ for i, rep in enumerate(valid_reps):
     cat_fn           = _catalog_filename(rep["ml_folder"])
     label            = _exp_label(rep)
 
-    woe = _load_woe_results(woe_iv_exp_id, cat_fn)
+    woe     = _load_woe_results(woe_iv_exp_id)
+    catalog = _load_catalog(ml_exp_folder_id, cat_fn) if ml_exp_folder_id else None
     cached_prefix = woe.get("meta", {}).get("prefix") if woe else None
 
     if not woe or "iv_df" not in woe:
@@ -247,6 +265,7 @@ for i, rep in enumerate(valid_reps):
         "rep":          rep,
         "ml":           _load_ml_results(run_folder_id, prefix) if run_folder_id else {},
         "woe":          woe,
+        "catalog":      catalog,
         "stale_status": stale_status,
         "prefix":       prefix,
     }
@@ -309,9 +328,9 @@ with tab_ml:
         val_pos    = (train_summary.get("val_label_summary") or {}).get("positive_ratio", 0)
         best_iter  = train_summary.get("best_iteration", 0)
         train_time = train_summary.get("training_time_sec", 0)
-        c6.metric("Train",               f"{train_rows:,}행  pos {train_pos:.5f}")
-        c7.metric("Val",                 f"{val_rows:,}행  pos {val_pos:.5f}")
-        c8.metric("Best iter / 학습시간", f"{best_iter + 1}  /  {train_time:.0f}초")
+        _metric(c6, "Train",               f"{train_rows:,}",              f"pos {train_pos:.5f}")
+        _metric(c7, "Val",                 f"{val_rows:,}",                f"pos {val_pos:.5f}")
+        _metric(c8, "Best iter / 학습시간", f"{best_iter + 1}  /  {train_time:.0f}", "sec")
 
         st.divider()
 
@@ -375,9 +394,9 @@ with tab_ml:
                 .sort_values("importance_gain")
                 .reset_index(drop=True)
             )
-            _cat_fi = d["woe"].get("catalog")
-            if _cat_fi is not None and not _cat_fi.empty and "feature_name" in _cat_fi.columns:
-                _desc_map = _cat_fi.set_index("feature_name")["description"].to_dict()
+            _cat_fi = d.get("catalog")
+            if _cat_fi is not None and not _cat_fi.empty and "피처명" in _cat_fi.columns:
+                _desc_map = _cat_fi.set_index("피처명")["설명"].to_dict()
                 fi_df["_desc"] = fi_df["feature"].map(lambda f: _desc_map.get(f) or "")
             else:
                 fi_df["_desc"] = ""
@@ -456,19 +475,19 @@ with tab_woe:
         iv_df      = woe["iv_df"].copy()
         bin_df     = woe.get("bin_df")
         meta       = woe.get("meta", {})
-        catalog_df = woe.get("catalog")
+        catalog_df = d_woe.get("catalog")
 
         # 카탈로그 미등록 피처 탐지
         unregistered: set[str] = set()
         if catalog_df is not None and not catalog_df.empty:
-            reg_set      = set(catalog_df["feature_name"].tolist())
+            reg_set      = set(catalog_df["피처명"].tolist())
             unregistered = set(iv_df["feature_name"].tolist()) - reg_set
 
         # session state 기반 catalog used_in_ml 편집
         ss_key = f"catalog_{sel_woe}"
         if catalog_df is not None and not catalog_df.empty:
             if ss_key not in st.session_state:
-                keep_cols = [c for c in ["feature_name", "description", "data_type", "used_in_ml", "note"]
+                keep_cols = [c for c in ["피처명", "설명", "used_in_ml", "데이터 타입", "비고"]
                              if c in catalog_df.columns]
                 _init = catalog_df[keep_cols].copy()
                 _init["used_in_ml"] = _init["used_in_ml"].map(
@@ -476,7 +495,7 @@ with tab_woe:
                 ).astype(bool)
                 st.session_state[ss_key] = _init
             active_catalog = st.session_state[ss_key]
-            excluded = set(active_catalog.loc[~active_catalog["used_in_ml"], "feature_name"])
+            excluded = set(active_catalog.loc[~active_catalog["used_in_ml"], "피처명"])
             iv_df = iv_df[~iv_df["feature_name"].isin(excluded)]
         else:
             active_catalog = None
@@ -506,15 +525,14 @@ with tab_woe:
         if active_catalog is not None:
             with st.expander("Feature Catalog"):
                 col_cfg = {
-                    "used_in_ml":   st.column_config.CheckboxColumn("used_in_ml",
-                                        help="체크 해제 시 차트에서 제외 (앱 내에서만 적용)"),
-                    "feature_name": st.column_config.TextColumn("feature_name", disabled=True),
-                    "description":  st.column_config.TextColumn("description",  disabled=True),
+                    "used_in_ml": st.column_config.CheckboxColumn("used_in_ml",
+                                      help="체크 해제 시 차트에서 제외 (앱 내에서만 적용)"),
+                    "피처명":    st.column_config.TextColumn("피처명", disabled=True),
+                    "설명":      st.column_config.TextColumn("설명",   disabled=True),
                 }
-                if "data_type" in active_catalog.columns:
-                    col_cfg["data_type"] = st.column_config.TextColumn("data_type", disabled=True)
-                if "note" in active_catalog.columns:
-                    col_cfg["note"] = st.column_config.TextColumn("note", disabled=True)
+                for _col in ["데이터 타입", "비고"]:
+                    if _col in active_catalog.columns:
+                        col_cfg[_col] = st.column_config.TextColumn(_col, disabled=True)
                 edited = st.data_editor(
                     active_catalog, use_container_width=True, hide_index=True,
                     column_config=col_cfg, key=f"editor_{sel_woe}",
@@ -534,7 +552,7 @@ with tab_woe:
         )
 
         if catalog_df is not None and not catalog_df.empty:
-            desc_map    = catalog_df.set_index("feature_name")["description"].to_dict()
+            desc_map    = catalog_df.set_index("피처명")["설명"].to_dict()
             top_df["_desc"] = top_df["feature_name"].apply(
                 lambda f: "⚠ 카탈로그 미등록" if f in unregistered else (desc_map.get(f) or "")
             )
