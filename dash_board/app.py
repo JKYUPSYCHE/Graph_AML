@@ -184,9 +184,8 @@ def _load_woe_results(woe_iv_folder_id: str) -> dict:
         out["iv_df"] = pd.DataFrame(_download_json(fm["iv_summary.json"]))
     if "bin_table.json" in fm:
         out["bin_df"] = pd.DataFrame(_download_json(fm["bin_table.json"]))
-    meta_key = "woe_meta.json" if "woe_meta.json" in fm else ("meta.json" if "meta.json" in fm else None)
-    if meta_key:
-        out["meta"] = _download_json(fm[meta_key])
+    if "woe_meta.json" in fm:
+        out["meta"] = _download_json(fm["woe_meta.json"])
     return out
 
 
@@ -199,31 +198,25 @@ def _read_catalog_bytes(content: bytes) -> pd.DataFrame | None:
                 return df
             if "피쳐명" in df.columns:
                 return df.rename(columns={"피쳐명": "피처명"})
-            if "feature_name" in df.columns:
-                return df.rename(columns={"feature_name": "피처명", "description": "설명"})
         except Exception:
             continue
     return None
 
 
 @st.cache_data(ttl=300)
-def _load_catalog(ml_folder_id: str, woe_iv_folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
-    for folder_id in (ml_folder_id, woe_iv_folder_id):
-        if not folder_id:
-            continue
-        fm = _list_files(folder_id)
-        if catalog_fn not in fm:
-            continue
-        r = requests.get(
-            f"https://drive.google.com/uc?export=download&id={fm[catalog_fn]}",
-            timeout=30,
-        )
-        if not r.ok:
-            continue
-        df = _read_catalog_bytes(r.content)
-        if df is not None:
-            return df
-    return None
+def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
+    if not folder_id:
+        return None
+    fm = _list_files(folder_id)
+    if catalog_fn not in fm:
+        return None
+    r = requests.get(
+        f"https://drive.google.com/uc?export=download&id={fm[catalog_fn]}",
+        timeout=30,
+    )
+    if not r.ok:
+        return None
+    return _read_catalog_bytes(r.content)
 
 
 # ── Page header ────────────────────────────────────────────────────────────
@@ -278,7 +271,7 @@ for i, rep in enumerate(valid_reps):
     label            = _exp_label(rep)
 
     woe     = _load_woe_results(woe_iv_exp_id)
-    catalog = _load_catalog(ml_exp_folder_id, woe_iv_exp_id, cat_fn)
+    catalog = _load_catalog(ml_exp_folder_id, cat_fn)
     cached_prefix = woe.get("meta", {}).get("prefix") if woe else None
 
     if not woe or "iv_df" not in woe:
@@ -325,7 +318,7 @@ with tab_ml:
     ml  = d["ml"]
 
     note = rep.get("note", "")
-    st.caption(f"**상태**: {rep.get('status', '—')}" + (f"  |  {note}" if note else ""))
+    st.caption(f"**Status**: {rep.get('status', '—')}")
 
     if not ml:
         st.info("학습된 모델이 없습니다.")
@@ -337,7 +330,7 @@ with tab_ml:
         m             = metrics_raw.get("metrics", metrics_raw)
 
         # ── 성능 지표 카드 ────────────────────────────────────────────────────
-        st.markdown("#### 성능 지표")
+        st.markdown("#### Metrics")
         c1, c2, c3, c4, c5 = st.columns(5)
         f1    = m.get("f1", 0)
         aucpr = m.get("average_precision") or train_summary.get("best_score")
@@ -359,13 +352,23 @@ with tab_ml:
         _metric(c7, "Val",                 f"{val_rows:,}",                f"pos {val_pos:.5f}")
         _metric(c8, "Best iter / 학습시간", f"{best_iter + 1}  /  {train_time:.0f}", "sec")
 
+        xgb_params = train_summary.get("xgboost_params", {})
+        if xgb_params:
+            with st.expander("Hyper Parameters"):
+                _p = {k: v for k, v in xgb_params.items() if v is not None}
+                n_cols = 4
+                rows = [list(_p.items())[i:i+n_cols] for i in range(0, len(_p), n_cols)]
+                for row in rows:
+                    for col, (k, v) in zip(st.columns(n_cols), row):
+                        col.metric(k, v)
+
         st.divider()
 
         # ── 학습 곡선 + Confusion Matrix ──────────────────────────────────────
         col_curve, col_cm = st.columns([3, 2])
 
         with col_curve:
-            st.markdown("##### 학습 곡선")
+            st.markdown("##### Learning Curve")
             diag     = train_summary.get("xgboost_diagnostics", {})
             eval_res = (diag.get("evals_result") or {}).get("validation_0", {})
             if eval_res.get("f1"):
@@ -387,7 +390,7 @@ with tab_ml:
                 st.info("학습 곡선 데이터 없음")
 
         with col_cm:
-            st.markdown("##### Confusion Matrix (Val)")
+            st.markdown("##### Confusion Matrix")
             if conf_mat is not None and not conf_mat.empty:
                 row = conf_mat.iloc[0]
                 tn, fp, fn, tp = int(row.get("tn",0)), int(row.get("fp",0)), int(row.get("fn",0)), int(row.get("tp",0))
@@ -400,10 +403,7 @@ with tab_ml:
                 fig_cm.update_coloraxes(showscale=False)
                 fig_cm.update_layout(height=270, margin=dict(t=10, b=10))
                 st.plotly_chart(fig_cm, use_container_width=True)
-                dp = tp + fp if (tp + fp) > 0 else 1
-                dr = tp + fn if (tp + fn) > 0 else 1
-                st.caption(f"TP={tp:,} | FP={fp:,} | FN={fn:,} | TN={tn:,}  "
-                           f"| Precision {tp/dp:.3f} | Recall {tp/dr:.3f}")
+                st.caption(f"TP={tp:,} | FP={fp:,} | FN={fn:,} | TN={tn:,}")
             else:
                 st.info("Confusion matrix 파일 없음")
 
@@ -411,12 +411,14 @@ with tab_ml:
 
         # ── Feature Importance ────────────────────────────────────────────────
         if feat_imp is not None and not feat_imp.empty:
-            st.markdown("##### Feature Importance (by Gain)")
+            st.markdown("##### Feature Importance")
             n_total  = len(feat_imp)
-            top_n_fi = st.slider("Top N", 10, min(50, n_total), min(20, n_total), key="fi_slider")
+            _col_n, _col_s = st.columns([4, 1])
+            top_n_fi = _col_n.slider("표시 개수", 10, n_total, min(20, n_total), key="fi_slider")
+            fi_desc  = _col_s.radio("정렬", ["높은 순", "낮은 순"], horizontal=True, key="fi_sort") == "높은 순"
             fi_df = (
                 feat_imp
-                .sort_values("rank_by_gain")
+                .sort_values("importance_gain", ascending=not fi_desc)
                 .head(top_n_fi)
                 .sort_values("importance_gain")
                 .reset_index(drop=True)
@@ -431,7 +433,7 @@ with tab_ml:
                 fi_df, x="importance_gain", y="feature", orientation="h",
                 color="importance_gain", color_continuous_scale="Blues",
                 labels={"importance_gain": "Gain", "feature": "Feature"},
-                title=f"Top {top_n_fi} Features by Gain",
+                title=f"Feature Importance — {'높은 순' if fi_desc else '낮은 순'} {top_n_fi}개",
                 custom_data=["importance_weight", "importance_cover", "rank_by_gain", "_desc"],
             )
             fig_fi.update_traces(hovertemplate=(
@@ -455,7 +457,7 @@ with tab_ml:
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_woe:
     st.caption(
-        "**WOE(Weight of Evidence)**: 각 구간에서 fraud 비율과 정상 비율의 로그 비. &nbsp;|&nbsp; "
+        "**WOE(Weight of Evidence)**: 각 구간에서 fraud 비율과 정상 비율의 로그 비.  \n"
         "**IV(Information Value)**: WOE를 전체 구간에 걸쳐 집계한 변수 단위 예측력 요약."
     )
 
@@ -568,12 +570,14 @@ with tab_woe:
                     st.session_state[ss_key] = edited
                     st.rerun()
 
-        top_n = st.slider("Top N", 10, min(50, max(10, len(iv_df))), min(20, max(10, len(iv_df))), key="woe_top_n")
+        _col_n, _col_s = st.columns([4, 1])
+        top_n    = _col_n.slider("표시 개수", 10, max(10, len(iv_df)), min(20, len(iv_df)), key="woe_top_n")
+        woe_desc = _col_s.radio("정렬", ["높은 순", "낮은 순"], horizontal=True, key="woe_sort") == "높은 순"
 
         top_df = (
             iv_df.copy()
             .assign(iv=lambda d: d["iv"].fillna(0))
-            .head(top_n)
+            .pipe(lambda d: d.head(top_n) if woe_desc else d.tail(top_n))
             .sort_values("iv")
             .reset_index(drop=True)
         )
@@ -596,7 +600,7 @@ with tab_woe:
             color="iv_strength", color_discrete_map=IV_COLORS,
             custom_data=["iv", "_desc"],
             labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
-            title=f"{sel_woe} — Top {top_n} Features by IV",
+            title=f"{sel_woe} — IV {'높은 순' if woe_desc else '낮은 순'} {top_n}개",
         )
         fig.update_traces(
             hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<br>%{customdata[1]}<extra></extra>"
