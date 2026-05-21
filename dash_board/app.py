@@ -290,9 +290,10 @@ with tab_ml:
         # ── 성능 지표 카드 ────────────────────────────────────────────────────
         st.markdown("#### 성능 지표")
         c1, c2, c3, c4, c5 = st.columns(5)
+        f1    = m.get("f1", 0)
         aucpr = m.get("average_precision") or train_summary.get("best_score")
-        c1.metric("AUCPR",     f"{aucpr:.4f}"           if aucpr is not None else "—")
-        c2.metric("F1",        f"{m.get('f1', 0):.4f}")
+        c1.metric("F1",        f"{f1:.4f}")
+        c2.metric("AUCPR",     f"{aucpr:.4f}"           if aucpr is not None else "—")
         c3.metric("Precision", f"{m.get('precision', 0):.4f}")
         c4.metric("Recall",    f"{m.get('recall', 0):.4f}")
         c5.metric("Threshold", f"{m.get('threshold', 0):.4f}",
@@ -316,21 +317,31 @@ with tab_ml:
 
         with col_curve:
             st.markdown("##### 학습 곡선")
-            diag       = train_summary.get("xgboost_diagnostics", {})
-            curve_vals = (diag.get("evals_result") or {}).get("validation_0", {}).get("aucpr", [])
+            diag     = train_summary.get("xgboost_diagnostics", {})
+            eval_res = (diag.get("evals_result") or {}).get("validation_0", {})
+            # F1 우선, 없으면 AUCPR 폴백
+            if eval_res.get("f1"):
+                curve_key   = "f1"
+                curve_label = "F1"
+                curve_best  = f1
+            else:
+                curve_key   = "aucpr"
+                curve_label = "AUCPR"
+                curve_best  = aucpr or 0
+            curve_vals = eval_res.get(curve_key, [])
             if curve_vals:
                 curve_df = pd.DataFrame({
-                    "Iteration": range(1, len(curve_vals) + 1),
-                    "AUCPR":     curve_vals,
+                    "Iteration":  range(1, len(curve_vals) + 1),
+                    curve_label:  curve_vals,
                 })
                 fig_curve = px.line(
-                    curve_df, x="Iteration", y="AUCPR",
-                    title=f"Validation AUCPR  (best={aucpr:.4f} @ iter {best_iter + 1})",
+                    curve_df, x="Iteration", y=curve_label,
+                    title=f"Validation {curve_label}  (best={curve_best:.4f} @ iter {best_iter + 1})",
                 )
                 fig_curve.add_vline(
                     x=best_iter + 1,
                     line_dash="dash", line_color="#d62728",
-                    annotation_text=f"best",
+                    annotation_text="best",
                     annotation_font_size=11,
                 )
                 fig_curve.update_layout(height=310, margin=dict(t=40, b=20))
@@ -381,6 +392,12 @@ with tab_ml:
                 .sort_values("importance_gain")
                 .reset_index(drop=True)
             )
+            _cat_fi = d["woe"].get("catalog")
+            if _cat_fi is not None and not _cat_fi.empty and "feature_name" in _cat_fi.columns:
+                _desc_map = _cat_fi.set_index("feature_name")["description"].to_dict()
+                fi_df["_desc"] = fi_df["feature"].map(lambda f: _desc_map.get(f) or "")
+            else:
+                fi_df["_desc"] = ""
             fig_fi = px.bar(
                 fi_df,
                 x="importance_gain", y="feature",
@@ -389,7 +406,7 @@ with tab_ml:
                 color_continuous_scale="Blues",
                 labels={"importance_gain": "Gain", "feature": "Feature"},
                 title=f"Top {top_n_fi} Features by Gain",
-                custom_data=["importance_weight", "importance_cover", "rank_by_gain"],
+                custom_data=["importance_weight", "importance_cover", "rank_by_gain", "_desc"],
             )
             fig_fi.update_traces(
                 hovertemplate=(
@@ -397,7 +414,8 @@ with tab_ml:
                     "Gain: %{x:,.1f}<br>"
                     "Weight: %{customdata[0]:,.0f}<br>"
                     "Cover: %{customdata[1]:,.1f}<br>"
-                    "Rank: %{customdata[2]}<extra></extra>"
+                    "Rank: %{customdata[2]}<br>"
+                    "%{customdata[3]}<extra></extra>"
                 )
             )
             fig_fi.update_coloraxes(showscale=False)
