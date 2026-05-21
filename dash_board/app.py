@@ -796,6 +796,10 @@ with tab_woe:
                         height=400, xaxis_tickangle=-40,
                         legend=dict(title=""),
                         margin=dict(t=20),
+                        xaxis=dict(
+                            categoryorder="array",
+                            categoryarray=feat_sorted["bin_label"].tolist(),
+                        ),
                     )
                     fig_woe.update_yaxes(title_text="WOE", secondary_y=False)
                     fig_woe.update_yaxes(title_text="Count", secondary_y=True, showgrid=False)
