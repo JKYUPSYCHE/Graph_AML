@@ -22,7 +22,6 @@ Drive layout (PROJECT_FOLDER_ID 하위):
             woe_iv_cache.json
             ml-01/
                 iv_summary.json  bin_table.json  woe_meta.json
-                ml01_feature_catalog.csv
             ml-02/ ...
 """
 from __future__ import annotations
@@ -200,6 +199,10 @@ def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
         return None
     df = _download_csv(fm[catalog_fn])
     df.columns = df.columns.str.strip()
+    if "feature_name" in df.columns and "피처명" not in df.columns:
+        df = df.rename(columns={"feature_name": "피처명", "description": "설명"})
+    if "피처명" not in df.columns:
+        return None
     return df
 
 
