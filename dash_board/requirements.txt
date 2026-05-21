@@ -2,3 +2,4 @@ streamlit>=1.35
 requests
 pandas
 plotly
+google-auth
