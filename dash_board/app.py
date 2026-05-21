@@ -461,23 +461,43 @@ with tab_ml:
                 yaxis={"categoryorder": "total ascending" if fi_desc else "total descending"},
                 margin=dict(t=40, b=20),
             )
-            st.plotly_chart(fig_fi, use_container_width=True)
+            fi_event = st.plotly_chart(fig_fi, use_container_width=True, on_select="rerun", key=f"fi_chart_{sel}")
 
-            with st.expander("Gain vs Weight 분포"):
-                fig_scat = px.scatter(
-                    fi_df, x="importance_gain", y="importance_weight",
-                    size="importance_cover", hover_name="feature",
-                    color="importance_gain", color_continuous_scale="Blues",
-                    labels={"importance_gain": "Gain", "importance_weight": "Weight", "importance_cover": "Cover"},
-                    custom_data=["importance_cover", "_desc"],
-                )
-                fig_scat.update_traces(hovertemplate=(
-                    "<b>%{hovertext}</b><br>Gain: %{x:,.1f}<br>Weight: %{y:,.0f}<br>"
-                    "Cover: %{customdata[0]:,.1f}<br>%{customdata[1]}<extra></extra>"
+            _fi_pts = (fi_event.selection or {}).get("points", []) if fi_event else []
+            if _fi_pts:
+                _clicked = _fi_pts[0].get("label") or _fi_pts[0].get("y")
+                if _clicked:
+                    st.session_state[f"fi_sel_{sel}"] = _clicked
+            _sel_fi = st.session_state.get(f"fi_sel_{sel}")
+
+            fig_scat = px.scatter(
+                fi_df, x="importance_gain", y="importance_weight",
+                size="importance_cover", hover_name="feature",
+                color="importance_gain", color_continuous_scale="Blues",
+                labels={"importance_gain": "Gain", "importance_weight": "Weight", "importance_cover": "Cover"},
+                custom_data=["importance_cover", "_desc"],
+            )
+            fig_scat.update_traces(hovertemplate=(
+                "<b>%{hovertext}</b><br>Gain: %{x:,.1f}<br>Weight: %{y:,.0f}<br>"
+                "Cover: %{customdata[0]:,.1f}<br>%{customdata[1]}<extra></extra>"
+            ))
+            fig_scat.update_coloraxes(showscale=False)
+            if _sel_fi and _sel_fi in fi_df["feature"].values:
+                _row = fi_df[fi_df["feature"] == _sel_fi].iloc[0]
+                fig_scat.add_trace(go.Scatter(
+                    x=[_row["importance_gain"]], y=[_row["importance_weight"]],
+                    mode="markers",
+                    marker=dict(color="#d62728", size=22, symbol="circle-open", line=dict(width=3)),
+                    name="선택", hoverinfo="skip",
                 ))
-                fig_scat.update_coloraxes(showscale=False)
-                fig_scat.update_layout(height=420, margin=dict(t=20, b=20))
-                st.plotly_chart(fig_scat, use_container_width=True)
+                fig_scat.add_annotation(
+                    x=_row["importance_gain"], y=_row["importance_weight"],
+                    text=_sel_fi, showarrow=True, arrowhead=2,
+                    font=dict(size=10, color="#d62728"),
+                )
+            fig_scat.update_layout(height=420, margin=dict(t=20, b=20))
+            st.caption("버블 크기 = Cover")
+            st.plotly_chart(fig_scat, use_container_width=True, key=f"fi_scat_{sel}")
         else:
             st.info("Feature importance 파일 없음")
 
@@ -669,10 +689,19 @@ with tab_woe:
         iv_event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="iv_chart")
 
         # ── WOE 구간 차트 ──────────────────────────────────────────────────────
-        sel_feature: str | None = None
-        pts = (iv_event.selection or {}).get("points", []) if iv_event else []
-        if pts:
-            sel_feature = pts[0].get("label") or pts[0].get("y")
+        _iv_pts = (iv_event.selection or {}).get("points", []) if iv_event else []
+        if _iv_pts:
+            _iv_clicked = _iv_pts[0].get("label") or _iv_pts[0].get("y")
+            if _iv_clicked:
+                st.session_state[f"woe_feat_dd_{sel_woe}"] = _iv_clicked
+
+        _all_feats = [""] + iv_df["feature_name"].tolist()
+        _dd_val = st.selectbox(
+            "피처 선택", _all_feats,
+            key=f"woe_feat_dd_{sel_woe}",
+            label_visibility="collapsed",
+        )
+        sel_feature: str | None = _dd_val or None
 
         if sel_feature:
             st.markdown(f"#### WOE — `{sel_feature}`")
