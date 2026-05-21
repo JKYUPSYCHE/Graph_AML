@@ -190,34 +190,40 @@ def _load_woe_results(woe_iv_folder_id: str) -> dict:
     return out
 
 
-@st.cache_data(ttl=300)
-def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
-    if not folder_id:
-        return None
-    fm = _list_files(folder_id)
-    if catalog_fn not in fm:
-        return None
-    r = requests.get(
-        f"https://drive.google.com/uc?export=download&id={fm[catalog_fn]}",
-        timeout=30,
-    )
-    r.raise_for_status()
-    content = r.content
-    df = None
+def _read_catalog_bytes(content: bytes) -> pd.DataFrame | None:
     for enc in ("utf-8-sig", "cp949", "utf-8", "euc-kr"):
         try:
-            _df = pd.read_csv(BytesIO(content), encoding=enc)
-            _df.columns = _df.columns.str.strip()
-            if "피처명" in _df.columns or "feature_name" in _df.columns:
-                df = _df
-                break
+            df = pd.read_csv(BytesIO(content), encoding=enc)
+            df.columns = df.columns.str.strip()
+            if "피처명" in df.columns:
+                return df
+            if "피쳐명" in df.columns:
+                return df.rename(columns={"피쳐명": "피처명"})
+            if "feature_name" in df.columns:
+                return df.rename(columns={"feature_name": "피처명", "description": "설명"})
         except Exception:
             continue
-    if df is None:
-        return None
-    if "feature_name" in df.columns and "피처명" not in df.columns:
-        df = df.rename(columns={"feature_name": "피처명", "description": "설명"})
-    return df
+    return None
+
+
+@st.cache_data(ttl=300)
+def _load_catalog(ml_folder_id: str, woe_iv_folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
+    for folder_id in (ml_folder_id, woe_iv_folder_id):
+        if not folder_id:
+            continue
+        fm = _list_files(folder_id)
+        if catalog_fn not in fm:
+            continue
+        r = requests.get(
+            f"https://drive.google.com/uc?export=download&id={fm[catalog_fn]}",
+            timeout=30,
+        )
+        if not r.ok:
+            continue
+        df = _read_catalog_bytes(r.content)
+        if df is not None:
+            return df
+    return None
 
 
 # ── Page header ────────────────────────────────────────────────────────────
@@ -272,7 +278,7 @@ for i, rep in enumerate(valid_reps):
     label            = _exp_label(rep)
 
     woe     = _load_woe_results(woe_iv_exp_id)
-    catalog = _load_catalog(ml_exp_folder_id, cat_fn) if ml_exp_folder_id else None
+    catalog = _load_catalog(ml_exp_folder_id, woe_iv_exp_id, cat_fn)
     cached_prefix = woe.get("meta", {}).get("prefix") if woe else None
 
     if not woe or "iv_df" not in woe:
