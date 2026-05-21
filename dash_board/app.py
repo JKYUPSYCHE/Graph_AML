@@ -37,7 +37,7 @@ from plotly.subplots import make_subplots
 import requests
 import streamlit as st
 
-st.set_page_config(page_title="돈무브 프로젝트 대시보드", layout="wide", page_icon="📊")
+st.set_page_config(page_title="돈무브 프로젝트 대시보드", layout="wide", page_icon="💱")
 
 API_KEY           = st.secrets.get("GOOGLE_API_KEY", "")
 PROJECT_FOLDER_ID = st.secrets.get("PROJECT_FOLDER_ID", "")
