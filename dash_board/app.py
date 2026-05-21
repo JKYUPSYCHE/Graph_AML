@@ -461,13 +461,20 @@ with tab_ml:
                 yaxis={"categoryorder": "total ascending" if fi_desc else "total descending"},
                 margin=dict(t=40, b=20),
             )
-            fi_event = st.plotly_chart(fig_fi, use_container_width=True, on_select="rerun", key=f"fi_chart_{sel}")
+            # 바/버블 선택이 서로를 덮어쓰지 않도록 versioned key 사용
+            _bar_ver  = st.session_state.get(f"fi_bar_ver_{sel}", 0)
+            _scat_ver = st.session_state.get(f"fi_scat_ver_{sel}", 0)
 
-            _fi_pts = (fi_event.selection or {}).get("points", []) if fi_event else []
+            fi_event = st.plotly_chart(fig_fi, use_container_width=True, on_select="rerun",
+                                       key=f"fi_chart_{sel}_v{_bar_ver}")
+
+            _fi_pts  = (fi_event.selection or {}).get("points", []) if fi_event else []
+            _from_bar = None
             if _fi_pts:
-                _clicked = _fi_pts[0].get("label") or _fi_pts[0].get("y")
-                if _clicked:
-                    st.session_state[f"fi_sel_{sel}"] = _clicked
+                _c = _fi_pts[0].get("label") or _fi_pts[0].get("y")
+                if _c:
+                    _from_bar = _c
+
             _sel_fi = st.session_state.get(f"fi_sel_{sel}")
 
             st.divider()
@@ -497,16 +504,14 @@ with tab_ml:
                     f"Cover: {_row['importance_cover']:,.1f}"
                     + (f"<br>{_desc_txt}" if _desc_txt else "")
                 )
-                # 버블 크기를 px.scatter의 실제 sizeref 기준으로 맞춤
-                _sizeref = fig_scat.data[0].marker.sizeref or 1
+                _sizeref  = fig_scat.data[0].marker.sizeref or 1
                 _bubble_px = 2 * (_row["importance_cover"] / _sizeref) ** 0.5
-                _standoff = max(6, _bubble_px / 2 + 3)
+                _standoff  = max(6, _bubble_px / 2 + 3)
                 fig_scat.add_trace(go.Scatter(
                     x=[_row["importance_gain"]], y=[_row["importance_weight"]],
                     mode="markers",
                     marker=dict(
-                        size=_bubble_px,
-                        symbol="circle-open",
+                        size=_bubble_px, symbol="circle-open",
                         color="rgba(0,0,0,0)",
                         line=dict(color="#d62728", width=2.5),
                     ),
@@ -518,20 +523,30 @@ with tab_ml:
                     showarrow=True, arrowhead=2, arrowwidth=1.5, arrowcolor="#d62728",
                     ax=55, ay=-65, standoff=_standoff,
                     bgcolor="rgba(255,255,255,0.88)", bordercolor="#d62728", borderwidth=1,
-                    font=dict(size=10, color="#333333"),
-                    align="left",
+                    font=dict(size=10, color="#333333"), align="left",
                 )
             fig_scat.update_layout(height=420, margin=dict(t=20, b=20))
             st.caption("버블 크기 = Cover")
-            scat_event = st.plotly_chart(fig_scat, use_container_width=True, on_select="rerun", key=f"fi_scat_{sel}")
+            scat_event = st.plotly_chart(fig_scat, use_container_width=True, on_select="rerun",
+                                         key=f"fi_scat_{sel}_v{_scat_ver}")
 
             _scat_pts = (scat_event.selection or {}).get("points", []) if scat_event else []
+            _from_scat = None
             if _scat_pts:
                 _cd = _scat_pts[0].get("customdata") or []
-                _scat_clicked = _cd[2] if len(_cd) > 2 else None
-                if _scat_clicked:
-                    st.session_state[f"fi_sel_{sel}"] = _scat_clicked
-                    st.rerun()
+                if len(_cd) > 2:
+                    _from_scat = _cd[2]
+
+            # 산점도 클릭 우선 처리 — 변경된 경우에만 반응
+            _cur = st.session_state.get(f"fi_sel_{sel}")
+            if _from_scat and _from_scat != _cur:
+                st.session_state[f"fi_sel_{sel}"]       = _from_scat
+                st.session_state[f"fi_bar_ver_{sel}"]   = _bar_ver + 1   # 바 선택 초기화
+                st.rerun()
+            elif _from_bar and _from_bar != _cur:
+                st.session_state[f"fi_sel_{sel}"]        = _from_bar
+                st.session_state[f"fi_scat_ver_{sel}"]   = _scat_ver + 1  # 버블 선택 초기화
+                st.rerun()
         else:
             st.info("Feature importance 파일 없음")
 
