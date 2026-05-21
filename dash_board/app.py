@@ -33,6 +33,7 @@ from io import BytesIO
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 import streamlit as st
 
@@ -395,14 +396,23 @@ with tab_ml:
             if conf_mat is not None and not conf_mat.empty:
                 row = conf_mat.iloc[0]
                 tn, fp, fn, tp = int(row.get("tn",0)), int(row.get("fp",0)), int(row.get("fn",0)), int(row.get("tp",0))
+                tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+                fnr = fn / (tp + fn) if (tp + fn) > 0 else 0
+                tnr = tn / (fp + tn) if (fp + tn) > 0 else 0
+                z_text = [
+                    [f"{tp:,}<br>TPR {tpr:.1%}", f"{fn:,}<br>FNR {fnr:.1%}"],
+                    [f"{fp:,}<br>FPR {fpr:.1%}", f"{tn:,}<br>TNR {tnr:.1%}"],
+                ]
                 fig_cm = px.imshow(
                     [[tp, fn], [fp, tn]],
                     x=["Pred Fraud", "Pred Normal"],
                     y=["Actual Fraud", "Actual Normal"],
-                    color_continuous_scale="Blues", text_auto=True, title="",
+                    color_continuous_scale="Blues", text_auto=False, title="",
                 )
+                fig_cm.update_traces(text=z_text, texttemplate="%{text}", textfont={"size": 11})
                 fig_cm.update_coloraxes(showscale=False)
-                fig_cm.update_layout(height=270, margin=dict(t=10, b=10))
+                fig_cm.update_layout(height=290, margin=dict(t=10, b=10))
                 st.plotly_chart(fig_cm, use_container_width=True)
                 st.markdown(
                     f"<div style='text-align:center;font-size:0.8rem;color:#888'>"
@@ -452,6 +462,22 @@ with tab_ml:
                 margin=dict(t=40, b=20),
             )
             st.plotly_chart(fig_fi, use_container_width=True)
+
+            with st.expander("Gain vs Weight 분포"):
+                fig_scat = px.scatter(
+                    fi_df, x="importance_gain", y="importance_weight",
+                    size="importance_cover", hover_name="feature",
+                    color="importance_gain", color_continuous_scale="Blues",
+                    labels={"importance_gain": "Gain", "importance_weight": "Weight", "importance_cover": "Cover"},
+                    custom_data=["importance_cover", "_desc"],
+                )
+                fig_scat.update_traces(hovertemplate=(
+                    "<b>%{hovertext}</b><br>Gain: %{x:,.1f}<br>Weight: %{y:,.0f}<br>"
+                    "Cover: %{customdata[0]:,.1f}<br>%{customdata[1]}<extra></extra>"
+                ))
+                fig_scat.update_coloraxes(showscale=False)
+                fig_scat.update_layout(height=420, margin=dict(t=20, b=20))
+                st.plotly_chart(fig_scat, use_container_width=True)
         else:
             st.info("Feature importance 파일 없음")
 
@@ -615,7 +641,7 @@ with tab_woe:
                 "ticktext": ["0", "0.5", "1.0", "1.5"],
                 "title":    "IV",
             },
-            legend_title_text="IV 강도",
+            legend_title_text="예측력",
         )
 
         for i, row in top_df[top_df["iv"] > IV_CUT].iterrows():
@@ -661,19 +687,42 @@ with tab_woe:
                     missing_bins = feat_bins[feat_bins["missing_flag"]]
                     feat_sorted  = pd.concat([main_bins, missing_bins], ignore_index=True)
                     feat_sorted["_color"] = feat_sorted["woe"].apply(lambda w: "fraud↑" if w >= 0 else "fraud↓")
-                    fig_woe = px.bar(
-                        feat_sorted, x="bin_label", y="woe",
-                        color="_color",
-                        color_discrete_map={"fraud↑": "#d62728", "fraud↓": "#2ca02c"},
-                        custom_data=["count", "positive_count", "positive_rate", "iv_bin"],
-                        labels={"bin_label": "구간", "woe": "WOE", "_color": ""},
-                        title=f"{sel_feature} — WOE by Bin",
+                    fig_woe = make_subplots(specs=[[{"secondary_y": True}]])
+                    for _lbl, _hex in [("fraud↑", "#d62728"), ("fraud↓", "#2ca02c")]:
+                        _sub = feat_sorted[feat_sorted["_color"] == _lbl]
+                        if _sub.empty:
+                            continue
+                        fig_woe.add_trace(
+                            go.Bar(
+                                x=_sub["bin_label"], y=_sub["woe"],
+                                name=_lbl, marker_color=_hex,
+                                customdata=_sub[["count", "positive_count", "positive_rate", "iv_bin"]].values,
+                                hovertemplate=(
+                                    "<b>%{x}</b><br>WOE: %{y:.4f}<br>"
+                                    "Count: %{customdata[0]:,}<br>"
+                                    "Positive: %{customdata[1]:,}<br>"
+                                    "Positive Rate: %{customdata[2]:.5f}<br>"
+                                    "IV Bin: %{customdata[3]:.4f}<extra></extra>"
+                                ),
+                            ),
+                            secondary_y=False,
+                        )
+                    fig_woe.add_trace(
+                        go.Scatter(
+                            x=feat_sorted["bin_label"], y=feat_sorted["count"],
+                            mode="lines+markers", name="Count",
+                            line=dict(color="#aaaaaa", width=1.5, dash="dot"),
+                            marker=dict(size=4, color="#888888"),
+                            hovertemplate="%{x}<br>Count: %{y:,}<extra></extra>",
+                        ),
+                        secondary_y=True,
                     )
-                    fig_woe.update_traces(hovertemplate=(
-                        "<b>%{x}</b><br>WOE: %{y:.4f}<br>Count: %{customdata[0]:,}<br>"
-                        "Positive: %{customdata[1]:,}<br>Positive Rate: %{customdata[2]:.5f}<br>"
-                        "IV Bin: %{customdata[3]:.4f}<extra></extra>"
-                    ))
                     fig_woe.add_hline(y=0, line_dash="dash", line_color="#333333", line_width=1)
-                    fig_woe.update_layout(height=380, xaxis_tickangle=-40, legend_title_text="WOE 방향")
+                    fig_woe.update_layout(
+                        height=400, xaxis_tickangle=-40,
+                        legend=dict(title=""),
+                        margin=dict(t=20),
+                    )
+                    fig_woe.update_yaxes(title_text="WOE", secondary_y=False)
+                    fig_woe.update_yaxes(title_text="Count", secondary_y=True, showgrid=False)
                     st.plotly_chart(fig_woe, use_container_width=True)
