@@ -352,6 +352,7 @@ with tab_ml:
         _metric(c7, "Val",                 f"{val_rows:,}",                f"pos {val_pos:.5f}")
         _metric(c8, "Best iter / 학습시간", f"{best_iter + 1}  /  {train_time:.0f}", "sec")
 
+        st.markdown("<div style='margin-top:1.2rem'></div>", unsafe_allow_html=True)
         xgb_params = train_summary.get("xgboost_params", {})
         if xgb_params:
             with st.expander("Hyper Parameters"):
@@ -403,7 +404,11 @@ with tab_ml:
                 fig_cm.update_coloraxes(showscale=False)
                 fig_cm.update_layout(height=270, margin=dict(t=10, b=10))
                 st.plotly_chart(fig_cm, use_container_width=True)
-                st.caption(f"TP={tp:,} | FP={fp:,} | FN={fn:,} | TN={tn:,}")
+                st.markdown(
+                    f"<div style='text-align:center;font-size:0.8rem;color:#888'>"
+                    f"TP={tp:,} | FP={fp:,} | FN={fn:,} | TN={tn:,}</div>",
+                    unsafe_allow_html=True,
+                )
             else:
                 st.info("Confusion matrix 파일 없음")
 
@@ -414,7 +419,7 @@ with tab_ml:
             st.markdown("##### Feature Importance")
             n_total  = len(feat_imp)
             _col_n, _col_s = st.columns([4, 1])
-            top_n_fi = _col_n.slider("표시 개수", 10, n_total, min(20, n_total), key="fi_slider")
+            top_n_fi = _col_n.slider("N Features", 10, n_total, min(20, n_total), key="fi_slider", label_visibility="collapsed")
             fi_desc  = _col_s.radio("정렬", ["높은 순", "낮은 순"], horizontal=True, key="fi_sort") == "높은 순"
             fi_df = (
                 feat_imp
@@ -433,7 +438,6 @@ with tab_ml:
                 fi_df, x="importance_gain", y="feature", orientation="h",
                 color="importance_gain", color_continuous_scale="Blues",
                 labels={"importance_gain": "Gain", "feature": "Feature"},
-                title=f"Feature Importance — {'높은 순' if fi_desc else '낮은 순'} {top_n_fi}개",
                 custom_data=["importance_weight", "importance_cover", "rank_by_gain", "_desc"],
             )
             fig_fi.update_traces(hovertemplate=(
@@ -444,7 +448,7 @@ with tab_ml:
             fig_fi.update_coloraxes(showscale=False)
             fig_fi.update_layout(
                 height=max(400, top_n_fi * 28),
-                yaxis={"categoryorder": "total ascending"},
+                yaxis={"categoryorder": "total ascending" if fi_desc else "total descending"},
                 margin=dict(t=40, b=20),
             )
             st.plotly_chart(fig_fi, use_container_width=True)
@@ -571,7 +575,7 @@ with tab_woe:
                     st.rerun()
 
         _col_n, _col_s = st.columns([4, 1])
-        top_n    = _col_n.slider("표시 개수", 10, max(10, len(iv_df)), min(20, len(iv_df)), key="woe_top_n")
+        top_n    = _col_n.slider("N Features", 10, max(10, len(iv_df)), min(20, len(iv_df)), key="woe_top_n", label_visibility="collapsed")
         woe_desc = _col_s.radio("정렬", ["높은 순", "낮은 순"], horizontal=True, key="woe_sort") == "높은 순"
 
         top_df = (
@@ -600,14 +604,13 @@ with tab_woe:
             color="iv_strength", color_discrete_map=IV_COLORS,
             custom_data=["iv", "_desc"],
             labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
-            title=f"{sel_woe} — IV {'높은 순' if woe_desc else '낮은 순'} {top_n}개",
         )
         fig.update_traces(
             hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<br>%{customdata[1]}<extra></extra>"
         )
         fig.update_layout(
             height=max(420, top_n * 40),
-            yaxis={"categoryorder": "total ascending"},
+            yaxis={"categoryorder": "total ascending" if woe_desc else "total descending"},
             xaxis={
                 "range":    [0, IV_CUT + (0.35 if has_overflow else 0.05)],
                 "tickvals": [0, 0.5, 1.0, 1.5],
