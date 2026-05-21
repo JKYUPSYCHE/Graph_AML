@@ -16,6 +16,7 @@ gnn/gf_model/runs/
 
 # Streamlit secrets
 leader_board/.streamlit/secrets.toml
+.streamlit/secrets.toml
 
 # Claude Code
 .claude/
