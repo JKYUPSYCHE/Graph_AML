@@ -487,16 +487,27 @@ with tab_ml:
             fig_scat.update_coloraxes(showscale=False)
             if _sel_fi and _sel_fi in fi_df["feature"].values:
                 _row = fi_df[fi_df["feature"] == _sel_fi].iloc[0]
+                _desc_txt = _row["_desc"]
+                _ann_text = (
+                    f"<b>{_sel_fi}</b><br>"
+                    f"Gain: {_row['importance_gain']:,.1f}<br>"
+                    f"Weight: {_row['importance_weight']:,.0f}<br>"
+                    f"Cover: {_row['importance_cover']:,.1f}"
+                    + (f"<br>{_desc_txt}" if _desc_txt else "")
+                )
                 fig_scat.add_trace(go.Scatter(
                     x=[_row["importance_gain"]], y=[_row["importance_weight"]],
                     mode="markers",
                     marker=dict(color="#d62728", size=22, symbol="circle-open", line=dict(width=3)),
-                    name="선택", hoverinfo="skip",
+                    showlegend=False, hoverinfo="skip",
                 ))
                 fig_scat.add_annotation(
                     x=_row["importance_gain"], y=_row["importance_weight"],
-                    text=_sel_fi, showarrow=True, arrowhead=2,
-                    font=dict(size=10, color="#d62728"),
+                    text=_ann_text,
+                    showarrow=True, arrowhead=2, ax=40, ay=-60,
+                    bgcolor="rgba(255,255,255,0.85)", bordercolor="#d62728", borderwidth=1,
+                    font=dict(size=10, color="#333333"),
+                    align="left",
                 )
             fig_scat.update_layout(height=420, margin=dict(t=20, b=20))
             st.caption("버블 크기 = Cover")
