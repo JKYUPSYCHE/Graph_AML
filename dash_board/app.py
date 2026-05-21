@@ -304,7 +304,7 @@ _default_idx = 0
 # 탭
 # ══════════════════════════════════════════════════════════════════════════════
 
-tab_ml, tab_woe = st.tabs(["📊 ML 결과", "🔍 WOE / IV"])
+tab_ml, tab_woe = st.tabs(["ML Result", "Univariate Analysis"])
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -460,22 +460,18 @@ with tab_ml:
 # 탭 2: WOE / IV
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_woe:
+    sel_woe  = st.selectbox("실험 선택", exp_labels, key="woe_sel",
+                            index=_default_idx, label_visibility="collapsed")
     st.caption(
         "**WOE(Weight of Evidence)**: 각 구간에서 fraud 비율과 정상 비율의 로그 비.  \n"
         "**IV(Information Value)**: WOE를 전체 구간에 걸쳐 집계한 변수 단위 예측력 요약."
     )
 
-    sel_woe  = st.selectbox("실험 선택", exp_labels, key="woe_sel",
-                            index=_default_idx, label_visibility="collapsed")
     d_woe    = exp_data[sel_woe]
     woe      = d_woe["woe"]
     rep_woe  = d_woe["rep"]
     stale_st = d_woe["stale_status"]
     cur_pfx  = d_woe["prefix"]
-
-    _woe_note = rep_woe.get("note", "")
-    if _woe_note:
-        st.caption(_woe_note)
 
     # ── stale / no_woe 아이콘 ─────────────────────────────────────────────────
     if stale_st == "stale":
@@ -573,6 +569,7 @@ with tab_woe:
                 if not edited.equals(active_catalog):
                     st.session_state[ss_key] = edited
                     st.rerun()
+        st.divider()
 
         st.markdown("##### Information Value")
         _col_n, _col_s = st.columns([4, 1])
