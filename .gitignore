@@ -14,10 +14,9 @@ logs/
 # TensorBoard
 gnn/gf_model/runs/
 
-# Streamlit secrets
-leader_board/.streamlit/secrets.toml
-.streamlit/secrets.toml
-dash_board/.streamlit/secrets.toml
 
 # Claude Code
 .claude/
+
+# Docs / examples
+docs/
