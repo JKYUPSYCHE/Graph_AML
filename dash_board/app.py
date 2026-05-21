@@ -197,12 +197,26 @@ def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
     fm = _list_files(folder_id)
     if catalog_fn not in fm:
         return None
-    df = _download_csv(fm[catalog_fn])
-    df.columns = df.columns.str.strip()
+    r = requests.get(
+        f"https://drive.google.com/uc?export=download&id={fm[catalog_fn]}",
+        timeout=30,
+    )
+    r.raise_for_status()
+    content = r.content
+    df = None
+    for enc in ("utf-8-sig", "cp949", "utf-8", "euc-kr"):
+        try:
+            _df = pd.read_csv(BytesIO(content), encoding=enc)
+            _df.columns = _df.columns.str.strip()
+            if "피처명" in _df.columns or "feature_name" in _df.columns:
+                df = _df
+                break
+        except Exception:
+            continue
+    if df is None:
+        return None
     if "feature_name" in df.columns and "피처명" not in df.columns:
         df = df.rename(columns={"feature_name": "피처명", "description": "설명"})
-    if "피처명" not in df.columns:
-        return None
     return df
 
 
