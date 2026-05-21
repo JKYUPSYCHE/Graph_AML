@@ -305,7 +305,21 @@ _default_idx = 0
 # 탭
 # ══════════════════════════════════════════════════════════════════════════════
 
-tab_ml, tab_woe = st.tabs(["ML Result", "Univariate Analysis"])
+tab_overview, tab_ml, tab_woe = st.tabs(["Overview", "ML Result", "Univariate Analysis"])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 탭 0: Overview
+# ──────────────────────────────────────────────────────────────────────────────
+with tab_overview:
+    st.markdown(
+        "<div style='text-align:center; padding: 60px 0 20px'>"
+        "<div style='font-size: 3rem'>🚧</div>"
+        "<div style='font-size: 1.4rem; font-weight: 600; margin-top: 12px'>공사중</div>"
+        "<div style='color: #888; margin-top: 8px'>이 탭은 현재 준비 중입니다.</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
