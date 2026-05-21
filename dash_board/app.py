@@ -196,7 +196,11 @@ def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
     if not folder_id:
         return None
     fm = _list_files(folder_id)
-    return _download_csv(fm[catalog_fn]) if catalog_fn in fm else None
+    if catalog_fn not in fm:
+        return None
+    df = _download_csv(fm[catalog_fn])
+    df.columns = df.columns.str.strip()
+    return df
 
 
 # ── Page header ────────────────────────────────────────────────────────────
