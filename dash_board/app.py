@@ -478,7 +478,7 @@ with tab_ml:
                 size="importance_cover", hover_name="feature",
                 color="importance_gain", color_continuous_scale="Blues",
                 labels={"importance_gain": "Gain", "importance_weight": "Weight", "importance_cover": "Cover"},
-                custom_data=["importance_cover", "_desc"],
+                custom_data=["importance_cover", "_desc", "feature"],
             )
             fig_scat.update_traces(hovertemplate=(
                 "<b>%{hovertext}</b><br>Gain: %{x:,.1f}<br>Weight: %{y:,.0f}<br>"
@@ -495,17 +495,27 @@ with tab_ml:
                     f"Cover: {_row['importance_cover']:,.1f}"
                     + (f"<br>{_desc_txt}" if _desc_txt else "")
                 )
+                # 버블 크기를 px.scatter의 실제 sizeref 기준으로 맞춤
+                _sizeref = fig_scat.data[0].marker.sizeref or 1
+                _bubble_px = 2 * (_row["importance_cover"] / _sizeref) ** 0.5
+                _standoff = max(6, _bubble_px / 2 + 3)
                 fig_scat.add_trace(go.Scatter(
                     x=[_row["importance_gain"]], y=[_row["importance_weight"]],
                     mode="markers",
-                    marker=dict(color="#d62728", size=22, symbol="circle-open", line=dict(width=3)),
+                    marker=dict(
+                        size=_bubble_px,
+                        symbol="circle-open",
+                        color="rgba(0,0,0,0)",
+                        line=dict(color="#d62728", width=2.5),
+                    ),
                     showlegend=False, hoverinfo="skip",
                 ))
                 fig_scat.add_annotation(
                     x=_row["importance_gain"], y=_row["importance_weight"],
                     text=_ann_text,
-                    showarrow=True, arrowhead=2, ax=40, ay=-60,
-                    bgcolor="rgba(255,255,255,0.85)", bordercolor="#d62728", borderwidth=1,
+                    showarrow=True, arrowhead=2, arrowwidth=1.5, arrowcolor="#d62728",
+                    ax=55, ay=-65, standoff=_standoff,
+                    bgcolor="rgba(255,255,255,0.88)", bordercolor="#d62728", borderwidth=1,
                     font=dict(size=10, color="#333333"),
                     align="left",
                 )
@@ -515,7 +525,8 @@ with tab_ml:
 
             _scat_pts = (scat_event.selection or {}).get("points", []) if scat_event else []
             if _scat_pts:
-                _scat_clicked = _scat_pts[0].get("hovertext") or _scat_pts[0].get("label")
+                _cd = _scat_pts[0].get("customdata") or []
+                _scat_clicked = _cd[2] if len(_cd) > 2 else None
                 if _scat_clicked:
                     st.session_state[f"fi_sel_{sel}"] = _scat_clicked
                     st.rerun()
