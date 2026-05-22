@@ -122,7 +122,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
         logging.warning("학습 중 val F1 개선 없음. best 결과 없음.")
     else:
         _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
-    return model
+    return model, best_te_result
 
 def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer):
     best_val_f1 = 0
@@ -222,7 +222,7 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
         logging.warning("학습 중 val F1 개선 없음. best 결과 없음.")
     else:
         _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
-    return model
+    return model, best_te_result
 
 def get_model(sample_batch, config, args):
     n_feats = sample_batch.x.shape[1] if not isinstance(sample_batch, HeteroData) else sample_batch['node'].x.shape[1]
@@ -321,8 +321,9 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
     logging.info(f"TensorBoard log dir: runs/{run_name}")
 
     if args.reverse_mp:
-        model = train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer)
+        model, best_te_result = train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer)
     else:
-        model = train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer)
+        model, best_te_result = train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer)
 
     writer.close()
+    return best_te_result

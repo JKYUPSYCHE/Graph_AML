@@ -7,7 +7,7 @@ from torch_geometric.transforms import BaseTransform
 from typing import Union
 from torch_geometric.data import Data, HeteroData
 from torch_geometric.loader import LinkNeighborLoader
-from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score, log_loss
+from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score, log_loss, confusion_matrix
 import json
 
 class AddEgoIds(BaseTransform):
@@ -152,12 +152,14 @@ def evaluate_homo(loader, inds, model, data, device, args):
     pred_proba = torch.cat(pred_probas, dim=0).cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
 
+    tn, fp, fn, tp = confusion_matrix(ground_truth, pred, labels=[0, 1]).ravel()
     return {
         'f1':        f1_score(ground_truth, pred, zero_division=0),
         'recall':    recall_score(ground_truth, pred, zero_division=0),
         'precision': precision_score(ground_truth, pred, zero_division=0),
         'auprc':     average_precision_score(ground_truth, pred_proba),
         'log_loss':  log_loss(ground_truth, pred_proba),
+        'tn': int(tn), 'fp': int(fp), 'fn': int(fn), 'tp': int(tp),
         'memory_mb': memory_mb,
         'time_s':    t_end - t_start,
     }
@@ -221,12 +223,14 @@ def evaluate_hetero(loader, inds, model, data, device, args):
     pred_proba = torch.cat(pred_probas, dim=0).cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
 
+    tn, fp, fn, tp = confusion_matrix(ground_truth, pred, labels=[0, 1]).ravel()
     return {
         'f1':        f1_score(ground_truth, pred, zero_division=0),
         'recall':    recall_score(ground_truth, pred, zero_division=0),
         'precision': precision_score(ground_truth, pred, zero_division=0),
         'auprc':     average_precision_score(ground_truth, pred_proba),
         'log_loss':  log_loss(ground_truth, pred_proba),
+        'tn': int(tn), 'fp': int(fp), 'fn': int(fn), 'tp': int(tp),
         'memory_mb': memory_mb,
         'time_s':    t_end - t_start,
     }
