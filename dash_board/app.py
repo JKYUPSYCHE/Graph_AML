@@ -784,8 +784,7 @@ with tab_gnn:
             c2.metric("AUPRC",         f"{best_ep['test_auprc']:.4f}")
             c3.metric("Precision",     f"{best_ep['test_precision']:.4f}")
             c4.metric("Recall",        f"{best_ep['test_recall']:.4f}")
-            c5.metric("Best Val AUPRC", f"{best_ep['val_auprc']:.4f}",
-                      help=f"epoch {int(best_ep['epoch'])}")
+            c5.metric("Best Val AUPRC", f"{best_ep['val_auprc']:.4f}")
 
             c6, c7 = st.columns(2)
             _n_txns  = parsed.get("n_txns")
