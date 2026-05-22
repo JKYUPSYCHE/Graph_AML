@@ -145,9 +145,19 @@ def get_data(args, data_config):
 
     tr_data.x = val_data.x = te_data.x = z_norm(tr_data.x)
     if not args.model == 'rgcn':
-        tr_data.edge_attr, val_data.edge_attr, te_data.edge_attr = z_norm(tr_data.edge_attr), z_norm(val_data.edge_attr), z_norm(te_data.edge_attr)
+        tr_mean = tr_data.edge_attr.mean(0).unsqueeze(0)
+        tr_std  = tr_data.edge_attr.std(0).unsqueeze(0)
+        tr_std  = torch.where(tr_std == 0, torch.ones_like(tr_std), tr_std)
+        tr_data.edge_attr  = (tr_data.edge_attr  - tr_mean) / tr_std
+        val_data.edge_attr = (val_data.edge_attr - tr_mean) / tr_std
+        te_data.edge_attr  = (te_data.edge_attr  - tr_mean) / tr_std
     else:
-        tr_data.edge_attr[:, :-1], val_data.edge_attr[:, :-1], te_data.edge_attr[:, :-1] = z_norm(tr_data.edge_attr[:, :-1]), z_norm(val_data.edge_attr[:, :-1]), z_norm(te_data.edge_attr[:, :-1])
+        tr_mean = tr_data.edge_attr[:, :-1].mean(0).unsqueeze(0)
+        tr_std  = tr_data.edge_attr[:, :-1].std(0).unsqueeze(0)
+        tr_std  = torch.where(tr_std == 0, torch.ones_like(tr_std), tr_std)
+        tr_data.edge_attr[:, :-1]  = (tr_data.edge_attr[:, :-1]  - tr_mean) / tr_std
+        val_data.edge_attr[:, :-1] = (val_data.edge_attr[:, :-1] - tr_mean) / tr_std
+        te_data.edge_attr[:, :-1]  = (te_data.edge_attr[:, :-1]  - tr_mean) / tr_std
 
     if args.reverse_mp:
         tr_data  = create_hetero_obj(tr_data.x,  tr_data.y,  tr_data.edge_index,  tr_data.edge_attr,  tr_data.timestamps,  args)
@@ -161,4 +171,4 @@ def get_data(args, data_config):
     return tr_data, val_data, te_data, \
            torch.arange(len(e_tr)), \
            torch.arange(len(e_val)), \
-           torch.arange(len(e_te))
+           te_inds
