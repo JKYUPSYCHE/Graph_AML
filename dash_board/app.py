@@ -378,7 +378,6 @@ def _render_report(tab_name: str, exp_name: str) -> None:
             name_in = st.text_input(
                 "비밀번호", key=f"rpt_auth_{tab_name}_{exp_name}",
                 placeholder="비밀번호 입력", label_visibility="collapsed",
-                type="password",
             )
             col_ok, col_cancel = st.columns(2)
             if col_ok.button("확인", key=f"rpt_auth_btn_{tab_name}_{exp_name}", use_container_width=True):
