@@ -7,7 +7,7 @@ from torch_geometric.transforms import BaseTransform
 from typing import Union
 from torch_geometric.data import Data, HeteroData
 from torch_geometric.loader import LinkNeighborLoader
-from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score
+from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score, log_loss
 import json
 
 class AddEgoIds(BaseTransform):
@@ -157,6 +157,7 @@ def evaluate_homo(loader, inds, model, data, device, args):
         'recall':    recall_score(ground_truth, pred, zero_division=0),
         'precision': precision_score(ground_truth, pred, zero_division=0),
         'auprc':     average_precision_score(ground_truth, pred_proba),
+        'log_loss':  log_loss(ground_truth, pred_proba),
         'memory_mb': memory_mb,
         'time_s':    t_end - t_start,
     }
@@ -225,6 +226,7 @@ def evaluate_hetero(loader, inds, model, data, device, args):
         'recall':    recall_score(ground_truth, pred, zero_division=0),
         'precision': precision_score(ground_truth, pred, zero_division=0),
         'auprc':     average_precision_score(ground_truth, pred_proba),
+        'log_loss':  log_loss(ground_truth, pred_proba),
         'memory_mb': memory_mb,
         'time_s':    t_end - t_start,
     }

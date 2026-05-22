@@ -3,7 +3,7 @@ import torch
 import tqdm
 import datetime
 from types import SimpleNamespace
-from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score
+from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score, log_loss
 from torch.utils.tensorboard import SummaryWriter
 from train_util import AddEgoIds, extract_param, add_arange_ids, get_loaders, evaluate_homo, evaluate_hetero, save_model, load_model
 from models import GINe, PNA, GATe, RGCN
@@ -16,11 +16,11 @@ def _log_best(best_epoch, best_val, best_te, total_time_s, peak_memory_mb):
     logging.info('Training complete.')
     logging.info(f'Best epoch: {best_epoch}')
     logging.info(f'Total training time: {total_time_s:.1f}s | Avg epoch memory: {peak_memory_mb:.1f}MB')
-    logging.info(f"  Val  — F1: {best_val['f1']:.4f} | Recall: {best_val['recall']:.4f} | Precision: {best_val['precision']:.4f} | AUPRC: {best_val['auprc']:.4f} | Mem: {best_val['memory_mb']:.1f}MB | Time: {best_val['time_s']:.1f}s")
-    logging.info(f"  Test — F1: {best_te['f1']:.4f} | Recall: {best_te['recall']:.4f} | Precision: {best_te['precision']:.4f} | AUPRC: {best_te['auprc']:.4f} | Mem: {best_te['memory_mb']:.1f}MB | Time: {best_te['time_s']:.1f}s")
+    logging.info(f"  Val  — F1: {best_val['f1']:.4f} | Recall: {best_val['recall']:.4f} | Precision: {best_val['precision']:.4f} | AUPRC: {best_val['auprc']:.4f} | LogLoss: {best_val['log_loss']:.4f} | Mem: {best_val['memory_mb']:.1f}MB | Time: {best_val['time_s']:.1f}s")
+    logging.info(f"  Test — F1: {best_te['f1']:.4f} | Recall: {best_te['recall']:.4f} | Precision: {best_te['precision']:.4f} | AUPRC: {best_te['auprc']:.4f} | LogLoss: {best_te['log_loss']:.4f} | Mem: {best_te['memory_mb']:.1f}MB | Time: {best_te['time_s']:.1f}s")
 
 def _write_metrics(writer, tr_result, val_result, te_result, epoch):
-    for metric in ('f1', 'recall', 'precision', 'auprc'):
+    for metric in ('f1', 'recall', 'precision', 'auprc', 'log_loss'):
         writer.add_scalars(metric.upper(), {
             'train': tr_result[metric],
             'val':   val_result[metric],
@@ -88,14 +88,15 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
             'recall':    recall_score(ground_truth, pred, zero_division=0),
             'precision': precision_score(ground_truth, pred, zero_division=0),
             'auprc':     average_precision_score(ground_truth, pred_proba),
+            'log_loss':  log_loss(ground_truth, pred_proba),
         }
-        logging.info(f"Train F1: {tr_result['f1']:.4f} | Recall: {tr_result['recall']:.4f} | Precision: {tr_result['precision']:.4f} | AUPRC: {tr_result['auprc']:.4f}")
+        logging.info(f"Train F1: {tr_result['f1']:.4f} | Recall: {tr_result['recall']:.4f} | Precision: {tr_result['precision']:.4f} | AUPRC: {tr_result['auprc']:.4f} | LogLoss: {tr_result['log_loss']:.4f}")
 
         val_result = evaluate_homo(val_loader, val_inds, model, val_data, device, args)
         te_result  = evaluate_homo(te_loader,  te_inds,  model, te_data,  device, args)
 
-        logging.info(f"Val  — F1: {val_result['f1']:.4f} | Recall: {val_result['recall']:.4f} | Precision: {val_result['precision']:.4f} | AUPRC: {val_result['auprc']:.4f} | Mem: {val_result['memory_mb']:.1f}MB | Time: {val_result['time_s']:.1f}s")
-        logging.info(f"Test — F1: {te_result['f1']:.4f} | Recall: {te_result['recall']:.4f} | Precision: {te_result['precision']:.4f} | AUPRC: {te_result['auprc']:.4f} | Mem: {te_result['memory_mb']:.1f}MB | Time: {te_result['time_s']:.1f}s")
+        logging.info(f"Val  — F1: {val_result['f1']:.4f} | Recall: {val_result['recall']:.4f} | Precision: {val_result['precision']:.4f} | AUPRC: {val_result['auprc']:.4f} | LogLoss: {val_result['log_loss']:.4f} | Mem: {val_result['memory_mb']:.1f}MB | Time: {val_result['time_s']:.1f}s")
+        logging.info(f"Test — F1: {te_result['f1']:.4f} | Recall: {te_result['recall']:.4f} | Precision: {te_result['precision']:.4f} | AUPRC: {te_result['auprc']:.4f} | LogLoss: {te_result['log_loss']:.4f} | Mem: {te_result['memory_mb']:.1f}MB | Time: {te_result['time_s']:.1f}s")
 
         _write_metrics(writer, tr_result, val_result, te_result, epoch)
 
@@ -187,14 +188,15 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
             'recall':    recall_score(ground_truth, pred, zero_division=0),
             'precision': precision_score(ground_truth, pred, zero_division=0),
             'auprc':     average_precision_score(ground_truth, pred_proba),
+            'log_loss':  log_loss(ground_truth, pred_proba),
         }
-        logging.info(f"Train F1: {tr_result['f1']:.4f} | Recall: {tr_result['recall']:.4f} | Precision: {tr_result['precision']:.4f} | AUPRC: {tr_result['auprc']:.4f}")
+        logging.info(f"Train F1: {tr_result['f1']:.4f} | Recall: {tr_result['recall']:.4f} | Precision: {tr_result['precision']:.4f} | AUPRC: {tr_result['auprc']:.4f} | LogLoss: {tr_result['log_loss']:.4f}")
 
         val_result = evaluate_hetero(val_loader, val_inds, model, val_data, device, args)
         te_result  = evaluate_hetero(te_loader,  te_inds,  model, te_data,  device, args)
 
-        logging.info(f"Val  — F1: {val_result['f1']:.4f} | Recall: {val_result['recall']:.4f} | Precision: {val_result['precision']:.4f} | AUPRC: {val_result['auprc']:.4f} | Mem: {val_result['memory_mb']:.1f}MB | Time: {val_result['time_s']:.1f}s")
-        logging.info(f"Test — F1: {te_result['f1']:.4f} | Recall: {te_result['recall']:.4f} | Precision: {te_result['precision']:.4f} | AUPRC: {te_result['auprc']:.4f} | Mem: {te_result['memory_mb']:.1f}MB | Time: {te_result['time_s']:.1f}s")
+        logging.info(f"Val  — F1: {val_result['f1']:.4f} | Recall: {val_result['recall']:.4f} | Precision: {val_result['precision']:.4f} | AUPRC: {val_result['auprc']:.4f} | LogLoss: {val_result['log_loss']:.4f} | Mem: {val_result['memory_mb']:.1f}MB | Time: {val_result['time_s']:.1f}s")
+        logging.info(f"Test — F1: {te_result['f1']:.4f} | Recall: {te_result['recall']:.4f} | Precision: {te_result['precision']:.4f} | AUPRC: {te_result['auprc']:.4f} | LogLoss: {te_result['log_loss']:.4f} | Mem: {te_result['memory_mb']:.1f}MB | Time: {te_result['time_s']:.1f}s")
 
         _write_metrics(writer, tr_result, val_result, te_result, epoch)
 
