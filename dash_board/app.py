@@ -220,6 +220,103 @@ def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
     return _read_catalog_bytes(r.content)
 
 
+# ── GNN helpers ────────────────────────────────────────────────────────────
+
+def _parse_gnn_log(text: str) -> dict:
+    train_re = re.compile(
+        r"Train F1:\s*([\d.]+)\s*\|\s*Recall:\s*([\d.]+)\s*\|\s*Precision:\s*([\d.]+)\s*\|\s*AUPRC:\s*([\d.]+)"
+    )
+    val_re = re.compile(
+        r"Val\s+[—\-]\s*F1:\s*([\d.]+)\s*\|\s*Recall:\s*([\d.]+)\s*\|\s*Precision:\s*([\d.]+)\s*\|\s*AUPRC:\s*([\d.]+)"
+    )
+    test_re = re.compile(
+        r"Test\s+[—\-]\s*F1:\s*([\d.]+)\s*\|\s*Recall:\s*([\d.]+)\s*\|\s*Precision:\s*([\d.]+)\s*\|\s*AUPRC:\s*([\d.]+)"
+    )
+    nodes_re  = re.search(r"Number of nodes = (\d+)", text)
+    txns_re   = re.search(r"Number of transactions = (\d+)", text)
+    ir_re     = re.search(r"Illicit ratio = \d+ / \d+ = ([\d.]+)%", text)
+    edge_re   = re.search(r"Edge features being used: (\[.*?\])", text)
+    params_re = re.search(r"GraphModule\s+\|[^|]+\|[^|]+\|\s*([\d,]+)", text)
+
+    epochs: list[dict] = []
+    buf: dict = {}
+    for line in text.splitlines():
+        m = train_re.search(line)
+        if m:
+            buf = dict(train_f1=float(m[1]), train_recall=float(m[2]),
+                       train_precision=float(m[3]), train_auprc=float(m[4]))
+            continue
+        m = val_re.search(line)
+        if m and buf:
+            buf.update(val_f1=float(m[1]), val_recall=float(m[2]),
+                       val_precision=float(m[3]), val_auprc=float(m[4]))
+            continue
+        m = test_re.search(line)
+        if m and buf:
+            buf.update(test_f1=float(m[1]), test_recall=float(m[2]),
+                       test_precision=float(m[3]), test_auprc=float(m[4]))
+            epochs.append(buf)
+            buf = {}
+
+    edge_feats: list[str] = []
+    if edge_re:
+        try:
+            edge_feats = json.loads(edge_re[1].replace("'", '"'))
+        except Exception:
+            pass
+
+    return {
+        "epochs":       epochs,
+        "n_nodes":      int(nodes_re[1])                  if nodes_re  else None,
+        "n_txns":       int(txns_re[1])                   if txns_re   else None,
+        "illicit_ratio": float(ir_re[1])                  if ir_re     else None,
+        "edge_features": edge_feats,
+        "total_params": int(params_re[1].replace(",", "")) if params_re else None,
+    }
+
+
+@st.cache_data(ttl=3600)
+def _list_gnn_experiments(project_folder_id: str) -> list[dict]:
+    gnn_id = _get_folder_id(project_folder_id, "gnn")
+    if not gnn_id:
+        return []
+    exp_id = _get_folder_id(gnn_id, "experiments")
+    if not exp_id:
+        return []
+    folders = _drive_list(
+        f"'{exp_id}' in parents"
+        " and mimeType='application/vnd.google-apps.folder'"
+        " and trashed=false"
+    )
+    return [{"name": f["name"], "id": f["id"]} for f in folders]
+
+
+@st.cache_data(ttl=3600)
+def _load_gnn_experiment(exp_folder_id: str) -> dict:
+    logs_id   = _get_folder_id(exp_folder_id, "logs")
+    models_id = _get_folder_id(exp_folder_id, "models")
+    out: dict = {}
+
+    if models_id:
+        mf      = _list_files(models_id)
+        args_fn = next((k for k in mf if k.endswith("_args.json")), None)
+        if args_fn:
+            out["args"] = _download_json(mf[args_fn])
+
+    if logs_id:
+        lf     = _list_files(logs_id)
+        log_fn = next((k for k in lf if k.endswith(".log")), None)
+        if log_fn:
+            r = requests.get(
+                f"https://drive.google.com/uc?export=download&id={lf[log_fn]}",
+                timeout=60,
+            )
+            if r.ok:
+                out["parsed"] = _parse_gnn_log(r.text)
+
+    return out
+
+
 # ── Page header ────────────────────────────────────────────────────────────
 
 col_title, col_btn = st.columns([8, 1])
@@ -300,12 +397,17 @@ if not exp_data:
 exp_labels   = list(exp_data.keys())
 _default_idx = 0
 
+# GNN 실험 목록 로드
+gnn_exps = _list_gnn_experiments(PROJECT_FOLDER_ID)
+gnn_exp_map  = {e["name"]: e["id"] for e in gnn_exps}
+gnn_exp_names = [e["name"] for e in gnn_exps]
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 탭
 # ══════════════════════════════════════════════════════════════════════════════
 
-tab_overview, tab_ml, tab_woe = st.tabs(["Overview", "ML Result", "Univariate Analysis"])
+tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML Result", "Univariate Analysis"])
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -323,7 +425,127 @@ with tab_overview:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 탭 1: ML 결과
+# 탭 1: GNN 결과
+# ──────────────────────────────────────────────────────────────────────────────
+with tab_gnn:
+    if not gnn_exp_names:
+        st.info("Drive의 gnn/experiments 폴더에서 실험을 찾을 수 없습니다.")
+    else:
+        sel_gnn = st.selectbox("실험 선택", gnn_exp_names, key="gnn_sel",
+                               label_visibility="collapsed")
+
+        with st.spinner("GNN 실험 로드 중..."):
+            gnn_d  = _load_gnn_experiment(gnn_exp_map[sel_gnn])
+
+        args   = gnn_d.get("args", {})
+        parsed = gnn_d.get("parsed", {})
+        epochs = parsed.get("epochs", [])
+
+        if not epochs:
+            st.info("학습 로그를 파싱할 수 없습니다.")
+        else:
+            ep_df = pd.DataFrame(epochs)
+            ep_df.index = ep_df.index + 1
+            ep_df.index.name = "epoch"
+            ep_df = ep_df.reset_index()
+
+            best_idx = ep_df["val_auprc"].idxmax()
+            best_ep  = ep_df.loc[best_idx]
+
+            # ── 핵심 지표 ──────────────────────────────────────────────────
+            c1, c2, c3, c4, c5 = st.columns(5)
+            _metric(c1, "Best Val AUPRC",   f"{best_ep['val_auprc']:.4f}",   f"epoch {int(best_ep['epoch'])}")
+            _metric(c2, "Test AUPRC",       f"{best_ep['test_auprc']:.4f}",  "at best val")
+            _metric(c3, "Test F1",          f"{best_ep['test_f1']:.4f}",     "at best val")
+            _metric(c4, "Test Recall",      f"{best_ep['test_recall']:.4f}", "at best val")
+            _metric(c5, "Test Precision",   f"{best_ep['test_precision']:.4f}", "at best val")
+
+            st.divider()
+
+            # ── Hyper Parameters ───────────────────────────────────────────
+            if args:
+                with st.expander("Hyper Parameters"):
+                    _col_a, _col_b = st.columns(2)
+                    _col_a.markdown(f"""
+| 파라미터 | 값 |
+|----------|-----|
+| model | `{args.get('model', '—')}` |
+| n_epochs | {args.get('n_epochs', '—')} |
+| batch_size | {args.get('batch_size', '—'):,} |
+| num_neighs | {args.get('num_neighs', '—')} |
+| patience | {args.get('patience', '—')} |
+""")
+                    _col_b.markdown(f"""
+| 플래그 | |
+|--------|---|
+| emlps | {'✅' if args.get('emlps') else '—'} |
+| reverse_mp | {'✅' if args.get('reverse_mp') else '—'} |
+| ports | {'✅' if args.get('ports') else '—'} |
+| ego | {'✅' if args.get('ego') else '—'} |
+| tds | {'✅' if args.get('tds') else '—'} |
+""")
+
+            st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+
+            # ── Learning Curve ─────────────────────────────────────────────
+            st.markdown("##### Learning Curve")
+            _mc, _ = st.columns([3, 5])
+            metric_sel = _mc.radio(
+                "지표", ["AUPRC", "F1", "Recall", "Precision"],
+                horizontal=True, key="gnn_metric",
+            )
+            mc = metric_sel.lower()
+
+            fig_lc = go.Figure()
+            for split, color, dash in [
+                ("train", "#aec7e8", "dot"),
+                ("val",   "#1f77b4", "solid"),
+                ("test",  "#ff7f0e", "dash"),
+            ]:
+                col_name = f"{split}_{mc}"
+                if col_name in ep_df.columns:
+                    fig_lc.add_trace(go.Scatter(
+                        x=ep_df["epoch"], y=ep_df[col_name],
+                        mode="lines", name=split,
+                        line=dict(color=color, dash=dash, width=2),
+                    ))
+            fig_lc.add_vline(
+                x=int(best_ep["epoch"]), line_dash="dot", line_color="#888888",
+                annotation_text=f"best val  epoch {int(best_ep['epoch'])}",
+                annotation_font_size=10,
+            )
+            fig_lc.update_layout(
+                height=380, margin=dict(t=20, b=20),
+                yaxis_title=metric_sel, xaxis_title="Epoch",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            )
+            st.plotly_chart(fig_lc, use_container_width=True)
+
+            st.divider()
+
+            # ── 데이터 통계 ────────────────────────────────────────────────
+            st.markdown("##### 데이터 통계")
+            _dc1, _dc2 = st.columns([1, 2])
+            _n_nodes = parsed.get("n_nodes")
+            _n_txns  = parsed.get("n_txns")
+            _ir      = parsed.get("illicit_ratio")
+            _params  = parsed.get("total_params")
+            _dc1.markdown(f"""
+| 항목 | 값 |
+|------|-----|
+| 노드 수 | {f'{_n_nodes:,}' if _n_nodes else '—'} |
+| 거래 수 | {f'{_n_txns:,}' if _n_txns else '—'} |
+| Illicit ratio | {f'{_ir:.2f}%' if _ir else '—'} |
+| 총 파라미터 | {f'{_params:,}' if _params else '—'} |
+""")
+            _ef = parsed.get("edge_features", [])
+            if _ef:
+                _dc2.caption("사용된 Edge Features")
+                _dc2.code("  ".join(_ef), language=None)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 탭 2: ML 결과
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_ml:
     sel = st.selectbox("실험 선택", exp_labels, key="ml_sel",
