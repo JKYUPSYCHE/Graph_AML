@@ -474,11 +474,11 @@ with tab_gnn:
             _n_txns  = parsed.get("n_txns")
             _ir      = parsed.get("illicit_ratio")
             _metric(c6, "거래 수", f"{_n_txns:,}" if _n_txns else "—",
-                    f"illicit {_ir:.2f}%" if _ir else "")
+                    f"pos {_ir:.2f}%" if _ir else "")
             _metric(c7, "Best epoch / 총 에폭",
                     f"{int(best_ep['epoch'])}  /  {len(ep_df)}", "")
 
-            st.divider()
+            st.markdown("<div style='margin-top:1.2rem'></div>", unsafe_allow_html=True)
 
             # ── Hyper Parameters ───────────────────────────────────────────
             if args:
@@ -503,7 +503,7 @@ with tab_gnn:
 | tds | {'✅' if args.get('tds') else '—'} |
 """)
 
-            st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+            st.divider()
 
             # ── Learning Curve ─────────────────────────────────────────────
             st.markdown("##### Learning Curve")
@@ -601,8 +601,8 @@ with tab_ml:
         val_pos    = (train_summary.get("val_label_summary") or {}).get("positive_ratio", 0)
         best_iter  = train_summary.get("best_iteration", 0)
         train_time = train_summary.get("training_time_sec", 0)
-        _metric(c6, "Train",               f"{train_rows:,}",              f"pos {train_pos:.5f}")
-        _metric(c7, "Val",                 f"{val_rows:,}",                f"pos {val_pos:.5f}")
+        _metric(c6, "Train",               f"{train_rows:,}",              f"pos {train_pos*100:.3f}%")
+        _metric(c7, "Val",                 f"{val_rows:,}",                f"pos {val_pos*100:.3f}%")
         _metric(c8, "Best iter / 학습시간", f"{best_iter + 1}  /  {train_time:.0f}", "sec")
 
         st.markdown("<div style='margin-top:1.2rem'></div>", unsafe_allow_html=True)
