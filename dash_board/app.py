@@ -40,6 +40,92 @@ import streamlit as st
 
 st.set_page_config(page_title="돈무브 프로젝트 대시보드", layout="wide", page_icon="💱")
 
+st.markdown("""
+<style>
+/* ── 전체 여백 ── */
+.block-container { padding-top: 1.8rem; padding-bottom: 2rem; }
+
+/* ── 제목 ── */
+h1 { font-size: 1.6rem !important; font-weight: 700; letter-spacing: -0.3px; }
+h4, h5 { font-weight: 600; letter-spacing: -0.2px; }
+
+/* ── 탭 ── */
+[data-testid="stTabs"] [data-baseweb="tab-list"] {
+    gap: 4px;
+    border-bottom: 2px solid #2c2f3e;
+}
+[data-testid="stTabs"] [data-baseweb="tab"] {
+    font-size: 0.875rem;
+    font-weight: 500;
+    padding: 0.45rem 1rem;
+    border-radius: 6px 6px 0 0;
+    color: #8b90a0;
+    background: transparent;
+    border: none;
+}
+[data-testid="stTabs"] [aria-selected="true"] {
+    color: #4f9cf9 !important;
+    border-bottom: 2px solid #4f9cf9 !important;
+    background: transparent !important;
+}
+
+/* ── st.metric 카드 ── */
+[data-testid="stMetric"] {
+    background: #1e2130;
+    border: 1px solid #2c2f3e;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+}
+[data-testid="stMetricLabel"] { font-size: 0.78rem !important; color: #8b90a0; }
+[data-testid="stMetricValue"] { font-size: 1.4rem !important; font-weight: 600; color: #e2e5ec; }
+
+/* ── expander ── */
+[data-testid="stExpander"] {
+    border: 1px solid #2c2f3e !important;
+    border-radius: 8px !important;
+    background: #1a1d27 !important;
+}
+[data-testid="stExpander"] summary {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #b0b5c3;
+}
+
+/* ── 구분선 ── */
+hr { border: none; border-top: 1px solid #2c2f3e; margin: 1rem 0; }
+
+/* ── 버튼 ── */
+.stButton button {
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    border: 1px solid #2c2f3e;
+    background: #1e2130;
+    color: #b0b5c3;
+    transition: background 0.15s, border-color 0.15s;
+}
+.stButton button:hover {
+    background: #252838;
+    border-color: #4f9cf9;
+    color: #e2e5ec;
+}
+
+/* ── selectbox / text_input ── */
+[data-testid="stSelectbox"] > div > div,
+[data-testid="stTextInput"] > div > div > input {
+    border-radius: 6px;
+    border-color: #2c2f3e;
+    font-size: 0.875rem;
+}
+
+/* ── caption ── */
+[data-testid="stCaptionContainer"] { color: #6b7280; font-size: 0.8rem; }
+
+/* ── progress bar ── */
+[data-testid="stProgressBar"] > div { background: #4f9cf9; }
+</style>
+""", unsafe_allow_html=True)
+
 API_KEY           = st.secrets.get("GOOGLE_API_KEY", "")
 PROJECT_FOLDER_ID = st.secrets.get("PROJECT_FOLDER_ID", "")
 
