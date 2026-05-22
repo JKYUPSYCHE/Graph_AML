@@ -738,6 +738,29 @@ def _make_cm_fig(tp: int, fn: int, fp: int, tn: int) -> go.Figure:
 
 
 @st.cache_data(ttl=3600)
+def _make_fi_bar_fig(fi_df_json: str, top_n_fi: int, fi_desc: bool) -> go.Figure:
+    fi_df = pd.read_json(StringIO(fi_df_json))
+    fig = px.bar(
+        fi_df, x="importance_gain", y="feature", orientation="h",
+        color="importance_gain", color_continuous_scale="Blues",
+        labels={"importance_gain": "Gain", "feature": "Feature"},
+        custom_data=["importance_weight", "importance_cover", "rank_by_gain", "_desc"],
+    )
+    fig.update_traces(hovertemplate=(
+        "<b>%{y}</b><br>Gain: %{x:,.1f}<br>"
+        "Weight: %{customdata[0]:,.0f}<br>Cover: %{customdata[1]:,.1f}<br>"
+        "Rank: %{customdata[2]}<br>%{customdata[3]}<extra></extra>"
+    ))
+    fig.update_coloraxes(showscale=False)
+    fig.update_layout(
+        height=max(400, top_n_fi * 28),
+        yaxis={"categoryorder": "total ascending" if fi_desc else "total descending"},
+        margin=dict(t=40, b=20),
+    )
+    return fig
+
+
+@st.cache_data(ttl=3600)
 def _make_iv_bar_fig(
     top_df_json: str, woe_desc: bool, iv_cut: float,
     unregistered_tuple: tuple, has_overflow: bool,
@@ -1205,23 +1228,7 @@ with tab_ml:
                 fi_df["_desc"] = fi_df["feature"].map(lambda f: _desc_map.get(f) or "")
             else:
                 fi_df["_desc"] = ""
-            fig_fi = px.bar(
-                fi_df, x="importance_gain", y="feature", orientation="h",
-                color="importance_gain", color_continuous_scale="Blues",
-                labels={"importance_gain": "Gain", "feature": "Feature"},
-                custom_data=["importance_weight", "importance_cover", "rank_by_gain", "_desc"],
-            )
-            fig_fi.update_traces(hovertemplate=(
-                "<b>%{y}</b><br>Gain: %{x:,.1f}<br>"
-                "Weight: %{customdata[0]:,.0f}<br>Cover: %{customdata[1]:,.1f}<br>"
-                "Rank: %{customdata[2]}<br>%{customdata[3]}<extra></extra>"
-            ))
-            fig_fi.update_coloraxes(showscale=False)
-            fig_fi.update_layout(
-                height=max(400, top_n_fi * 28),
-                yaxis={"categoryorder": "total ascending" if fi_desc else "total descending"},
-                margin=dict(t=40, b=20),
-            )
+            fig_fi = _make_fi_bar_fig(fi_df.to_json(orient="records"), top_n_fi, fi_desc)
             # 바/버블 선택이 서로를 덮어쓰지 않도록 versioned key 사용
             _bar_ver  = st.session_state.get(f"fi_bar_ver_{sel}", 0)
             _scat_ver = st.session_state.get(f"fi_scat_ver_{sel}", 0)
