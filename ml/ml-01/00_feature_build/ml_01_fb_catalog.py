@@ -36,6 +36,10 @@ def make_feature_columns_table(feature_specs: Tuple[FeatureSpec, ...]) -> pd.Dat
     """
     기존 ML 학습 모듈이 사용할 feature column 목록을 만든다.
 
+    현재 공식 노트북 흐름은 build_features(output_dir=None)로 feature를 메모리에 만든 뒤
+    encode_split_frame()이 최종 output contract를 저장한다. 이 함수의 산출물은
+    build_features(output_dir=...) 직접 저장 모드에서만 파일로 쓰인다.
+
     반환 컬럼
     ---------
     - column_name: feature 컬럼명

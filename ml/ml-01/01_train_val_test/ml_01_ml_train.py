@@ -77,7 +77,10 @@ from ml_01_ml_resource import (
     MemoryTracker,
     RuntimeTracker,
     collect_environment,
+    derive_feature_assoc_file_name,
     make_data_profile,
+    make_learning_curve_from_evals_result,
+    make_mixed_feature_association_payload,
     make_run_metadata,
     make_xgboost_diagnostics,
     save_feature_importance,
@@ -118,7 +121,10 @@ class XGBTrainConfig:
     model_file_name: str = "model.pkl"      # output_dir 아래 저장할 모델 파일명.
     feature_columns_file_name: str = "feature_columns.json"  # output_dir 아래 저장할 feature column 파일명.
     train_summary_file_name: str = "train_summary.json"      # output_dir 아래 저장할 학습 summary 파일명.
+    scores_train_summary_file_name: str = "scores_train_summary.json"  # output_dir 아래 저장할 train/val logloss curve 파일명.
     feature_importance_file_name: str = "feature_importance.csv"  # output_dir 아래 저장할 importance 파일명.
+    export_feature_assoc: bool = True
+    feature_assoc_train_sample_rows: int = 300_000
     label_col: str = "label"                # 정답 label 컬럼명. 바꾸면 load_split(), label_summary(), scale_pos_weight 계산에 모두 영향.
     sample_rows: int | None = None          # 디버깅/샘플 실험용 행 수 제한. None이면 전체 사용.
     allow_nan: bool = False                 # feature NaN 허용 여부. False면 load_split() 단계에서 차단될 가능성이 높다. 확인 필요.
@@ -191,6 +197,8 @@ class XGBTrainConfig:
         # sample_rows가 설정되면 train뿐 아니라 validation에도 동일하게 적용된다.
         if self.sample_rows is not None and self.sample_rows <= 0:
             raise ValueError("sample_rows must be a positive integer.")
+        if self.feature_assoc_train_sample_rows <= 0:
+            raise ValueError("feature_assoc_train_sample_rows must be a positive integer.")
 
 
 @dataclass(frozen=True)
@@ -211,6 +219,8 @@ class XGBTrainResult:
     model_path: Path
     feature_columns_path: Path
     train_summary_path: Path
+    scores_train_summary_path: Path
+    feature_assoc_path: Path | None
     feature_columns: list[str]
     feature_columns_hash: str
     train_rows: int
@@ -250,7 +260,9 @@ def prepare_output_dir(
     model_file_name: str = "model.pkl",
     feature_columns_file_name: str = "feature_columns.json",
     train_summary_file_name: str = "train_summary.json",
+    scores_train_summary_file_name: str = "scores_train_summary.json",
     feature_importance_file_name: str = "feature_importance.csv",
+    feature_assoc_file_name: str | None = None,
 ) -> None:
     """학습 산출물 저장 폴더를 준비하고 기존 산출물 덮어쓰기 여부를 검사"""
 
@@ -260,8 +272,11 @@ def prepare_output_dir(
         output_dir / model_file_name,
         output_dir / feature_columns_file_name,
         output_dir / train_summary_file_name,
+        output_dir / scores_train_summary_file_name,
         output_dir / feature_importance_file_name,
     ]
+    if feature_assoc_file_name is not None:
+        protected_outputs.append(output_dir / feature_assoc_file_name)
 
     # 기존 산출물이 하나라도 있고 overwrite=False이면 실행을 중단한다.
     existing = [str(path) for path in protected_outputs if path.exists()]
@@ -335,7 +350,7 @@ def build_xgb_model(config: XGBTrainConfig, scale_pos_weight: float, enable_cate
     # 아래 객체는 하이퍼파라미터와 학습 정책이 설정된 모델 인스턴스다.
     return XGBClassifier(
         objective="binary:logistic",              # 이진분류용 objective. predict_proba로 label=1 확률을 얻는 후속 흐름에 사용 가능.
-        eval_metric="aucpr",                      # validation eval_set에 대해 AUPRC 계열 지표를 계산한다.
+        eval_metric=["logloss", "aucpr"],         # logloss curve를 기록하고, 마지막 metric인 AUPRC로 early stopping을 유지한다.
         tree_method="hist",                       # 대용량 tabular 데이터에서 빠른 histogram 기반 학습 사용.
         n_estimators=config.n_estimators,         # 만들 tree 개수의 최대값. early stopping이 있으면 실제 best_iteration은 더 작을 수 있다.
         max_depth=config.max_depth,               # 각 tree의 최대 깊이. 과적합과 표현력에 영향.
@@ -402,13 +417,20 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         with runtime_tracker.measure("prepare_inputs"):
             set_seed(config.seed)
             require_training_files(config)
+            feature_assoc_file_name = (
+                derive_feature_assoc_file_name(config.train_summary_file_name, "train")
+                if config.export_feature_assoc
+                else None
+            )
             prepare_output_dir(
                 config.output_dir,
                 overwrite=config.overwrite,
                 model_file_name=config.model_file_name,
                 feature_columns_file_name=config.feature_columns_file_name,
                 train_summary_file_name=config.train_summary_file_name,
+                scores_train_summary_file_name=config.scores_train_summary_file_name,
                 feature_importance_file_name=config.feature_importance_file_name,
+                feature_assoc_file_name=feature_assoc_file_name,
             )
 
         # ml_feature_columns.csv에서 실제 모델 입력에 사용할 feature 목록을 읽는다.
@@ -466,13 +488,13 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
             )
 
         # 실제 모델 학습 지점이다.
-        # eval_set으로 validation 데이터를 넘겨 early stopping과 validation AUPRC 계산에 사용한다.
+        # eval_set 순서에 따라 validation_0=train, validation_1=val로 기록된다.
         # verbose=False이므로 학습 로그는 콘솔에 출력하지 않는다.
         with runtime_tracker.measure("fit"):
             model.fit(
                 x_train,
                 y_train,
-                eval_set=[(x_val, y_val)],
+                eval_set=[(x_train, y_train), (x_val, y_val)],
                 verbose=False,
             )
 
@@ -513,6 +535,12 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
             # XGBoost 모델 내부 진단 정보를 수집한다.
             xgboost_diagnostics = make_xgboost_diagnostics(model)
 
+            learning_curve = make_learning_curve_from_evals_result(
+                model,
+                {"validation_0": "train", "validation_1": "val"},
+                metric_name="logloss",
+            )
+
             # 실행 환경 정보를 수집한다.
             environment = collect_environment()
 
@@ -521,7 +549,10 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         model_path = config.output_dir / config.model_file_name
         feature_columns_out = config.output_dir / config.feature_columns_file_name
         train_summary_path = config.output_dir / config.train_summary_file_name
+        scores_train_summary_path = config.output_dir / config.scores_train_summary_file_name
         feature_importance_path = config.output_dir / config.feature_importance_file_name
+        feature_assoc_file_name = derive_feature_assoc_file_name(config.train_summary_file_name, "train")
+        feature_assoc_path = config.output_dir / feature_assoc_file_name
 
         # 학습된 모델과 해석용 중요도를 저장한다.
         # 보안 주의: pickle/joblib 파일은 신뢰할 수 있는 파일만 로드해야 한다.
@@ -552,16 +583,65 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         # 단, 예외 발생 시 아래 train_summary 저장까지 도달하지 못할 수 있다.
         memory_profile = memory_tracker.finish()
 
-    # 단계별 runtime dict를 만든 뒤 전체 실행 시간을 추가한다.
-    runtime_sec = runtime_tracker.as_dict()
-    runtime_sec["total_train_xgb"] = float(time.perf_counter() - total_started)
-
     # 실행마다 고유한 run_id를 생성한다.
     # seed가 같아도 uuid는 매번 달라지므로 run_id 자체는 재현 가능한 값이 아니다.
     run_id = f"xgb_train_{uuid4().hex}"
 
     # train_summary 생성 시각을 UTC ISO format으로 저장한다.
     created_at = datetime.now(timezone.utc).isoformat()
+
+    scores_train_summary = {
+        "created_at": created_at,
+        "run_id": run_id,
+        "run_metadata": make_run_metadata(
+            config.output_dir,
+            seed=config.seed,
+            artifact_file_name=config.scores_train_summary_file_name,
+        ),
+        "split": "train_val",
+        "train_path": str(config.train_path),
+        "val_path": str(config.val_path),
+        "sample_rows": config.sample_rows,
+        "sampled": config.sample_rows is not None,
+        "feature_count": len(feature_columns),
+        "feature_columns_hash": features_hash,
+        "model_file_name": config.model_file_name,
+        "feature_columns_file_name": config.feature_columns_file_name,
+        "train_summary_file_name": config.train_summary_file_name,
+        "scores_train_summary_file_name": config.scores_train_summary_file_name,
+        "best_iteration": best_iteration,
+        "best_score": best_score,
+        "learning_curve": learning_curve,
+    }
+    save_json(scores_train_summary, scores_train_summary_path)
+    scores_train_summary_sha256 = file_sha256(scores_train_summary_path)
+
+    feature_assoc_sha256 = None
+    if config.export_feature_assoc:
+        with runtime_tracker.measure("export_feature_assoc_train"):
+            feature_assoc_payload = make_mixed_feature_association_payload(
+                x_train,
+                feature_columns,
+                categorical_feature_columns=categorical_feature_columns,
+                split="train",
+                source_path=config.train_path,
+                feature_columns_hash_value=features_hash,
+                run_id=run_id,
+                run_metadata=make_run_metadata(
+                    config.output_dir,
+                    seed=config.seed,
+                    artifact_file_name=feature_assoc_file_name,
+                ),
+                max_rows=config.feature_assoc_train_sample_rows,
+                sample_strategy="deterministic_evenly_spaced",
+                created_at=created_at,
+            )
+            save_json(feature_assoc_payload, feature_assoc_path)
+            feature_assoc_sha256 = file_sha256(feature_assoc_path)
+
+    # 단계별 runtime dict를 만든 뒤 전체 실행 시간을 추가한다.
+    runtime_sec = runtime_tracker.as_dict()
+    runtime_sec["total_train_xgb"] = float(time.perf_counter() - total_started)
 
     # 학습 재현성과 사후 검토를 위한 메타데이터다.
     # 후속 validation/test 모듈에서 provenance check에 활용될 수 있다.
@@ -586,13 +666,19 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         "model_file_name": config.model_file_name,
         "feature_columns_file_name": config.feature_columns_file_name,
         "train_summary_file_name": config.train_summary_file_name,
+        "scores_train_summary_file_name": config.scores_train_summary_file_name,
         "feature_importance_file_name": config.feature_importance_file_name,
+        "feature_association_artifacts": {
+            "train": str(feature_assoc_path) if config.export_feature_assoc else None,
+        },
 
         # 저장된 산출물의 파일 hash다.
         # 후속 validation/test에서 파일이 바뀌지 않았는지 확인하는 기준으로 쓸 수 있다.
         "model_sha256": model_sha256,
         "feature_columns_file_sha256": feature_columns_file_sha256,
         "feature_importance_file_sha256": feature_importance_file_sha256,
+        "scores_train_summary_sha256": scores_train_summary_sha256,
+        "feature_association_file_sha256": feature_assoc_sha256,
 
         # 사용한 feature 개수, 목록, 순서 hash다.
         # feature 목록과 순서는 모델 입력 재현성의 핵심이다.
@@ -637,7 +723,7 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
             "gamma": config.gamma,
             "early_stopping_rounds": config.early_stopping_rounds,
             "tree_method": "hist",
-            "eval_metric": "aucpr",
+            "eval_metric": ["logloss", "aucpr"],
             "enable_categorical": bool(categorical_feature_columns),
         },
 
@@ -654,6 +740,7 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         "data_profile": data_profile,
         "environment": environment,
         "xgboost_diagnostics": xgboost_diagnostics,
+        "learning_curve_file_name": config.scores_train_summary_file_name,
 
         # feature_importance.csv에 저장된 row 수다.  일반적으로 feature 수와 일치해야 할 가능성이 높지만, 구현에 따라 다를 수 있다. 확인 필요.
         "feature_importance_rows": int(len(feature_importance_frame)),
@@ -668,6 +755,8 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         model_path=model_path,
         feature_columns_path=feature_columns_out,
         train_summary_path=train_summary_path,
+        scores_train_summary_path=scores_train_summary_path,
+        feature_assoc_path=feature_assoc_path if config.export_feature_assoc else None,
         feature_columns=feature_columns,
         feature_columns_hash=features_hash,
         train_rows=len(y_train),

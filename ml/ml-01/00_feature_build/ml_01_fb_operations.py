@@ -395,7 +395,11 @@ def execute_recency_specs_batched(
 # 4. ML-01 Stage 0 time-history operation
 # -----------------------------------------------------------------------------
 def op_cur_vs_mean_ratio(df: pd.DataFrame, spec: FeatureSpec) -> FeatureOpResult:
-    """현재 금액을 entity별 과거 window 평균 금액으로 나눈 비율을 계산한다."""
+    """현재 금액을 entity별 과거 window 평균 금액으로 나눈 비율을 계산한다.
+
+    단일 operation 실행(run_operation)용 구현이다. 공식 feature build 경로에서는
+    rolling mean을 batch로 먼저 계산한 뒤 _execute_cur_vs_mean_ratio_from_mean()을 사용한다.
+    """
 
     _require_allowed_params(spec, ("window", "closed", "fill_value", "zero_division_value", "dtype"))
     roles = _require_roles(spec, ("entity_col", "timestamp_col", "value_col"))

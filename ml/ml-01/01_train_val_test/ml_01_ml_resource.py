@@ -7,6 +7,7 @@ DataFrame, prediction score, XGBoost booster에서 기록용 metadata만 만든�
 from __future__ import annotations
 
 import importlib.metadata
+import math
 import os
 import platform
 import resource
@@ -38,6 +39,9 @@ PACKAGE_VERSION_KEYS = {
 }
 IMPORTANCE_TYPES = ("weight", "gain", "cover", "total_gain", "total_cover")
 SCORE_QUANTILES = (0.0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0)
+NUMERIC_ASSOC_METHOD = "pearson"
+CATEGORICAL_ASSOC_METHOD = "cramers_v"
+MIXED_ASSOC_METHOD = "correlation_ratio_eta"
 
 
 class RuntimeTracker:
@@ -336,6 +340,90 @@ def make_xgboost_diagnostics(model: Any) -> dict[str, Any]:
     }
 
 
+def make_learning_curve_from_evals_result(
+    model: Any,
+    eval_set_aliases: Mapping[str, str],
+    *,
+    metric_name: str = "logloss",
+) -> dict[str, Any]:
+    """XGBoost evals_result에서 split별 logloss curve를 추출한다."""
+
+    evals_result = model.evals_result()
+    curves: dict[str, dict[str, list[float]]] = {}
+    source_eval_sets: dict[str, str] = {}
+    round_count: int | None = None
+
+    for source_name, split_name in eval_set_aliases.items():
+        split_metrics = evals_result.get(source_name)
+        if split_metrics is None:
+            raise ValueError(f"XGBoost evals_result is missing eval set: {source_name!r}")
+        if metric_name not in split_metrics:
+            raise ValueError(
+                "XGBoost evals_result is missing required metric. "
+                f"eval_set={source_name!r}, metric={metric_name!r}, available={sorted(split_metrics)}"
+            )
+        values = [float(value) for value in split_metrics[metric_name]]
+        curves[str(split_name)] = {metric_name: values}
+        source_eval_sets[str(split_name)] = str(source_name)
+        round_count = len(values) if round_count is None else min(round_count, len(values))
+
+    return {
+        "curve_source": "xgboost_evals_result",
+        "loss_name": metric_name,
+        "metrics": [metric_name],
+        "eval_set_aliases": {str(key): str(value) for key, value in eval_set_aliases.items()},
+        "source_eval_sets": source_eval_sets,
+        "curves": curves,
+        "round_count": int(round_count or 0),
+    }
+
+
+def binary_logloss(y_true: pd.Series | np.ndarray, probabilities: np.ndarray) -> float:
+    """이진분류 logloss를 sklearn 없이 계산한다."""
+
+    y = np.asarray(y_true, dtype="float64")
+    p = np.asarray(probabilities, dtype="float64")
+    if y.ndim != 1 or p.ndim != 1 or len(y) != len(p):
+        raise ValueError(
+            "binary_logloss requires 1-dimensional arrays with equal length. "
+            f"y_shape={y.shape}, probability_shape={p.shape}"
+        )
+    if len(y) == 0:
+        raise ValueError("binary_logloss requires at least one row.")
+    eps = np.finfo("float64").eps
+    clipped = np.clip(p, eps, 1.0 - eps)
+    return float(-(y * np.log(clipped) + (1.0 - y) * np.log(1.0 - clipped)).mean())
+
+
+def make_posthoc_logloss_learning_curve(
+    model: Any,
+    x_frame: pd.DataFrame,
+    y_true: pd.Series | np.ndarray,
+    *,
+    split_name: str,
+) -> dict[str, Any]:
+    """학습 완료 모델로 split별 post-hoc logloss curve를 계산한다."""
+
+    booster = model.get_booster()
+    round_count = int(booster.num_boosted_rounds())
+    values: list[float] = []
+    for round_index in range(1, round_count + 1):
+        probabilities = model.predict_proba(x_frame, iteration_range=(0, round_index))[:, 1]
+        values.append(binary_logloss(y_true, probabilities))
+
+    return {
+        "curve_source": "xgboost_posthoc_predict_proba",
+        "loss_name": "logloss",
+        "metrics": ["logloss"],
+        "curves": {
+            str(split_name): {
+                "logloss": values,
+            }
+        },
+        "round_count": round_count,
+    }
+
+
 def save_feature_importance(model: Any, feature_columns: Sequence[str], path: Path | str) -> pd.DataFrame:
     """XGBoost booster importance를 feature_importance.csv로 저장한다."""
 
@@ -404,4 +492,209 @@ def make_score_profile(
         "negative_score_quantiles": _quantile_profile(p[y == 0]),
         "predicted_positive_count": predicted_positive_count,
         "predicted_positive_rate": predicted_positive_rate,
+    }
+
+
+def derive_feature_assoc_file_name(artifact_file_name: str, split: str) -> str:
+    """기존 stage artifact 파일명과 같은 prefix로 split별 association JSON 파일명을 만든다."""
+
+    name = Path(artifact_file_name).name
+    suffixes = (
+        "_train_summary.json",
+        "_metrics_val.json",
+        "_metrics_test.json",
+    )
+    for suffix in suffixes:
+        if name.endswith(suffix):
+            return f"{name.removesuffix(suffix)}_feature_assoc_mixed_{split}.json"
+    if name in {"train_summary.json", "metrics_val.json", "metrics_test.json"}:
+        return f"feature_assoc_mixed_{split}.json"
+    return f"{Path(name).stem}_feature_assoc_mixed_{split}.json"
+
+
+def infer_mixed_assoc_feature_types(
+    frame: pd.DataFrame,
+    feature_columns: Sequence[str],
+    categorical_feature_columns: Sequence[str] | None = None,
+) -> dict[str, str]:
+    """association 계산에 사용할 feature type을 numeric/categorical로 판별한다."""
+
+    categorical_names = set(categorical_feature_columns or [])
+    feature_types: dict[str, str] = {}
+    for feature in feature_columns:
+        if feature in categorical_names or isinstance(frame[feature].dtype, pd.CategoricalDtype):
+            feature_types[str(feature)] = "categorical"
+        elif pd.api.types.is_numeric_dtype(frame[feature]):
+            feature_types[str(feature)] = "numeric"
+        else:
+            feature_types[str(feature)] = "categorical"
+    return feature_types
+
+
+def deterministic_evenly_spaced_sample(frame: pd.DataFrame, max_rows: int | None) -> tuple[pd.DataFrame, bool]:
+    """DataFrame 전체 구간에서 균등 간격으로 최대 max_rows개 row를 선택한다."""
+
+    if max_rows is None or len(frame) <= max_rows:
+        return frame, False
+    if max_rows <= 0:
+        raise ValueError(f"max_rows must be positive or None. max_rows={max_rows!r}")
+
+    positions = np.linspace(0, len(frame) - 1, num=max_rows, dtype=np.int64)
+    sampled = frame.iloc[positions].copy()
+    return sampled, True
+
+
+def _to_jsonable_float(value: float | int | np.floating | None) -> float | None:
+    if value is None:
+        return None
+    numeric = float(value)
+    if math.isnan(numeric) or math.isinf(numeric):
+        return None
+    return numeric
+
+
+def _pearson_pair(left: pd.Series, right: pd.Series) -> float | None:
+    value = left.astype("float64").corr(right.astype("float64"), method="pearson")
+    return _to_jsonable_float(value)
+
+
+def _cramers_v(left: pd.Series, right: pd.Series) -> float | None:
+    frame = pd.DataFrame({"left": left.astype("string"), "right": right.astype("string")}).dropna()
+    if frame.empty:
+        return None
+    total = float(len(frame))
+    left_counts = frame["left"].value_counts()
+    right_counts = frame["right"].value_counts()
+    if len(left_counts) < 2 or len(right_counts) < 2:
+        return 0.0
+
+    observed = frame.groupby(["left", "right"], observed=True).size().rename("observed").reset_index()
+    observed["left_total"] = observed["left"].map(left_counts).astype("float64")
+    observed["right_total"] = observed["right"].map(right_counts).astype("float64")
+    # Sparse chi-square formula: sum((obs-exp)^2/exp) == n*sum(obs^2/(row_total*col_total)) - n.
+    chi2 = float(
+        total
+        * ((observed["observed"].astype("float64") ** 2) / (observed["left_total"] * observed["right_total"])).sum()
+        - total
+    )
+    phi2 = chi2 / total
+    rows, cols = len(left_counts), len(right_counts)
+    denom = min(cols - 1, rows - 1)
+    if denom <= 0:
+        return 0.0
+    return _to_jsonable_float(min(1.0, math.sqrt(max(0.0, phi2 / denom))))
+
+
+def _correlation_ratio_eta(categories: pd.Series, measurements: pd.Series) -> float | None:
+    values = pd.to_numeric(measurements, errors="coerce")
+    valid = values.notna() & categories.notna()
+    if not bool(valid.any()):
+        return None
+
+    grouped = pd.DataFrame({"category": categories[valid], "value": values[valid]}).groupby("category", observed=True)["value"]
+    counts = grouped.count().to_numpy(dtype="float64")
+    means = grouped.mean().to_numpy(dtype="float64")
+    if counts.size <= 1:
+        return 0.0
+
+    all_values = values[valid].to_numpy(dtype="float64")
+    grand_mean = float(all_values.mean())
+    between = float((counts * (means - grand_mean) ** 2).sum())
+    total = float(((all_values - grand_mean) ** 2).sum())
+    if total <= 0:
+        return 0.0
+    return _to_jsonable_float(min(1.0, math.sqrt(max(0.0, between / total))))
+
+
+def _mixed_association_pair(
+    frame: pd.DataFrame,
+    left_feature: str,
+    right_feature: str,
+    feature_types: Mapping[str, str],
+) -> tuple[float | None, str]:
+    left_type = feature_types[left_feature]
+    right_type = feature_types[right_feature]
+
+    if left_feature == right_feature:
+        return 1.0, "self"
+    if left_type == "numeric" and right_type == "numeric":
+        return _pearson_pair(frame[left_feature], frame[right_feature]), NUMERIC_ASSOC_METHOD
+    if left_type == "categorical" and right_type == "categorical":
+        return _cramers_v(frame[left_feature], frame[right_feature]), CATEGORICAL_ASSOC_METHOD
+    if left_type == "categorical":
+        return _correlation_ratio_eta(frame[left_feature], frame[right_feature]), MIXED_ASSOC_METHOD
+    return _correlation_ratio_eta(frame[right_feature], frame[left_feature]), MIXED_ASSOC_METHOD
+
+
+def make_mixed_feature_association_payload(
+    frame: pd.DataFrame,
+    feature_columns: Sequence[str],
+    *,
+    categorical_feature_columns: Sequence[str] | None = None,
+    split: str,
+    source_path: Path | str,
+    feature_columns_hash_value: str,
+    run_id: str | None,
+    run_metadata: Mapping[str, Any],
+    max_rows: int | None,
+    sample_strategy: str,
+    created_at: str,
+) -> dict[str, Any]:
+    """Streamlit heatmap용 split 단위 mixed-type association JSON payload를 만든다."""
+
+    missing = [feature for feature in feature_columns if feature not in frame.columns]
+    if missing:
+        raise ValueError(
+            "association frame is missing feature columns. "
+            f"split={split!r}, missing={missing[:30]}, missing_count={len(missing)}"
+        )
+
+    row_count_total = int(len(frame))
+    sampled_frame, sampled = deterministic_evenly_spaced_sample(frame[list(feature_columns)], max_rows)
+    row_count_used = int(len(sampled_frame))
+    feature_types = infer_mixed_assoc_feature_types(sampled_frame, feature_columns, categorical_feature_columns)
+
+    feature_names = [str(feature) for feature in feature_columns]
+    feature_count = len(feature_names)
+    matrix: list[list[float | None]] = [[None for _ in feature_names] for _ in feature_names]
+    metric_matrix: list[list[str]] = [["" for _ in feature_names] for _ in feature_names]
+    for left_index, left in enumerate(feature_names):
+        for right_index in range(left_index, feature_count):
+            right = feature_names[right_index]
+            value, method = _mixed_association_pair(sampled_frame, left, right, feature_types)
+            matrix[left_index][right_index] = value
+            matrix[right_index][left_index] = value
+            metric_matrix[left_index][right_index] = method
+            metric_matrix[right_index][left_index] = method
+
+    return {
+        "artifact_type": "feature_association_mixed",
+        "schema_version": 1,
+        "created_at": created_at,
+        "split": str(split),
+        "run_id": run_id,
+        "run_metadata": dict(run_metadata),
+        "source_path": str(source_path),
+        "feature_columns_hash": str(feature_columns_hash_value),
+        "association_methods": {
+            "numeric_numeric": NUMERIC_ASSOC_METHOD,
+            "categorical_categorical": CATEGORICAL_ASSOC_METHOD,
+            "numeric_categorical": MIXED_ASSOC_METHOD,
+        },
+        "sample_policy": {
+            "max_rows": None if max_rows is None else int(max_rows),
+            "strategy": str(sample_strategy),
+        },
+        "row_count_total": row_count_total,
+        "row_count_used": row_count_used,
+        "sampled": bool(sampled),
+        "features": [
+            {"name": str(feature), "feature_type": feature_types[str(feature)]}
+            for feature in feature_columns
+        ],
+        "association": {
+            "features": feature_names,
+            "matrix": matrix,
+            "metric_matrix": metric_matrix,
+        },
     }

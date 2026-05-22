@@ -240,12 +240,6 @@ def _aggregate(event_count: int, running_sum: float, running_sum_sq: float, min_
     return float(event_count)
 
 
-def _compute_past_window_values(work: pd.DataFrame, *, window: pd.Timedelta, agg: str) -> np.ndarray:
-    """정렬된 work frame에서 같은 timestamp를 history로 보지 않는 rolling 값을 계산한다."""
-
-    return _compute_past_window_multi_agg_values(work, window=window, aggs=(agg,))[agg]
-
-
 def _compute_past_window_multi_agg_values(
     work: pd.DataFrame,
     *,

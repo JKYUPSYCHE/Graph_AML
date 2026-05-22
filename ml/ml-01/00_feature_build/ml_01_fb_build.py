@@ -927,6 +927,11 @@ def _build_from_split_frame(
 ) -> FeatureBuildResult:
     """
     split 컬럼이 확정된 DataFrame에서 feature 계산과 저장을 수행
+
+    공식 노트북 경로는 output_dir=None으로 이 함수의 파일 저장을 건너뛰고,
+    validate_stage0_rolling_outputs() 통과 후 encode_split_frame()에서 최종 parquet와
+    output contract를 저장한다. output_dir이 지정된 direct-save 모드는 보조 실행 경로다.
+
     호출 흐름의 종착점
     ------------------
     build_features                  ┐

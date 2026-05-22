@@ -25,6 +25,7 @@ from typing import Any
 import joblib
 
 from ml_01_ml_io import (
+    categorical_columns_from_manifest,
     feature_columns_hash,
     file_sha256,
     label_summary,
@@ -40,7 +41,10 @@ from ml_01_ml_resource import (
     MemoryTracker,
     RuntimeTracker,
     collect_environment,
+    derive_feature_assoc_file_name,
     make_data_profile,
+    make_mixed_feature_association_payload,
+    make_posthoc_logloss_learning_curve,
     make_run_metadata,
     make_score_profile,
 )
@@ -75,6 +79,8 @@ class TestConfig:
     metrics_file_name: str = "metrics_test.json"
     confusion_matrix_file_name: str = "confusion_matrix_test.csv"
     encoding_manifest_path: Path | str | None = None
+    export_feature_assoc: bool = True
+    feature_assoc_test_sample_rows: int | None = None
 
     def __post_init__(self) -> None:
         """dataclass 생성 직후 경로를 정규화하고 sample_rows 값을 검증"""
@@ -96,6 +102,8 @@ class TestConfig:
             )
         if self.sample_rows is not None and self.sample_rows <= 0:
             raise ValueError("sample_rows must be a positive integer.")
+        if self.feature_assoc_test_sample_rows is not None and self.feature_assoc_test_sample_rows <= 0:
+            raise ValueError("feature_assoc_test_sample_rows must be a positive integer or None.")
 
 
 @dataclass(frozen=True)
@@ -106,6 +114,7 @@ class TestResult:
     output_dir: Path
     metrics_path: Path
     confusion_matrix_path: Path
+    feature_assoc_path: Path | None
     test_metrics: dict[str, Any]
 
 
@@ -125,13 +134,14 @@ def prepare_test_outputs(config: TestConfig) -> None:
         config.output_dir / config.metrics_file_name,
         config.output_dir / config.confusion_matrix_file_name,
     ]
+    if config.export_feature_assoc:
+        output_paths.append(config.output_dir / derive_feature_assoc_file_name(config.metrics_file_name, "test"))
     existing = [str(path) for path in output_paths if path.exists()]
     if existing and not config.overwrite:
         raise FileExistsError(
             "Existing final test artifacts found. Set overwrite=True only if rerunning final evaluation intentionally. "
             f"existing={existing}"
         )
-
 
 # -----------------------------------------------------------------------------
 # 3. final test provenance 검증
@@ -229,6 +239,7 @@ def test_xgb(config: TestConfig) -> TestResult:
 
     total_started = time.perf_counter()
     runtime_tracker = RuntimeTracker()
+    feature_assoc_path: Path | None = None
 
     if not config.confirm_final_test:
         raise ValueError(
@@ -311,6 +322,14 @@ def test_xgb(config: TestConfig) -> TestResult:
         with runtime_tracker.measure("evaluate"):
             test_metrics = evaluate_at_threshold(y_test, probabilities, threshold)
 
+        with runtime_tracker.measure("build_test_learning_curve"):
+            learning_curve = make_posthoc_logloss_learning_curve(
+                model,
+                x_test,
+                y_test,
+                split_name="test",
+            )
+
         with runtime_tracker.measure("build_metadata"):
             train_run_metadata = train_summary.get("run_metadata")
             seed = train_run_metadata.get("seed") if isinstance(train_run_metadata, dict) else train_summary.get("seed")
@@ -320,9 +339,30 @@ def test_xgb(config: TestConfig) -> TestResult:
 
         metrics_path = config.output_dir / config.metrics_file_name
         confusion_matrix_path = config.output_dir / config.confusion_matrix_file_name
+        feature_assoc_path = config.output_dir / derive_feature_assoc_file_name(config.metrics_file_name, "test")
 
         with runtime_tracker.measure("save_outputs"):
             confusion_matrix_frame(test_metrics).to_csv(confusion_matrix_path, index=False)
+
+            if config.export_feature_assoc:
+                feature_assoc_payload = make_mixed_feature_association_payload(
+                    x_test,
+                    feature_columns,
+                    categorical_feature_columns=categorical_columns_from_manifest(encoding_manifest, feature_columns),
+                    split="test",
+                    source_path=config.test_path,
+                    feature_columns_hash_value=features_hash,
+                    run_id=train_summary.get("run_id"),
+                    run_metadata=make_run_metadata(
+                        config.output_dir,
+                        seed=seed,
+                        artifact_file_name=feature_assoc_path.name,
+                    ),
+                    max_rows=config.feature_assoc_test_sample_rows,
+                    sample_strategy="full" if config.feature_assoc_test_sample_rows is None else "deterministic_evenly_spaced",
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
+                save_json(feature_assoc_payload, feature_assoc_path)
         memory_tracker.snapshot("end")
     finally:
         memory_profile = memory_tracker.finish()
@@ -365,6 +405,14 @@ def test_xgb(config: TestConfig) -> TestResult:
         "data_profile": data_profile,
         "environment": environment,
         "score_profile": score_profile,
+        "learning_curve": {
+            **learning_curve,
+            "diagnostic_only": True,
+            "not_used_for_training_or_threshold": True,
+        },
+        "feature_association_artifacts": {
+            "test": str(feature_assoc_path) if config.export_feature_assoc else None,
+        },
     }
 
     save_json(metrics_payload, metrics_path)
@@ -373,5 +421,6 @@ def test_xgb(config: TestConfig) -> TestResult:
         output_dir=config.output_dir,
         metrics_path=metrics_path,
         confusion_matrix_path=confusion_matrix_path,
+        feature_assoc_path=feature_assoc_path if config.export_feature_assoc else None,
         test_metrics=test_metrics,
     )
