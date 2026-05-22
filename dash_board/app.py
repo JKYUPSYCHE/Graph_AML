@@ -374,7 +374,7 @@ def _render_report(tab_name: str, exp_name: str) -> None:
                 new_content = st_ace(
                     value=content,
                     language="markdown",
-                    theme="github",
+                    theme="tomorrow_night",
                     font_size=14,
                     min_lines=15,
                     wrap=True,
