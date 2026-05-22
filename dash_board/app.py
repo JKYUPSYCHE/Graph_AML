@@ -305,36 +305,23 @@ def _save_report(tab_name: str, exp_name: str, content: str, author: str) -> boo
     ).encode("utf-8")
 
     file_id = _sa_find_file("report.json", exp_id, token)
-    if file_id:
-        r = requests.patch(
-            f"https://www.googleapis.com/upload/drive/v3/files/{file_id}",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            params={"uploadType": "media"},
-            data=payload,
-            timeout=15,
+    if not file_id:
+        # 서비스 계정은 개인 Drive에 파일을 새로 생성할 수 없음 (스토리지 쿼터 없음).
+        # report.json 플레이스홀더를 Drive에서 직접 만들어 두면 이후 PATCH로 저장 가능.
+        st.session_state["_sa_last_error"] = (
+            f"report.json 파일이 없습니다. "
+            f"Drive에서 dashboard › {tab_name} › {exp_name} 폴더 안에 "
+            f"report.json 파일을 직접 만들어 주세요 (내용: {{}})."
         )
-    else:
-        boundary = "report_boundary"
-        meta = json.dumps({"name": "report.json", "parents": [exp_id]}).encode("utf-8")
-        body = (
-            f"--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode() + meta +
-            f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode() + payload +
-            f"\r\n--{boundary}--".encode()
-        )
-        r = requests.post(
-            "https://www.googleapis.com/upload/drive/v3/files",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": f"multipart/related; boundary={boundary}",
-            },
-            params={"uploadType": "multipart"},
-            data=body,
-            timeout=15,
-        )
-        if r.ok:
-            new_id = r.json().get("id", "")
-            if new_id:
-                st.session_state.setdefault("_sa_file_cache", {})[f"{exp_id}/report.json"] = new_id
+        return False
+
+    r = requests.patch(
+        f"https://www.googleapis.com/upload/drive/v3/files/{file_id}",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        params={"uploadType": "media"},
+        data=payload,
+        timeout=15,
+    )
     if not r.ok:
         st.session_state["_sa_last_error"] = f"Drive API {r.status_code}: {r.text[:300]}"
     return r.ok
