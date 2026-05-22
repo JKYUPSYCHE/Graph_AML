@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,16 +24,26 @@ from typing import Any
 
 import joblib
 
-from ml_io import (
+from ml_00_ml_io import (
     feature_columns_hash,
+    file_sha256,
     label_summary,
+    load_encoding_manifest,
     load_json,
     load_saved_feature_columns,
     load_split,
     resolve_project_path,
     save_json,
 )
-from ml_metrics import confusion_matrix_frame, evaluate_at_threshold
+from ml_00_ml_metrics import confusion_matrix_frame, evaluate_at_threshold
+from ml_00_ml_resource import (
+    MemoryTracker,
+    RuntimeTracker,
+    collect_environment,
+    make_data_profile,
+    make_run_metadata,
+    make_score_profile,
+)
 
 
 # -----------------------------------------------------------------------------
@@ -63,6 +74,7 @@ class TestConfig:
     threshold_file_name: str = "threshold.json"
     metrics_file_name: str = "metrics_test.json"
     confusion_matrix_file_name: str = "confusion_matrix_test.csv"
+    encoding_manifest_path: Path | str | None = None
 
     def __post_init__(self) -> None:
         """dataclass 생성 직후 경로를 정규화하고 sample_rows 값을 검증"""
@@ -76,6 +88,12 @@ class TestConfig:
             "output_dir",
             resolve_project_path(self.output_dir, self.project_root),
         )
+        if self.encoding_manifest_path is not None:
+            object.__setattr__(
+                self,
+                "encoding_manifest_path",
+                resolve_project_path(self.encoding_manifest_path, self.project_root),
+            )
         if self.sample_rows is not None and self.sample_rows <= 0:
             raise ValueError("sample_rows must be a positive integer.")
 
@@ -122,6 +140,9 @@ def require_final_test_provenance(
     threshold_payload: dict[str, Any],
     train_summary: dict[str, Any],
     feature_columns_hash_value: str,
+    model_sha256_value: str,
+    feature_columns_file_sha256_value: str,
+    train_summary_sha256_value: str,
     config: TestConfig,
 ) -> None:
     """
@@ -137,18 +158,39 @@ def require_final_test_provenance(
     if bool(train_summary.get("sampled")) or train_summary.get("sample_rows") is not None:
         raise ValueError(
             "Final test is blocked because the model was trained with sampled data. "
-            "Run ml_train.train_xgb() with sample_rows=None before final test."
+            "Run ml_00_ml_train.train_xgb() with sample_rows=None before final test."
         )
 
     if bool(threshold_payload.get("sampled")) or threshold_payload.get("sample_rows") is not None:
         raise ValueError(
             "Final test is blocked because threshold.json was produced from sampled validation data. "
-            "Run ml_val.validate_xgb() with sample_rows=None before final test."
+            "Run ml_00_ml_val.validate_xgb() with sample_rows=None before final test."
+        )
+
+    train_run_id = train_summary.get("run_id")
+    if not train_run_id:
+        raise ValueError("train_summary.json is missing run_id. Rerun ml_00_ml_train.train_xgb() with the updated module.")
+    if threshold_payload.get("run_id") != train_run_id:
+        raise ValueError(
+            "Final test provenance check failed: run_id. "
+            f"threshold={threshold_payload.get('run_id')!r}, train_summary={train_run_id!r}"
         )
 
     checks = {
+        "train_feature_columns_hash": (train_summary.get("feature_columns_hash"), feature_columns_hash_value),
+        "train_model_sha256": (train_summary.get("model_sha256"), model_sha256_value),
+        "train_feature_columns_file_sha256": (
+            train_summary.get("feature_columns_file_sha256"),
+            feature_columns_file_sha256_value,
+        ),
         "selection_split": (threshold_payload.get("selection_split"), "val"),
         "feature_columns_hash": (threshold_payload.get("feature_columns_hash"), feature_columns_hash_value),
+        "model_sha256": (threshold_payload.get("model_sha256"), model_sha256_value),
+        "feature_columns_file_sha256": (
+            threshold_payload.get("feature_columns_file_sha256"),
+            feature_columns_file_sha256_value,
+        ),
+        "train_summary_sha256": (threshold_payload.get("train_summary_sha256"), train_summary_sha256_value),
         "model_file_name": (threshold_payload.get("model_file_name"), config.model_file_name),
         "feature_columns_file_name": (
             threshold_payload.get("feature_columns_file_name"),
@@ -185,6 +227,9 @@ def test_xgb(config: TestConfig) -> TestResult:
     6. metrics_test.json과 confusion_matrix_test.csv 저장
     """
 
+    total_started = time.perf_counter()
+    runtime_tracker = RuntimeTracker()
+
     if not config.confirm_final_test:
         raise ValueError(
             "Test evaluation is locked by default. "
@@ -196,67 +241,129 @@ def test_xgb(config: TestConfig) -> TestResult:
             "use ml-00_smoke_test.ipynb for fixture or sampled checks."
         )
 
-    model_path = config.output_dir / config.model_file_name
-    feature_columns_path = config.output_dir / config.feature_columns_file_name
-    train_summary_path = config.output_dir / config.train_summary_file_name
-    threshold_path = config.output_dir / config.threshold_file_name
+    memory_tracker = MemoryTracker(scope="test")
+    memory_tracker.start()
+    try:
+        with runtime_tracker.measure("prepare_test"):
+            model_path = config.output_dir / config.model_file_name
+            feature_columns_path = config.output_dir / config.feature_columns_file_name
+            train_summary_path = config.output_dir / config.train_summary_file_name
+            threshold_path = config.output_dir / config.threshold_file_name
 
-    if not model_path.exists():
-        raise FileNotFoundError(f"model file not found: {model_path}")
-    if not feature_columns_path.exists():
-        raise FileNotFoundError(f"feature columns file not found: {feature_columns_path}")
-    if not train_summary_path.exists():
-        raise FileNotFoundError(f"train summary file not found: {train_summary_path}")
-    if not threshold_path.exists():
-        raise FileNotFoundError(f"threshold file not found. Run ml_val.validate_xgb() first: {threshold_path}")
-    if not config.test_path.exists():
-        raise FileNotFoundError(f"test parquet not found: {config.test_path}")
+            if not model_path.exists():
+                raise FileNotFoundError(f"model file not found: {model_path}")
+            if not feature_columns_path.exists():
+                raise FileNotFoundError(f"feature columns file not found: {feature_columns_path}")
+            if not train_summary_path.exists():
+                raise FileNotFoundError(f"train summary file not found: {train_summary_path}")
+            if not threshold_path.exists():
+                raise FileNotFoundError(f"threshold file not found. Run ml_00_ml_val.validate_xgb() first: {threshold_path}")
+            if not config.test_path.exists():
+                raise FileNotFoundError(f"test parquet not found: {config.test_path}")
 
-    prepare_test_outputs(config)
+            prepare_test_outputs(config)
 
-    model = joblib.load(model_path)
-    feature_columns = load_saved_feature_columns(feature_columns_path)
-    features_hash = feature_columns_hash(feature_columns)
-    train_summary = load_json(train_summary_path)
-    threshold_payload = load_json(threshold_path)
-    require_final_test_provenance(threshold_payload, train_summary, features_hash, config)
-    threshold = float(threshold_payload["threshold"])
+        with runtime_tracker.measure("load_artifacts"):
+            feature_columns = load_saved_feature_columns(feature_columns_path)
+            features_hash = feature_columns_hash(feature_columns)
+            train_summary = load_json(train_summary_path)
+            threshold_payload = load_json(threshold_path)
+            model_sha256 = file_sha256(model_path)
+            feature_columns_file_sha256 = file_sha256(feature_columns_path)
+            train_summary_sha256 = file_sha256(train_summary_path)
+            threshold_sha256 = file_sha256(threshold_path)
+            require_final_test_provenance(
+                threshold_payload,
+                train_summary,
+                features_hash,
+                model_sha256,
+                feature_columns_file_sha256,
+                train_summary_sha256,
+                config,
+            )
+            encoding_manifest_path = config.encoding_manifest_path
+            if encoding_manifest_path is None and train_summary.get("encoding_manifest_path") is not None:
+                encoding_manifest_path = Path(str(train_summary["encoding_manifest_path"])).expanduser().resolve()
+            encoding_manifest = load_encoding_manifest(encoding_manifest_path)
+            if encoding_manifest_path is not None and train_summary.get("encoding_manifest_sha256") is not None:
+                encoding_manifest_sha256 = file_sha256(encoding_manifest_path)
+                if train_summary.get("encoding_manifest_sha256") != encoding_manifest_sha256:
+                    raise ValueError("Final test provenance check failed: encoding_manifest_sha256 mismatch.")
+            threshold = float(threshold_payload["threshold"])
+            model = joblib.load(model_path)
+        memory_tracker.snapshot("after_artifact_load")
 
-    x_test, y_test = load_split(
-        config.test_path,
-        feature_columns=feature_columns,
-        label_col=config.label_col,
-        sample_rows=config.sample_rows,
-        allow_nan=config.allow_nan,
-        expected_split="test",
-    )
+        with runtime_tracker.measure("load_test_split"):
+            x_test, y_test = load_split(
+                config.test_path,
+                feature_columns=feature_columns,
+                label_col=config.label_col,
+                sample_rows=config.sample_rows,
+                allow_nan=config.allow_nan,
+                expected_split="test",
+                encoding_manifest=encoding_manifest,
+            )
+        memory_tracker.snapshot("after_test_load")
 
-    probabilities = model.predict_proba(x_test)[:, 1]
-    test_metrics = evaluate_at_threshold(y_test, probabilities, threshold)
+        with runtime_tracker.measure("predict_proba"):
+            probabilities = model.predict_proba(x_test)[:, 1]
+
+        with runtime_tracker.measure("evaluate"):
+            test_metrics = evaluate_at_threshold(y_test, probabilities, threshold)
+
+        with runtime_tracker.measure("build_metadata"):
+            train_run_metadata = train_summary.get("run_metadata")
+            seed = train_run_metadata.get("seed") if isinstance(train_run_metadata, dict) else train_summary.get("seed")
+            data_profile = make_data_profile({"test": (config.test_path, x_test, y_test)}, feature_columns)
+            score_profile = make_score_profile(y_test, probabilities, threshold)
+            environment = collect_environment()
+
+        metrics_path = config.output_dir / config.metrics_file_name
+        confusion_matrix_path = config.output_dir / config.confusion_matrix_file_name
+
+        with runtime_tracker.measure("save_outputs"):
+            confusion_matrix_frame(test_metrics).to_csv(confusion_matrix_path, index=False)
+        memory_tracker.snapshot("end")
+    finally:
+        memory_profile = memory_tracker.finish()
+
+    runtime_sec = runtime_tracker.as_dict()
+    runtime_sec["total_test_xgb"] = float(time.perf_counter() - total_started)
 
     metrics_payload = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "split": "test",
+        "run_metadata": make_run_metadata(config.output_dir, seed=seed),
         "test_path": str(config.test_path),
         "threshold_source": str(threshold_path),
+        "threshold_sha256": threshold_sha256,
+        "threshold_strategy": threshold_payload.get("threshold_strategy"),
         "threshold": threshold,
         "sample_rows": config.sample_rows,
         "sampled": config.sample_rows is not None,
         "feature_count": len(feature_columns),
         "feature_columns_hash": features_hash,
+        "encoding_manifest_path": None if encoding_manifest_path is None else str(encoding_manifest_path),
+        "model_sha256": model_sha256,
+        "feature_columns_file_sha256": feature_columns_file_sha256,
+        "train_summary_sha256": train_summary_sha256,
+        "run_id": train_summary.get("run_id"),
         "label_summary": label_summary(y_test),
         "model_file_name": config.model_file_name,
         "feature_columns_file_name": config.feature_columns_file_name,
         "train_summary_file_name": config.train_summary_file_name,
         "metrics": test_metrics["summary"],
         "confusion_matrix": test_metrics["confusion_matrix"],
+        "memory_mb": memory_profile["memory_mb"],
+        "memory_mb_semantics": memory_profile["memory_mb_semantics"],
+        "runtime_sec": runtime_sec,
+        "memory_profile": memory_profile,
+        "data_profile": data_profile,
+        "environment": environment,
+        "score_profile": score_profile,
     }
 
-    metrics_path = config.output_dir / config.metrics_file_name
-    confusion_matrix_path = config.output_dir / config.confusion_matrix_file_name
-
     save_json(metrics_payload, metrics_path)
-    confusion_matrix_frame(test_metrics).to_csv(confusion_matrix_path, index=False)
 
     return TestResult(
         output_dir=config.output_dir,
