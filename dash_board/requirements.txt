@@ -1,0 +1,6 @@
+streamlit>=1.37
+requests
+pandas
+plotly
+google-auth
+streamlit-ace

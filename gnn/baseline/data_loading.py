@@ -2,117 +2,146 @@ import pandas as pd
 import numpy as np
 import torch
 import logging
-import itertools
+from pathlib import Path
+from sklearn.preprocessing import LabelEncoder
 from data_util import GraphData, HeteroData, z_norm, create_hetero_obj
 
-def get_data(args, data_config):
-    '''Loads the AML transaction data.
 
-    1. The data is loaded from the csv and the necessary features are chosen.
-    2. The data is split into training, validation and test data.
-    3. PyG Data objects are created with the respective data splits.
+def _split_indices(split_col: pd.Series):
+    """split 컬럼(train/val/test) 기준으로 index 반환."""
+    arr = split_col.to_numpy()
+    tr_inds  = torch.where(torch.tensor(arr == 'train'))[0]
+    val_inds = torch.where(torch.tensor(arr == 'val'))[0]
+    te_inds  = torch.where(torch.tensor(arr == 'test'))[0]
+    return tr_inds, val_inds, te_inds
+
+
+def _encode_categoricals(df_edges, tr_inds):
+    """train rows 기준으로 LabelEncoder fit 후 전체 적용. 미등장 카테고리 → n_unique_train."""
+    cat_cols = [
+        'cat__payment_currency__code',
+        'cat__receiving_currency__code',
+        'cat__payment_format__code',
+    ]
+    for col in cat_cols:
+        if col not in df_edges.columns:
+            continue
+        le = LabelEncoder()
+        le.fit(df_edges.iloc[tr_inds][col].astype(str))
+        n_unique = len(le.classes_)
+
+        arr = df_edges[col].astype(str).to_numpy()
+        known = np.isin(arr, le.classes_)
+        encoded = np.where(
+            known,
+            le.transform(np.where(known, arr, le.classes_[0])),
+            n_unique,
+        )
+        df_edges[col] = encoded
+    return df_edges
+
+
+def get_data(args, data_config):
+    '''Loads the AML transaction data from 04_gnn_graph_process.ipynb outputs.
+
+    - formatted_transactions_gf.csv : edge features, split, label, from_id/to_id
+    - formatted_transactions.csv    : timestamp (ports/tds 계산용, 모델 입력 아님)
+    - account_mapping.csv           : from_id/to_id → node_idx 매핑
     '''
 
-    transaction_file = f"{data_config['paths']['aml_data']}/{args.data}/formatted_transactions.csv"
-    df_edges = pd.read_csv(transaction_file)
+    gnn_dir = Path(data_config['paths']['gnn_inputs'])
+
+    df_edges = pd.read_csv(gnn_dir / 'formatted_transactions_gf.csv')
+    df_ts    = pd.read_csv(gnn_dir / 'formatted_transactions.csv', usecols=['timestamp'])
+    mapping  = pd.read_csv(gnn_dir / 'account_mapping.csv')
 
     logging.info(f'Available Edge Features: {df_edges.columns.tolist()}')
 
-    df_edges['Timestamp'] = df_edges['Timestamp'] - df_edges['Timestamp'].min()
+    # timestamp → 경과 초 (ports/time-delta 내부 계산용, 모델 입력 아님)
+    ts = pd.to_datetime(df_ts['timestamp'])
+    ts_elapsed = (ts - ts.min()).dt.total_seconds()
+    timestamps = torch.tensor(ts_elapsed.to_numpy()).float()
 
-    max_n_id = df_edges.loc[:, ['from_id', 'to_id']].to_numpy().max() + 1
-    df_nodes = pd.DataFrame({'NodeID': np.arange(max_n_id), 'Feature': np.ones(max_n_id)})
-    timestamps = torch.Tensor(df_edges['Timestamp'].to_numpy())
-    y = torch.LongTensor(df_edges['Is Laundering'].to_numpy())
+    # from_id/to_id → node_idx (account_mapping.csv 기준)
+    id_to_idx = dict(zip(mapping['account_id'].astype(str), mapping['node_idx']))
+    max_n_id  = int(mapping['node_idx'].max()) + 1  # unknown token index
+
+    def _to_str_id(series):
+        try:
+            return series.astype(float).astype(int).astype(str)
+        except (ValueError, TypeError):
+            return series.astype(str)
+
+    from_id = _to_str_id(df_edges['from_id']).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
+    to_id   = _to_str_id(df_edges['to_id']).map(id_to_idx).fillna(max_n_id).astype(int).to_numpy()
+
+    n_unk_from = int((from_id == max_n_id).sum())
+    n_unk_to   = int((to_id   == max_n_id).sum())
+    logging.info(f"Unknown from_id: {n_unk_from}/{len(from_id)} ({n_unk_from/len(from_id)*100:.1f}%)")
+    logging.info(f"Unknown to_id:   {n_unk_to}/{len(to_id)} ({n_unk_to/len(to_id)*100:.1f}%)")
+
+    # node feature matrix: all nodes + unknown token slot (placeholder 1s)
+    n_nodes  = max_n_id + 1
+    df_nodes = pd.DataFrame({'Feature': np.ones(n_nodes)})
+
+    y = torch.LongTensor(df_edges['label'].to_numpy())
 
     logging.info(f"Illicit ratio = {sum(y)} / {len(y)} = {sum(y) / len(y) * 100:.2f}%")
-    logging.info(f"Number of nodes (holdings doing transcations) = {df_nodes.shape[0]}")
-    logging.info(f"Number of transactions = {df_edges.shape[0]}")
+    logging.info(f"Number of nodes = {n_nodes}")
+    logging.info(f"Number of transactions = {len(df_edges)}")
 
-    edge_features = ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+    # split
+    tr_inds, val_inds, te_inds = _split_indices(df_edges['split'])
+
+    logging.info(f"Total train samples: {tr_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[tr_inds].float().mean() * 100:.2f}%")
+    logging.info(f"Total val samples:   {val_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[val_inds].float().mean() * 100:.2f}%")
+    logging.info(f"Total test samples:  {te_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[te_inds].float().mean() * 100:.2f}%")
+
+    # categorical encoding: train 기준 fit, 미등장 카테고리 → unknown token
+    df_edges = _encode_categoricals(df_edges, tr_inds.numpy())
+
+    edge_features = [
+        'amount__current__log1p',
+        'cat__payment_currency__code',
+        'cat__receiving_currency__code',
+        'cat__payment_format__code',
+        'time__row__hour',
+        'time__row__dayofweek',
+        'time__row__is_weekend',
+    ]
     node_features = ['Feature']
 
     logging.info(f'Edge features being used: {edge_features}')
-    logging.info(f'Node features being used: {node_features} ("Feature" is a placeholder feature of all 1s)')
+    logging.info(f'Node features being used: {node_features} (placeholder all 1s)')
 
-    x = torch.tensor(df_nodes.loc[:, node_features].to_numpy()).float()
-    edge_index = torch.LongTensor(df_edges.loc[:, ['from_id', 'to_id']].to_numpy().T)
-    edge_attr = torch.tensor(df_edges.loc[:, edge_features].to_numpy()).float()
+    x          = torch.tensor(df_nodes[node_features].to_numpy()).float()
+    edge_index = torch.LongTensor(np.stack([from_id, to_id]))
+    edge_attr  = torch.tensor(df_edges[edge_features].to_numpy()).float()
 
-    n_days = int(timestamps.max() / (3600 * 24) + 1)
-    n_samples = y.shape[0]
-    logging.info(f'number of days and transactions in the data: {n_days} days, {n_samples} transactions')
+    e_tr  = tr_inds.numpy()
+    e_val = val_inds.numpy()
+    e_te  = np.arange(len(df_edges))
 
-    daily_irs, weighted_daily_irs, daily_inds, daily_trans = [], [], [], []
-    for day in range(n_days):
-        l = day * 24 * 3600
-        r = (day + 1) * 24 * 3600
-        day_inds = torch.where((timestamps >= l) & (timestamps < r))[0]
-        daily_irs.append(y[day_inds].float().mean())
-        weighted_daily_irs.append(y[day_inds].float().mean() * day_inds.shape[0] / n_samples)
-        daily_inds.append(day_inds)
-        daily_trans.append(day_inds.shape[0])
+    tr_edge_index,  tr_edge_attr,  tr_y,  tr_edge_times  = edge_index[:, e_tr],  edge_attr[e_tr],  y[e_tr],  timestamps[e_tr]
+    val_edge_index, val_edge_attr, val_y, val_edge_times = edge_index[:, e_val], edge_attr[e_val], y[e_val], timestamps[e_val]
+    te_edge_index,  te_edge_attr,  te_y,  te_edge_times  = edge_index[:, e_te],  edge_attr[e_te],  y[e_te],  timestamps[e_te]
 
-    split_per = [0.6, 0.2, 0.2]
-    daily_totals = np.array(daily_trans)
-    d_ts = daily_totals
-    I = list(range(len(d_ts)))
-    split_scores = dict()
-    for i,j in itertools.combinations(I, 2):
-        if j >= i:
-            split_totals = [d_ts[:i].sum(), d_ts[i:j].sum(), d_ts[j:].sum()]
-            split_totals_sum = np.sum(split_totals)
-            split_props = [v/split_totals_sum for v in split_totals]
-            split_error = [abs(v-t)/t for v,t in zip(split_props, split_per)]
-            score = max(split_error)
-            split_scores[(i,j)] = score
-        else:
-            continue
-
-    i,j = min(split_scores, key=split_scores.get)
-    split = [list(range(i)), list(range(i, j)), list(range(j, len(daily_totals)))]
-    logging.info(f'Calculate split: {split}')
-
-    split_inds = {k: [] for k in range(3)}
-    for i in range(3):
-        for day in split[i]:
-            split_inds[i].append(daily_inds[day])
-
-    tr_inds = torch.cat(split_inds[0])
-    val_inds = torch.cat(split_inds[1])
-    te_inds = torch.cat(split_inds[2])
-
-    logging.info(f"Total train samples: {tr_inds.shape[0] / y.shape[0] * 100 :.2f}% || IR: "
-            f"{y[tr_inds].float().mean() * 100 :.2f}% || Train days: {split[0][:5]}")
-    logging.info(f"Total val samples: {val_inds.shape[0] / y.shape[0] * 100 :.2f}% || IR: "
-        f"{y[val_inds].float().mean() * 100:.2f}% || Val days: {split[1][:5]}")
-    logging.info(f"Total test samples: {te_inds.shape[0] / y.shape[0] * 100 :.2f}% || IR: "
-        f"{y[te_inds].float().mean() * 100:.2f}% || Test days: {split[2][:5]}")
-
-    tr_x, val_x, te_x = x, x, x
-    e_tr = tr_inds.numpy()
-    e_val = np.concatenate([tr_inds, val_inds])
-
-    tr_edge_index,  tr_edge_attr,  tr_y,  tr_edge_times  = edge_index[:,e_tr],  edge_attr[e_tr],  y[e_tr],  timestamps[e_tr]
-    val_edge_index, val_edge_attr, val_y, val_edge_times = edge_index[:,e_val], edge_attr[e_val], y[e_val], timestamps[e_val]
-    te_edge_index,  te_edge_attr,  te_y,  te_edge_times  = edge_index,          edge_attr,        y,        timestamps
-
-    tr_data  = GraphData(x=tr_x,  y=tr_y,  edge_index=tr_edge_index,  edge_attr=tr_edge_attr,  timestamps=tr_edge_times)
-    val_data = GraphData(x=val_x, y=val_y, edge_index=val_edge_index, edge_attr=val_edge_attr, timestamps=val_edge_times)
-    te_data  = GraphData(x=te_x,  y=te_y,  edge_index=te_edge_index,  edge_attr=te_edge_attr,  timestamps=te_edge_times)
+    tr_data  = GraphData(x=x, y=tr_y,  edge_index=tr_edge_index,  edge_attr=tr_edge_attr,  timestamps=tr_edge_times)
+    val_data = GraphData(x=x, y=val_y, edge_index=val_edge_index, edge_attr=val_edge_attr, timestamps=val_edge_times)
+    te_data  = GraphData(x=x, y=te_y,  edge_index=te_edge_index,  edge_attr=te_edge_attr,  timestamps=te_edge_times)
 
     if args.ports:
-        logging.info(f"Start: adding ports")
+        logging.info("Start: adding ports")
         tr_data.add_ports()
         val_data.add_ports()
         te_data.add_ports()
-        logging.info(f"Done: adding ports")
+        logging.info("Done: adding ports")
     if args.tds:
-        logging.info(f"Start: adding time-deltas")
+        logging.info("Start: adding time-deltas")
         tr_data.add_time_deltas()
         val_data.add_time_deltas()
         te_data.add_time_deltas()
-        logging.info(f"Done: adding time-deltas")
+        logging.info("Done: adding time-deltas")
 
     tr_data.x = val_data.x = te_data.x = z_norm(tr_data.x)
     if not args.model == 'rgcn':
@@ -129,4 +158,7 @@ def get_data(args, data_config):
     logging.info(f'validation data object: {val_data}')
     logging.info(f'test data object: {te_data}')
 
-    return tr_data, val_data, te_data, tr_inds, val_inds, te_inds
+    return tr_data, val_data, te_data, \
+           torch.arange(len(e_tr)), \
+           torch.arange(len(e_val)), \
+           torch.arange(len(e_te))

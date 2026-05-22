@@ -11,23 +11,17 @@ gnn/
     ├── models.py           # GNN 모델 구현 — GINe, GATe, PNA, RGCN
     ├── training.py         # 학습 루프 — homo/hetero 그래프 각각 train 함수 포함
     ├── train_util.py       # 학습 유틸 — EgoID transform, DataLoader, 평가 함수
-    ├── data_loading.py     # 데이터 로딩 — CSV 읽기, 시간 기반 train/val/test 분할
+    ├── data_loading.py     # 데이터 로딩 — ml_exp00.parquet 읽기, split 컬럼 기반 train/val/test 분할
     ├── data_util.py        # 그래프 데이터 객체 — GraphData, HeteroGraphData, port/time-delta 계산
     ├── inference.py        # 저장된 모델 불러와 추론 실행
     ├── util.py             # 공통 유틸 — argparser, logger, set_seed
-    ├── format_kaggle_files.py  # 전처리 스크립트 — Kaggle raw CSV → formatted_transactions.csv
     ├── data_config.json    # 데이터/모델 경로 설정 (실행 전 경로 수정 필요)
     ├── model_settings.json # 모델별 하이퍼파라미터 (lr, hidden dim, dropout 등)
 ```
 
 ## 실행 방법
 
-### 1. 데이터 전처리
-```bash
-python format_kaggle_files.py /path/to/HI-Small_Trans.csv
-```
-
-### 2. data_config.json 경로 설정
+### 1. data_config.json 경로 설정
 
 `gnn/baseline/data_config.json`의 경로가 실제 환경에 맞는지 확인한다. 경로는 `gnn/baseline/` 기준 상대 경로다.
 
@@ -41,9 +35,51 @@ python format_kaggle_files.py /path/to/HI-Small_Trans.csv
 }
 ```
 
-`--data` 인자로 넘긴 값이 `aml_data` 경로 하위 폴더명이 된다. 예: `--data Small_LI` → `../../data/Small_LI/formatted_transactions.csv`
+`--data` 인자로 넘긴 값이 `aml_data` 경로 하위 폴더명이 된다. 예: `--data Small_LI` → `../../data/Small_LI/ml_exp00.parquet`
 
-### 3. 학습 실행
+전처리는 `data/preprocessing/03_ml_feature_process_v2.ipynb`를 Colab에서 실행하여 `ml_exp00.parquet`과 `categorical_encoding_summary.csv`를 생성한 뒤 해당 폴더에 배치한다.
+
+### 2. TensorBoard 설치 (에폭별 지표 시각화)
+
+학습 중 Train/Val/Test의 F1·Recall·Precision·AUPRC를 실시간으로 그래프로 확인하려면 아래 패키지가 필요하다.
+
+```bash
+pip install tensorboard "setuptools<70"
+```
+
+> `setuptools<70` 이 필요한 이유: tensorboard가 내부적으로 `pkg_resources`를 사용하는데, setuptools 70 이상에서는 해당 모듈이 제거되어 실행 오류가 발생한다.
+
+학습 실행 후 (또는 실행 중) 별도 터미널에서 아래 명령어로 TensorBoard를 실행한다.
+
+```bash
+# gnn/baseline/ 디렉토리에서 실행
+tensorboard --logdir runs
+```
+
+브라우저에서 `http://localhost:6006` 으로 접속하면 에폭별 지표 그래프를 확인할 수 있다.
+로그는 `runs/{데이터}_{모델}_{날짜시간}/` 폴더에 저장되며, 실험을 여러 번 돌렸을 때 TensorBoard에서 실험별로 비교할 수 있다.
+
+### 3. TensorBoard 설치 (에폭별 지표 시각화)
+
+학습 중 Train/Val/Test의 F1·Recall·Precision·AUPRC를 실시간으로 그래프로 확인하려면 아래 패키지가 필요하다.
+
+```bash
+pip install tensorboard "setuptools<70"
+```
+
+> `setuptools<70` 이 필요한 이유: tensorboard가 내부적으로 `pkg_resources`를 사용하는데, setuptools 70 이상에서는 해당 모듈이 제거되어 실행 오류가 발생한다.
+
+학습 실행 후 (또는 실행 중) 별도 터미널에서 아래 명령어로 TensorBoard를 실행한다.
+
+```bash
+# gnn/baseline/ 디렉토리에서 실행
+tensorboard --logdir runs
+```
+
+브라우저에서 `http://localhost:6006` 으로 접속하면 에폭별 지표 그래프를 확인할 수 있다.
+로그는 `runs/{데이터}_{모델}_{날짜시간}/` 폴더에 저장되며, 실험을 여러 번 돌렸을 때 TensorBoard에서 실험별로 비교할 수 있다.
+
+### 4. 학습 실행
 
 `gnn/baseline/` 디렉토리에서 실행한다.
 
@@ -61,7 +97,7 @@ python main.py --data Small_LI --model pna --emlps --reverse_mp --ego --ports --
 python main.py --data Small_LI --model pna --emlps --reverse_mp --ego --ports --inference --unique_name pna_run1
 ```
 
-### CLI 플래그 전체 목록
+### 5. CLI 플래그 전체 목록
 
 **필수 인자**
 

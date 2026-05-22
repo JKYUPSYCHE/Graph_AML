@@ -16,7 +16,7 @@ class AddEgoIds(BaseTransform):
     def __init__(self):
         pass
 
-    def __call__(self, data: Union[Data, HeteroData]):
+    def forward(self, data: Union[Data, HeteroData]):
         x = data.x if not isinstance(data, HeteroData) else data['node'].x
         device = x.device
         ids = torch.zeros((x.shape[0], 1), device=device)
@@ -71,7 +71,7 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
 
         tr_loader =  LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
                                     edge_label_index=(('node', 'to', 'node'), tr_edge_label_index),
-                                    edge_label=tr_edge_label, batch_size=args.batch_size, shuffle=True, transform=transform)
+                                    edge_label=tr_edge_label, batch_size=args.batch_size, shuffle=True, drop_last=True, transform=transform)
 
         val_edge_label_index = val_data['node', 'to', 'node'].edge_index[:,val_inds]
         val_edge_label = val_data['node', 'to', 'node'].y[val_inds]
@@ -87,7 +87,7 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
                                     edge_label_index=(('node', 'to', 'node'), te_edge_label_index),
                                     edge_label=te_edge_label, batch_size=args.batch_size, shuffle=False, transform=transform)
     else:
-        tr_loader =  LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs, batch_size=args.batch_size, shuffle=True, transform=transform)
+        tr_loader =  LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs, batch_size=args.batch_size, shuffle=True, drop_last=True, transform=transform)
         val_loader = LinkNeighborLoader(val_data,num_neighbors=args.num_neighs, edge_label_index=val_data.edge_index[:, val_inds],
                                         edge_label=val_data.y[val_inds], batch_size=args.batch_size, shuffle=False, transform=transform)
         te_loader =  LinkNeighborLoader(te_data,num_neighbors=args.num_neighs, edge_label_index=te_data.edge_index[:, te_inds],
@@ -98,6 +98,7 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
 @torch.no_grad()
 def evaluate_homo(loader, inds, model, data, device, args):
     '''Evaluates the model performance for homogenous graph data.'''
+    model.eval()
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(device)
     t_start = time.perf_counter()
@@ -146,6 +147,7 @@ def evaluate_homo(loader, inds, model, data, device, args):
     else:
         memory_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2
 
+    model.train()
     pred = torch.cat(preds, dim=0).cpu().numpy()
     pred_proba = torch.cat(pred_probas, dim=0).cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
@@ -162,6 +164,7 @@ def evaluate_homo(loader, inds, model, data, device, args):
 @torch.no_grad()
 def evaluate_hetero(loader, inds, model, data, device, args):
     '''Evaluates the model performance for heterogenous graph data.'''
+    model.eval()
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(device)
     t_start = time.perf_counter()
@@ -212,6 +215,7 @@ def evaluate_hetero(loader, inds, model, data, device, args):
     else:
         memory_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2
 
+    model.train()
     pred = torch.cat(preds, dim=0).cpu().numpy()
     pred_proba = torch.cat(pred_probas, dim=0).cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
@@ -226,11 +230,15 @@ def evaluate_hetero(loader, inds, model, data, device, args):
     }
 
 def save_model(model, optimizer, epoch, args, data_config):
+    suffix = "" if not args.finetune else "_finetuned"
+    base = f'{data_config["paths"]["model_to_save"]}/checkpoint_{args.unique_name}{suffix}'
     torch.save({
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict()
-                }, f'{data_config["paths"]["model_to_save"]}/checkpoint_{args.unique_name}{"" if not args.finetune else "_finetuned"}.tar')
+        'epoch': epoch + 1,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict()
+    }, f'{base}.tar')
+    with open(f'{base}_args.json', 'w') as f:
+        json.dump(vars(args), f, indent=2)
 
 def load_model(model, device, args, config, data_config):
     checkpoint = torch.load(f'{data_config["paths"]["model_to_load"]}/checkpoint_{args.unique_name}.tar')

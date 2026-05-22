@@ -10,3 +10,16 @@ __pycache__/
 
 # Logs
 logs/
+
+# TensorBoard
+gnn/gf_model/runs/
+
+
+# Claude Code
+.claude/
+
+# Streamlit secrets (절대 커밋 금지)
+**/.streamlit/secrets.toml
+
+# Docs / examples
+docs/
