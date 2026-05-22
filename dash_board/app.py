@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from io import BytesIO
 
 import pandas as pd
@@ -89,6 +90,196 @@ def _download_csv(file_id: str) -> pd.DataFrame:
     )
     r.raise_for_status()
     return pd.read_csv(BytesIO(r.content), encoding="utf-8-sig")
+
+
+# ── Report: Drive write helpers (서비스 계정) ──────────────────────────────
+
+def _get_sa_token() -> str:
+    """서비스 계정으로 Drive 쓰기 토큰 발급 (session 내 캐시)."""
+    if "sa_token" in st.session_state:
+        return st.session_state["sa_token"]
+    try:
+        from google.oauth2 import service_account
+        import google.auth.transport.requests as ga_requests
+        sa_info = dict(st.secrets["gcp_service_account"])
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info, scopes=["https://www.googleapis.com/auth/drive"]
+        )
+        creds.refresh(ga_requests.Request())
+        st.session_state["sa_token"] = creds.token
+        return creds.token
+    except Exception:
+        return ""
+
+
+def _sa_find_folder(name: str, parent_id: str, token: str) -> str:
+    q = (f"'{parent_id}' in parents and name='{name}'"
+         " and mimeType='application/vnd.google-apps.folder' and trashed=false")
+    r = requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"q": q, "fields": "files(id)", "pageSize": 1},
+        timeout=15,
+    )
+    files = r.json().get("files", []) if r.ok else []
+    return files[0]["id"] if files else ""
+
+
+def _sa_create_folder(name: str, parent_id: str, token: str) -> str:
+    r = requests.post(
+        "https://www.googleapis.com/drive/v3/files",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]},
+        timeout=15,
+    )
+    return r.json().get("id", "") if r.ok else ""
+
+
+def _sa_get_or_create_folder(name: str, parent_id: str, token: str) -> str:
+    return _sa_find_folder(name, parent_id, token) or _sa_create_folder(name, parent_id, token)
+
+
+def _sa_find_file(name: str, parent_id: str, token: str) -> str:
+    q = f"'{parent_id}' in parents and name='{name}' and trashed=false"
+    r = requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"q": q, "fields": "files(id)", "pageSize": 1},
+        timeout=15,
+    )
+    files = r.json().get("files", []) if r.ok else []
+    return files[0]["id"] if files else ""
+
+
+def _load_report(tab_name: str, exp_name: str) -> dict:
+    """Drive dashboard/{tab_name}/{exp_name}/report.json 로드. 없으면 빈 dict."""
+    token = _get_sa_token()
+    if not token:
+        return {}
+    dash_id = _sa_find_folder("dashboard", PROJECT_FOLDER_ID, token)
+    if not dash_id:
+        return {}
+    tab_id = _sa_find_folder(tab_name, dash_id, token)
+    if not tab_id:
+        return {}
+    exp_id = _sa_find_folder(exp_name, tab_id, token)
+    if not exp_id:
+        return {}
+    file_id = _sa_find_file("report.json", exp_id, token)
+    if not file_id:
+        return {}
+    r = requests.get(
+        f"https://drive.google.com/uc?export=download&id={file_id}",
+        timeout=15,
+    )
+    try:
+        return r.json() if r.ok else {}
+    except Exception:
+        return {}
+
+
+def _save_report(tab_name: str, exp_name: str, content: str, author: str) -> bool:
+    """Drive dashboard/{tab_name}/{exp_name}/report.json 저장/덮어쓰기."""
+    token = _get_sa_token()
+    if not token:
+        return False
+    dash_id = _sa_get_or_create_folder("dashboard", PROJECT_FOLDER_ID, token)
+    tab_id  = _sa_get_or_create_folder(tab_name,    dash_id,            token)
+    exp_id  = _sa_get_or_create_folder(exp_name,    tab_id,             token)
+    if not exp_id:
+        return False
+
+    payload = json.dumps(
+        {"content": content, "author": author,
+         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M")},
+        ensure_ascii=False, indent=2,
+    ).encode("utf-8")
+
+    file_id = _sa_find_file("report.json", exp_id, token)
+    if file_id:
+        r = requests.patch(
+            f"https://www.googleapis.com/upload/drive/v3/files/{file_id}",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            params={"uploadType": "media"},
+            data=payload,
+            timeout=15,
+        )
+    else:
+        boundary = "report_boundary"
+        meta = json.dumps({"name": "report.json", "parents": [exp_id]}).encode("utf-8")
+        body = (
+            f"--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode() + meta +
+            f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode() + payload +
+            f"\r\n--{boundary}--".encode()
+        )
+        r = requests.post(
+            "https://www.googleapis.com/upload/drive/v3/files",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": f"multipart/related; boundary={boundary}",
+            },
+            params={"uploadType": "multipart"},
+            data=body,
+            timeout=15,
+        )
+    return r.ok
+
+
+def _render_report(tab_name: str, exp_name: str) -> None:
+    """실험 선택창 아래 리포트 섹션 렌더링."""
+    VALID_AUTHORS: list[str] = list(st.secrets.get("REPORT_AUTHORS", []))
+    sess_author = st.session_state.get("report_author", "")
+    cache_key   = f"rpt_{tab_name}_{exp_name}"
+
+    if cache_key not in st.session_state:
+        with st.spinner("리포트 로드 중..."):
+            st.session_state[cache_key] = _load_report(tab_name, exp_name)
+    report     = st.session_state.get(cache_key, {})
+    content    = report.get("content", "")
+    written_by = report.get("author", "")
+    updated_at = report.get("updated_at", "")
+
+    with st.expander("📝 리포트", expanded=bool(content)):
+        if content:
+            st.markdown(content)
+            st.caption(f"작성자: {written_by}  ({updated_at})")
+        else:
+            st.caption("작성된 리포트가 없습니다.")
+
+        if not sess_author:
+            name_in = st.text_input(
+                "이름을 입력하면 편집할 수 있습니다",
+                key=f"rpt_auth_{tab_name}_{exp_name}",
+                placeholder="이름 입력",
+            )
+            if st.button("확인", key=f"rpt_auth_btn_{tab_name}_{exp_name}"):
+                if name_in in VALID_AUTHORS:
+                    st.session_state["report_author"] = name_in
+                    st.rerun()
+                else:
+                    st.error("이름이 올바르지 않습니다.")
+        else:
+            st.markdown(f"<span style='font-size:0.82rem;color:#888'>편집 중: {sess_author}</span>",
+                        unsafe_allow_html=True)
+            new_content = st.text_area(
+                "내용 (마크다운)",
+                value=content, height=220,
+                key=f"rpt_area_{tab_name}_{exp_name}",
+                label_visibility="collapsed",
+            )
+            col_save, col_out = st.columns([1, 1])
+            if col_save.button("저장", key=f"rpt_save_{tab_name}_{exp_name}", use_container_width=True):
+                with st.spinner("저장 중..."):
+                    ok = _save_report(tab_name, exp_name, new_content, sess_author)
+                if ok:
+                    st.session_state.pop(cache_key, None)
+                    st.success("저장되었습니다.")
+                    st.rerun()
+                else:
+                    st.error("저장 실패 — 서비스 계정 설정을 확인하세요.")
+            if col_out.button("로그아웃", key=f"rpt_logout_{tab_name}_{exp_name}", use_container_width=True):
+                st.session_state.pop("report_author", None)
+                st.rerun()
 
 
 @st.cache_data(ttl=3600)
@@ -444,6 +635,9 @@ with tab_gnn:
         sel_gnn = st.selectbox("실험 선택", gnn_exp_names, key="gnn_sel",
                                label_visibility="collapsed")
 
+        _render_report("GNN Result", sel_gnn)
+        st.divider()
+
         with st.spinner("GNN 실험 로드 중..."):
             gnn_d  = _load_gnn_experiment(PROJECT_FOLDER_ID, sel_gnn)
 
@@ -565,6 +759,9 @@ with tab_ml:
 
     note = rep.get("note", "")
     st.caption(f"**Status**: {rep.get('status', '—')}")
+
+    _render_report("ML Result", sel)
+    st.divider()
 
     if not ml:
         st.info("학습된 모델이 없습니다.")
@@ -811,6 +1008,9 @@ with tab_woe:
         "**WOE(Weight of Evidence)**: 각 구간에서 fraud 비율과 정상 비율의 로그 비.  \n"
         "**IV(Information Value)**: WOE를 전체 구간에 걸쳐 집계한 변수 단위 예측력 요약."
     )
+
+    _render_report("Univariate Analysis", sel_woe)
+    st.divider()
 
     d_woe    = exp_data[sel_woe]
     woe      = d_woe["woe"]
