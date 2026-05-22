@@ -463,7 +463,8 @@ with tab_gnn:
             best_ep  = ep_df.loc[best_idx]
 
             # ── 핵심 지표 ──────────────────────────────────────────────────
-            st.markdown("#### Metrics")
+            _model_name = args.get("model", "—") if args else "—"
+            st.markdown(f"#### Metrics (model: {_model_name})")
             c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("F1",            f"{best_ep['test_f1']:.4f}")
             c2.metric("AUPRC",         f"{best_ep['test_auprc']:.4f}")
@@ -487,25 +488,13 @@ with tab_gnn:
             # ── Hyper Parameters ───────────────────────────────────────────
             if args:
                 with st.expander("Hyper Parameters"):
-                    _col_a, _col_b = st.columns(2)
-                    _col_a.markdown(f"""
-| 파라미터 | 값 |
-|----------|-----|
-| model | `{args.get('model', '—')}` |
-| n_epochs | {args.get('n_epochs', '—')} |
-| batch_size | {args.get('batch_size', '—'):,} |
-| num_neighs | {args.get('num_neighs', '—')} |
-| patience | {args.get('patience', '—')} |
-""")
-                    _col_b.markdown(f"""
-| 플래그 | |
-|--------|---|
-| emlps | {'✅' if args.get('emlps') else '—'} |
-| reverse_mp | {'✅' if args.get('reverse_mp') else '—'} |
-| ports | {'✅' if args.get('ports') else '—'} |
-| ego | {'✅' if args.get('ego') else '—'} |
-| tds | {'✅' if args.get('tds') else '—'} |
-""")
+                    _skip = {"model", "unique_name", "save_model", "inference", "tqdm", "finetune", "data"}
+                    _params = {k: v for k, v in args.items() if k not in _skip and v is not None}
+                    _n_cols = 4
+                    _rows = [list(_params.items())[i:i+_n_cols] for i in range(0, len(_params), _n_cols)]
+                    for _row in _rows:
+                        for _col, (_k, _v) in zip(st.columns(_n_cols), _row):
+                            _col.metric(_k, str(_v) if not isinstance(_v, (int, float)) else _v)
 
             st.divider()
 
