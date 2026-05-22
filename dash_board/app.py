@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from io import BytesIO
+from io import BytesIO, StringIO
 
 import pandas as pd
 import plotly.express as px
@@ -147,7 +147,7 @@ def _drive_list(q: str) -> list[dict]:
         "https://www.googleapis.com/drive/v3/files",
         params={
             "q": q,
-            "fields": "files(id,name,modifiedTime)",
+            "fields": "files(id,name)",
             "key": API_KEY,
             "orderBy": "name",
             "pageSize": 200,
@@ -160,6 +160,7 @@ def _drive_list(q: str) -> list[dict]:
     return r.json().get("files", [])
 
 
+@st.cache_data(ttl=3600)
 def _download_json(file_id: str) -> object:
     r = requests.get(
         f"https://drive.google.com/uc?export=download&id={file_id}",
@@ -169,6 +170,7 @@ def _download_json(file_id: str) -> object:
     return r.json()
 
 
+@st.cache_data(ttl=3600)
 def _download_csv(file_id: str) -> pd.DataFrame:
     r = requests.get(
         f"https://drive.google.com/uc?export=download&id={file_id}",
@@ -181,8 +183,10 @@ def _download_csv(file_id: str) -> pd.DataFrame:
 # ── Report: Drive write helpers (서비스 계정) ──────────────────────────────
 
 def _get_sa_token() -> str:
-    """서비스 계정으로 Drive 쓰기 토큰 발급 (session 내 캐시)."""
-    if "sa_token" in st.session_state:
+    """서비스 계정으로 Drive 쓰기 토큰 발급. 만료 5분 전 자동 갱신."""
+    import time
+    now = time.time()
+    if st.session_state.get("sa_token") and now < st.session_state.get("sa_token_exp", 0) - 300:
         return st.session_state["sa_token"]
     try:
         from google.oauth2 import service_account
@@ -192,13 +196,18 @@ def _get_sa_token() -> str:
             sa_info, scopes=["https://www.googleapis.com/auth/drive"]
         )
         creds.refresh(ga_requests.Request())
-        st.session_state["sa_token"] = creds.token
+        st.session_state["sa_token"]     = creds.token
+        st.session_state["sa_token_exp"] = creds.expiry.timestamp() if creds.expiry else now + 3600
         return creds.token
     except Exception:
         return ""
 
 
 def _sa_find_folder(name: str, parent_id: str, token: str) -> str:
+    cache = st.session_state.setdefault("_sa_folder_cache", {})
+    key = f"{parent_id}/{name}"
+    if key in cache:
+        return cache[key]
     q = (f"'{parent_id}' in parents and name='{name}'"
          " and mimeType='application/vnd.google-apps.folder' and trashed=false")
     r = requests.get(
@@ -208,7 +217,9 @@ def _sa_find_folder(name: str, parent_id: str, token: str) -> str:
         timeout=15,
     )
     files = r.json().get("files", []) if r.ok else []
-    return files[0]["id"] if files else ""
+    result = files[0]["id"] if files else ""
+    cache[key] = result
+    return result
 
 
 def _sa_create_folder(name: str, parent_id: str, token: str) -> str:
@@ -218,7 +229,10 @@ def _sa_create_folder(name: str, parent_id: str, token: str) -> str:
         json={"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]},
         timeout=15,
     )
-    return r.json().get("id", "") if r.ok else ""
+    folder_id = r.json().get("id", "") if r.ok else ""
+    if folder_id:
+        st.session_state.setdefault("_sa_folder_cache", {})[f"{parent_id}/{name}"] = folder_id
+    return folder_id
 
 
 def _sa_get_or_create_folder(name: str, parent_id: str, token: str) -> str:
@@ -226,6 +240,10 @@ def _sa_get_or_create_folder(name: str, parent_id: str, token: str) -> str:
 
 
 def _sa_find_file(name: str, parent_id: str, token: str) -> str:
+    cache = st.session_state.setdefault("_sa_file_cache", {})
+    key = f"{parent_id}/{name}"
+    if key in cache:
+        return cache[key]
     q = f"'{parent_id}' in parents and name='{name}' and trashed=false"
     r = requests.get(
         "https://www.googleapis.com/drive/v3/files",
@@ -234,7 +252,9 @@ def _sa_find_file(name: str, parent_id: str, token: str) -> str:
         timeout=15,
     )
     files = r.json().get("files", []) if r.ok else []
-    return files[0]["id"] if files else ""
+    result = files[0]["id"] if files else ""
+    cache[key] = result
+    return result
 
 
 def _load_report(tab_name: str, exp_name: str) -> dict:
@@ -308,6 +328,10 @@ def _save_report(tab_name: str, exp_name: str, content: str, author: str) -> boo
             data=body,
             timeout=15,
         )
+        if r.ok:
+            new_id = r.json().get("id", "")
+            if new_id:
+                st.session_state.setdefault("_sa_file_cache", {})[f"{exp_id}/report.json"] = new_id
     return r.ok
 
 
@@ -320,6 +344,12 @@ def _render_report(tab_name: str, exp_name: str) -> None:
     sess_author = st.session_state.get("report_author", "")
     cache_key   = f"rpt_{tab_name}_{exp_name}"
     edit_key    = f"rpt_editing_{tab_name}_{exp_name}"
+
+    # 리포트 캐시 최대 20개 유지 (오래된 것 제거)
+    rpt_keys = [k for k in st.session_state if k.startswith("rpt_") and not k.startswith("rpt_editing_")]
+    if len(rpt_keys) > 20:
+        for old in rpt_keys[:-20]:
+            st.session_state.pop(old, None)
 
     if cache_key not in st.session_state:
         with st.spinner("리포트 로드 중..."):
@@ -640,6 +670,220 @@ def _load_gnn_experiment(project_folder_id: str, exp_name: str) -> dict:
     return out
 
 
+# ── Figure cache helpers ───────────────────────────────────────────────────
+
+@st.cache_data(ttl=3600)
+def _make_gnn_lc_fig(epochs_json: str, mc: str, best_epoch: int, metric_sel: str) -> go.Figure:
+    ep_df = pd.read_json(StringIO(epochs_json))
+    fig = go.Figure()
+    for split, color, dash in [
+        ("train", "#aec7e8", "dot"),
+        ("val",   "#1f77b4", "solid"),
+        ("test",  "#ff7f0e", "dash"),
+    ]:
+        col_name = f"{split}_{mc}"
+        if col_name in ep_df.columns:
+            fig.add_trace(go.Scatter(
+                x=ep_df["epoch"], y=ep_df[col_name],
+                mode="lines", name=split,
+                line=dict(color=color, dash=dash, width=2),
+            ))
+    fig.add_vline(
+        x=best_epoch, line_dash="dot", line_color="#888888",
+        annotation_text=f"best val  epoch {best_epoch}",
+        annotation_font_size=10,
+    )
+    fig.update_layout(
+        height=380, margin=dict(t=20, b=20),
+        yaxis_title=metric_sel, xaxis_title="Epoch",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    )
+    return fig
+
+
+@st.cache_data(ttl=3600)
+def _make_ml_lc_fig(curve_vals: tuple, curve_label: str, curve_best: float, best_iter: int) -> go.Figure:
+    vals = list(curve_vals)
+    fig = px.line(
+        pd.DataFrame({"Iteration": range(1, len(vals) + 1), curve_label: vals}),
+        x="Iteration", y=curve_label,
+        title=f"Validation {curve_label}  (best={curve_best:.4f} @ iter {best_iter + 1})",
+    )
+    fig.add_vline(x=best_iter + 1, line_dash="dash", line_color="#d62728",
+                  annotation_text="best", annotation_font_size=11)
+    fig.update_layout(height=310, margin=dict(t=40, b=20))
+    return fig
+
+
+@st.cache_data(ttl=3600)
+def _make_cm_fig(tp: int, fn: int, fp: int, tn: int) -> go.Figure:
+    tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
+    fnr = fn / (tp + fn) if (tp + fn) > 0 else 0
+    tnr = tn / (fp + tn) if (fp + tn) > 0 else 0
+    z_text = [
+        [f"{tp:,}<br>TPR {tpr:.1%}", f"{fn:,}<br>FNR {fnr:.1%}"],
+        [f"{fp:,}<br>FPR {fpr:.1%}", f"{tn:,}<br>TNR {tnr:.1%}"],
+    ]
+    fig = px.imshow(
+        [[tp, fn], [fp, tn]],
+        x=["Pred Fraud", "Pred Normal"],
+        y=["Actual Fraud", "Actual Normal"],
+        color_continuous_scale="Blues", text_auto=False, title="",
+    )
+    fig.update_traces(text=z_text, texttemplate="%{text}", textfont={"size": 11})
+    fig.update_coloraxes(showscale=False)
+    fig.update_layout(height=290, margin=dict(t=10, b=10))
+    return fig
+
+
+@st.cache_data(ttl=3600)
+def _make_iv_bar_fig(
+    top_df_json: str, woe_desc: bool, iv_cut: float,
+    unregistered_tuple: tuple, has_overflow: bool,
+) -> go.Figure:
+    top_df = pd.read_json(StringIO(top_df_json))
+    unregistered = set(unregistered_tuple)
+    fig = px.bar(
+        top_df, x="_iv_bar", y="feature_name", orientation="h",
+        color="iv_strength", color_discrete_map=IV_COLORS,
+        custom_data=["iv", "_desc"],
+        labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
+    )
+    fig.update_traces(
+        hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<br>%{customdata[1]}<extra></extra>"
+    )
+    fig.update_layout(
+        height=max(420, len(top_df) * 40),
+        yaxis={"categoryorder": "total ascending" if woe_desc else "total descending"},
+        xaxis={
+            "range":    [0, iv_cut + (0.35 if has_overflow else 0.05)],
+            "tickvals": [0, 0.5, 1.0, 1.5],
+            "ticktext": ["0", "0.5", "1.0", "1.5"],
+            "title":    "IV",
+        },
+        legend_title_text="예측력",
+    )
+    for i, row in top_df[top_df["iv"] > iv_cut].iterrows():
+        fig.add_annotation(x=iv_cut + 0.04, y=i, text=f"{row['iv']:.4f}",
+                           showarrow=False, xanchor="left", font=dict(size=10))
+    unreg_rows = top_df[top_df["feature_name"].isin(unregistered)]
+    if not unreg_rows.empty:
+        fig.add_trace(go.Scatter(
+            x=unreg_rows["_iv_bar"] + 0.02, y=unreg_rows["feature_name"],
+            mode="markers",
+            marker=dict(symbol="triangle-right", size=10, color="#ff7f0e"),
+            name="카탈로그 미등록", hoverinfo="skip",
+        ))
+    for val, label, color in [
+        (0.02, "weak",       "#aaaaaa"),
+        (0.10, "medium",     "#888888"),
+        (0.30, "strong",     "#555555"),
+        (0.50, "suspicious", "#222222"),
+    ]:
+        fig.add_vline(x=val, line_dash="dot", line_color=color,
+                      annotation_text=label, annotation_font_size=10)
+    return fig
+
+
+@st.cache_data(ttl=3600)
+def _make_woe_bin_fig(feat_bins_json: str, sel_feature: str) -> go.Figure:
+    feat_bins    = pd.read_json(StringIO(feat_bins_json))
+    main_bins    = feat_bins[~feat_bins["missing_flag"]].sort_values("bin_id")
+    missing_bins = feat_bins[feat_bins["missing_flag"]]
+    feat_sorted  = pd.concat([main_bins, missing_bins], ignore_index=True)
+    feat_sorted["_color"] = feat_sorted["woe"].apply(lambda w: "fraud↑" if w >= 0 else "fraud↓")
+    fig_woe = make_subplots(specs=[[{"secondary_y": True}]])
+    for _lbl, _hex in [("fraud↑", "#d62728"), ("fraud↓", "#2ca02c")]:
+        _sub = feat_sorted[feat_sorted["_color"] == _lbl]
+        if _sub.empty:
+            continue
+        fig_woe.add_trace(
+            go.Bar(
+                x=_sub["bin_label"], y=_sub["woe"],
+                name=_lbl, marker_color=_hex,
+                customdata=_sub[["count", "positive_count", "positive_rate", "iv_bin"]].values,
+                hovertemplate=(
+                    "<b>%{x}</b><br>WOE: %{y:.4f}<br>"
+                    "Count: %{customdata[0]:,}<br>"
+                    "Positive: %{customdata[1]:,}<br>"
+                    "Positive Rate: %{customdata[2]:.5f}<br>"
+                    "IV Bin: %{customdata[3]:.4f}<extra></extra>"
+                ),
+            ),
+            secondary_y=False,
+        )
+    fig_woe.add_trace(
+        go.Scatter(
+            x=feat_sorted["bin_label"], y=feat_sorted["count"],
+            mode="lines+markers", name="Count",
+            line=dict(color="#aaaaaa", width=1.5, dash="dot"),
+            marker=dict(size=4, color="#888888"),
+            hovertemplate="%{x}<br>Count: %{y:,}<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+    fig_woe.add_hline(y=0, line_dash="dash", line_color="#333333", line_width=1)
+    fig_woe.update_layout(
+        height=400, xaxis_tickangle=-40,
+        legend=dict(title=""),
+        margin=dict(t=20),
+        xaxis=dict(
+            categoryorder="array",
+            categoryarray=feat_sorted["bin_label"].tolist(),
+        ),
+    )
+    fig_woe.update_yaxes(title_text="WOE", secondary_y=False)
+    fig_woe.update_yaxes(title_text="Count", secondary_y=True, showgrid=False)
+    return fig_woe
+
+
+# ── Fragment sections ──────────────────────────────────────────────────────
+
+@st.fragment
+def _gnn_lc_section(ep_df: pd.DataFrame, best_ep: pd.Series) -> None:
+    _mc, _ = st.columns([3, 5])
+    metric_sel = _mc.radio(
+        "지표", ["F1", "AUPRC", "Recall", "Precision"],
+        horizontal=True, key="gnn_metric", label_visibility="collapsed",
+    )
+    mc = metric_sel.lower()
+    fig_lc = _make_gnn_lc_fig(ep_df.to_json(orient="records"), mc, int(best_ep["epoch"]), metric_sel)
+    st.plotly_chart(fig_lc, use_container_width=True)
+
+
+@st.fragment
+def _woe_iv_bin_section(
+    top_df: pd.DataFrame,
+    bin_df: pd.DataFrame | None,
+    unregistered: set,
+    woe_desc: bool,
+) -> None:
+    has_overflow = (top_df["iv"] > IV_CUT).any()
+    fig_iv = _make_iv_bar_fig(
+        top_df.to_json(orient="records"), woe_desc, IV_CUT,
+        tuple(sorted(unregistered)), bool(has_overflow),
+    )
+    iv_event = st.plotly_chart(fig_iv, use_container_width=True, on_select="rerun", key="iv_chart")
+
+    sel_feature: str | None = None
+    pts = (iv_event.selection or {}).get("points", []) if iv_event else []
+    if pts:
+        sel_feature = pts[0].get("label") or pts[0].get("y")
+
+    if sel_feature:
+        st.markdown(f"#### WOE — `{sel_feature}`")
+        if bin_df is None:
+            st.info("bin_table.json이 없습니다. compute_woe_iv.ipynb를 다시 실행하세요.")
+        else:
+            feat_bins = bin_df[bin_df["feature_name"] == sel_feature].copy()
+            if feat_bins.empty:
+                st.info(f"'{sel_feature}'의 WOE 구간 데이터가 없습니다.")
+            else:
+                fig_woe = _make_woe_bin_fig(feat_bins.to_json(orient="records"), sel_feature)
+                st.plotly_chart(fig_woe, use_container_width=True)
+
+
 # ── Page header ────────────────────────────────────────────────────────────
 
 col_title, col_btn = st.columns([8, 1])
@@ -813,37 +1057,7 @@ with tab_gnn:
 
             # ── Learning Curve ─────────────────────────────────────────────
             st.markdown("##### Learning Curve")
-            _mc, _ = st.columns([3, 5])
-            metric_sel = _mc.radio(
-                "지표", ["F1", "AUPRC", "Recall", "Precision"],
-                horizontal=True, key="gnn_metric", label_visibility="collapsed",
-            )
-            mc = metric_sel.lower()
-
-            fig_lc = go.Figure()
-            for split, color, dash in [
-                ("train", "#aec7e8", "dot"),
-                ("val",   "#1f77b4", "solid"),
-                ("test",  "#ff7f0e", "dash"),
-            ]:
-                col_name = f"{split}_{mc}"
-                if col_name in ep_df.columns:
-                    fig_lc.add_trace(go.Scatter(
-                        x=ep_df["epoch"], y=ep_df[col_name],
-                        mode="lines", name=split,
-                        line=dict(color=color, dash=dash, width=2),
-                    ))
-            fig_lc.add_vline(
-                x=int(best_ep["epoch"]), line_dash="dot", line_color="#888888",
-                annotation_text=f"best val  epoch {int(best_ep['epoch'])}",
-                annotation_font_size=10,
-            )
-            fig_lc.update_layout(
-                height=380, margin=dict(t=20, b=20),
-                yaxis_title=metric_sel, xaxis_title="Epoch",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-            )
-            st.plotly_chart(fig_lc, use_container_width=True)
+            _gnn_lc_section(ep_df, best_ep)
 
             st.divider()
 
@@ -872,6 +1086,15 @@ with tab_gnn:
 with tab_ml:
     sel = st.selectbox("실험 선택", exp_labels, key="ml_sel",
                        index=_default_idx, label_visibility="collapsed")
+
+    # 실험 변경 시 이전 fi_* 키 정리
+    if st.session_state.get("_ml_prev_sel") != sel:
+        prev = st.session_state.get("_ml_prev_sel")
+        if prev:
+            for k in [f"fi_sel_{prev}", f"fi_bar_ver_{prev}", f"fi_scat_ver_{prev}"]:
+                st.session_state.pop(k, None)
+        st.session_state["_ml_prev_sel"] = sel
+
     d   = exp_data[sel]
     rep = d["rep"]
     ml  = d["ml"]
@@ -940,14 +1163,7 @@ with tab_ml:
                 curve_key, curve_label, curve_best = "aucpr", "AUPRC", aucpr or 0
             curve_vals = eval_res.get(curve_key, [])
             if curve_vals:
-                fig_curve = px.line(
-                    pd.DataFrame({"Iteration": range(1, len(curve_vals) + 1), curve_label: curve_vals}),
-                    x="Iteration", y=curve_label,
-                    title=f"Validation {curve_label}  (best={curve_best:.4f} @ iter {best_iter + 1})",
-                )
-                fig_curve.add_vline(x=best_iter + 1, line_dash="dash", line_color="#d62728",
-                                    annotation_text="best", annotation_font_size=11)
-                fig_curve.update_layout(height=310, margin=dict(t=40, b=20))
+                fig_curve = _make_ml_lc_fig(tuple(curve_vals), curve_label, float(curve_best), int(best_iter))
                 st.plotly_chart(fig_curve, use_container_width=True)
             else:
                 st.info("학습 곡선 데이터 없음")
@@ -957,23 +1173,7 @@ with tab_ml:
             if conf_mat is not None and not conf_mat.empty:
                 row = conf_mat.iloc[0]
                 tn, fp, fn, tp = int(row.get("tn",0)), int(row.get("fp",0)), int(row.get("fn",0)), int(row.get("tp",0))
-                tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
-                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
-                fnr = fn / (tp + fn) if (tp + fn) > 0 else 0
-                tnr = tn / (fp + tn) if (fp + tn) > 0 else 0
-                z_text = [
-                    [f"{tp:,}<br>TPR {tpr:.1%}", f"{fn:,}<br>FNR {fnr:.1%}"],
-                    [f"{fp:,}<br>FPR {fpr:.1%}", f"{tn:,}<br>TNR {tnr:.1%}"],
-                ]
-                fig_cm = px.imshow(
-                    [[tp, fn], [fp, tn]],
-                    x=["Pred Fraud", "Pred Normal"],
-                    y=["Actual Fraud", "Actual Normal"],
-                    color_continuous_scale="Blues", text_auto=False, title="",
-                )
-                fig_cm.update_traces(text=z_text, texttemplate="%{text}", textfont={"size": 11})
-                fig_cm.update_coloraxes(showscale=False)
-                fig_cm.update_layout(height=290, margin=dict(t=10, b=10))
+                fig_cm = _make_cm_fig(tp, fn, fp, tn)
                 st.plotly_chart(fig_cm, use_container_width=True)
                 st.markdown(
                     f"<div style='text-align:center;font-size:0.8rem;color:#888'>"
@@ -1124,6 +1324,13 @@ with tab_woe:
     sel_woe  = st.selectbox("실험 선택", exp_labels, key="woe_sel",
                             index=_default_idx, label_visibility="collapsed")
 
+    # 실험 변경 시 이전 catalog 편집 상태 정리
+    if st.session_state.get("_woe_prev_sel") != sel_woe:
+        prev_woe = st.session_state.get("_woe_prev_sel")
+        if prev_woe:
+            st.session_state.pop(f"catalog_{prev_woe}", None)
+        st.session_state["_woe_prev_sel"] = sel_woe
+
     _render_report("Univariate Analysis", sel_woe)
     st.divider()
 
@@ -1259,112 +1466,5 @@ with tab_woe:
             )
 
         top_df["_iv_bar"] = top_df["iv"].clip(lower=0.003, upper=IV_CUT)
-        has_overflow      = (top_df["iv"] > IV_CUT).any()
 
-        fig = px.bar(
-            top_df, x="_iv_bar", y="feature_name", orientation="h",
-            color="iv_strength", color_discrete_map=IV_COLORS,
-            custom_data=["iv", "_desc"],
-            labels={"_iv_bar": "IV", "feature_name": "Feature", "iv_strength": "강도"},
-        )
-        fig.update_traces(
-            hovertemplate="<b>%{y}</b><br>IV: %{customdata[0]:.4f}<br>%{customdata[1]}<extra></extra>"
-        )
-        fig.update_layout(
-            height=max(420, top_n * 40),
-            yaxis={"categoryorder": "total ascending" if woe_desc else "total descending"},
-            xaxis={
-                "range":    [0, IV_CUT + (0.35 if has_overflow else 0.05)],
-                "tickvals": [0, 0.5, 1.0, 1.5],
-                "ticktext": ["0", "0.5", "1.0", "1.5"],
-                "title":    "IV",
-            },
-            legend_title_text="예측력",
-        )
-
-        for i, row in top_df[top_df["iv"] > IV_CUT].iterrows():
-            fig.add_annotation(x=IV_CUT + 0.04, y=i, text=f"{row['iv']:.4f}",
-                               showarrow=False, xanchor="left", font=dict(size=10))
-
-        unreg_rows = top_df[top_df["feature_name"].isin(unregistered)]
-        if not unreg_rows.empty:
-            fig.add_trace(go.Scatter(
-                x=unreg_rows["_iv_bar"] + 0.02, y=unreg_rows["feature_name"],
-                mode="markers",
-                marker=dict(symbol="triangle-right", size=10, color="#ff7f0e"),
-                name="카탈로그 미등록", hoverinfo="skip",
-            ))
-
-        for val, label, color in [
-            (0.02, "weak",       "#aaaaaa"),
-            (0.10, "medium",     "#888888"),
-            (0.30, "strong",     "#555555"),
-            (0.50, "suspicious", "#222222"),
-        ]:
-            fig.add_vline(x=val, line_dash="dot", line_color=color,
-                          annotation_text=label, annotation_font_size=10)
-
-        iv_event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="iv_chart")
-
-        # ── WOE 구간 차트 ──────────────────────────────────────────────────────
-        sel_feature: str | None = None
-        pts = (iv_event.selection or {}).get("points", []) if iv_event else []
-        if pts:
-            sel_feature = pts[0].get("label") or pts[0].get("y")
-
-        if sel_feature:
-            st.markdown(f"#### WOE — `{sel_feature}`")
-            if bin_df is None:
-                st.info("bin_table.json이 없습니다. compute_woe_iv.ipynb를 다시 실행하세요.")
-            else:
-                feat_bins = bin_df[bin_df["feature_name"] == sel_feature].copy()
-                if feat_bins.empty:
-                    st.info(f"'{sel_feature}'의 WOE 구간 데이터가 없습니다.")
-                else:
-                    main_bins    = feat_bins[~feat_bins["missing_flag"]].sort_values("bin_id")
-                    missing_bins = feat_bins[feat_bins["missing_flag"]]
-                    feat_sorted  = pd.concat([main_bins, missing_bins], ignore_index=True)
-                    feat_sorted["_color"] = feat_sorted["woe"].apply(lambda w: "fraud↑" if w >= 0 else "fraud↓")
-                    fig_woe = make_subplots(specs=[[{"secondary_y": True}]])
-                    for _lbl, _hex in [("fraud↑", "#d62728"), ("fraud↓", "#2ca02c")]:
-                        _sub = feat_sorted[feat_sorted["_color"] == _lbl]
-                        if _sub.empty:
-                            continue
-                        fig_woe.add_trace(
-                            go.Bar(
-                                x=_sub["bin_label"], y=_sub["woe"],
-                                name=_lbl, marker_color=_hex,
-                                customdata=_sub[["count", "positive_count", "positive_rate", "iv_bin"]].values,
-                                hovertemplate=(
-                                    "<b>%{x}</b><br>WOE: %{y:.4f}<br>"
-                                    "Count: %{customdata[0]:,}<br>"
-                                    "Positive: %{customdata[1]:,}<br>"
-                                    "Positive Rate: %{customdata[2]:.5f}<br>"
-                                    "IV Bin: %{customdata[3]:.4f}<extra></extra>"
-                                ),
-                            ),
-                            secondary_y=False,
-                        )
-                    fig_woe.add_trace(
-                        go.Scatter(
-                            x=feat_sorted["bin_label"], y=feat_sorted["count"],
-                            mode="lines+markers", name="Count",
-                            line=dict(color="#aaaaaa", width=1.5, dash="dot"),
-                            marker=dict(size=4, color="#888888"),
-                            hovertemplate="%{x}<br>Count: %{y:,}<extra></extra>",
-                        ),
-                        secondary_y=True,
-                    )
-                    fig_woe.add_hline(y=0, line_dash="dash", line_color="#333333", line_width=1)
-                    fig_woe.update_layout(
-                        height=400, xaxis_tickangle=-40,
-                        legend=dict(title=""),
-                        margin=dict(t=20),
-                        xaxis=dict(
-                            categoryorder="array",
-                            categoryarray=feat_sorted["bin_label"].tolist(),
-                        ),
-                    )
-                    fig_woe.update_yaxes(title_text="WOE", secondary_y=False)
-                    fig_woe.update_yaxes(title_text="Count", secondary_y=True, showgrid=False)
-                    st.plotly_chart(fig_woe, use_container_width=True)
+        _woe_iv_bin_section(top_df, bin_df, unregistered, woe_desc)
