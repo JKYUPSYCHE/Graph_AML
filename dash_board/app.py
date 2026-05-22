@@ -232,11 +232,12 @@ def _parse_gnn_log(text: str) -> dict:
     test_re = re.compile(
         r"Test\s+[—\-]\s*F1:\s*([\d.]+)\s*\|\s*Recall:\s*([\d.]+)\s*\|\s*Precision:\s*([\d.]+)\s*\|\s*AUPRC:\s*([\d.]+)"
     )
-    nodes_re  = re.search(r"Number of nodes = (\d+)", text)
-    txns_re   = re.search(r"Number of transactions = (\d+)", text)
-    ir_re     = re.search(r"Illicit ratio = \d+ / \d+ = ([\d.]+)%", text)
-    edge_re   = re.search(r"Edge features being used: (\[.*?\])", text)
-    params_re = re.search(r"GraphModule\s+\|[^|]+\|[^|]+\|\s*([\d,]+)", text)
+    nodes_re   = re.search(r"Number of nodes = (\d+)", text)
+    txns_re    = re.search(r"Number of transactions = (\d+)", text)
+    ir_re      = re.search(r"Illicit ratio = \d+ / \d+ = ([\d.]+)%", text)
+    edge_re    = re.search(r"Edge features being used: (\[.*?\])", text)
+    params_re  = re.search(r"GraphModule\s+\|[^|]+\|[^|]+\|\s*([\d,]+)", text)
+    time_re    = re.search(r"Total training time:\s*([\d.]+)s", text)
 
     epochs: list[dict] = []
     buf: dict = {}
@@ -266,12 +267,13 @@ def _parse_gnn_log(text: str) -> dict:
             pass
 
     return {
-        "epochs":       epochs,
-        "n_nodes":      int(nodes_re[1])                  if nodes_re  else None,
-        "n_txns":       int(txns_re[1])                   if txns_re   else None,
-        "illicit_ratio": float(ir_re[1])                  if ir_re     else None,
-        "edge_features": edge_feats,
-        "total_params": int(params_re[1].replace(",", "")) if params_re else None,
+        "epochs":            epochs,
+        "n_nodes":           int(nodes_re[1])                   if nodes_re  else None,
+        "n_txns":            int(txns_re[1])                    if txns_re   else None,
+        "illicit_ratio":     float(ir_re[1])                    if ir_re     else None,
+        "edge_features":     edge_feats,
+        "total_params":      int(params_re[1].replace(",", "")) if params_re else None,
+        "training_time_sec": float(time_re[1])                  if time_re   else None,
     }
 
 
@@ -475,8 +477,10 @@ with tab_gnn:
             _ir      = parsed.get("illicit_ratio")
             _metric(c6, "거래 수", f"{_n_txns:,}" if _n_txns else "—",
                     f"pos {_ir:.2f}%" if _ir else "")
-            _metric(c7, "Best epoch / 총 에폭",
-                    f"{int(best_ep['epoch'])}  /  {len(ep_df)}", "")
+            _train_time = parsed.get("training_time_sec")
+            _metric(c7, "Best epoch / 학습시간",
+                    f"{int(best_ep['epoch'])}  /  {f'{_train_time:.0f}' if _train_time else '—'}",
+                    "sec")
 
             st.markdown("<div style='margin-top:1.2rem'></div>", unsafe_allow_html=True)
 
