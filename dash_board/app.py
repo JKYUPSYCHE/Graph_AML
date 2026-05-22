@@ -349,11 +349,12 @@ def _render_report(tab_name: str, exp_name: str) -> None:
     # ── 편집 모드 ──────────────────────────────────────────────────────────
     else:
         if not sess_author:
-            # 이름 입력
-            st.caption("이름을 입력하세요")
+            # 비밀번호 입력
+            st.caption("비밀번호를 입력하세요")
             name_in = st.text_input(
-                "이름", key=f"rpt_auth_{tab_name}_{exp_name}",
-                placeholder="이름 입력", label_visibility="collapsed",
+                "비밀번호", key=f"rpt_auth_{tab_name}_{exp_name}",
+                placeholder="비밀번호 입력", label_visibility="collapsed",
+                type="password",
             )
             col_ok, col_cancel = st.columns(2)
             if col_ok.button("확인", key=f"rpt_auth_btn_{tab_name}_{exp_name}", use_container_width=True):
@@ -361,7 +362,7 @@ def _render_report(tab_name: str, exp_name: str) -> None:
                     st.session_state["report_author"] = name_in
                     st.rerun()
                 else:
-                    st.error("이름이 올바르지 않습니다.")
+                    st.error("비밀번호가 올바르지 않습니다.")
             if col_cancel.button("취소", key=f"rpt_cancel_auth_{tab_name}_{exp_name}", use_container_width=True):
                 st.session_state[edit_key] = False
                 st.rerun()
