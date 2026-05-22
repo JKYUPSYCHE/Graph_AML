@@ -245,7 +245,7 @@ def _render_report(tab_name: str, exp_name: str) -> None:
     col_title, col_btn = st.columns([8, 1])
     col_title.markdown("##### Report")
     if not is_editing:
-        if col_btn.button("편집", key=f"rpt_edit_btn_{tab_name}_{exp_name}", use_container_width=True):
+        if col_btn.button("edit", key=f"rpt_edit_btn_{tab_name}_{exp_name}", use_container_width=True):
             st.session_state[edit_key] = True
             st.rerun()
 
@@ -261,10 +261,10 @@ def _render_report(tab_name: str, exp_name: str) -> None:
     else:
         if not sess_author:
             # 비밀번호(이름) 입력
-            st.caption("이름을 입력하세요")
+            st.caption("비밀번호를 입력하세요")
             name_in = st.text_input(
-                "이름", key=f"rpt_auth_{tab_name}_{exp_name}",
-                placeholder="이름 입력", label_visibility="collapsed",
+                "비밀번호", key=f"rpt_auth_{tab_name}_{exp_name}",
+                placeholder="입력", label_visibility="collapsed",
             )
             col_ok, col_cancel = st.columns([1, 1])
             if col_ok.button("확인", key=f"rpt_auth_btn_{tab_name}_{exp_name}", use_container_width=True):
@@ -272,18 +272,23 @@ def _render_report(tab_name: str, exp_name: str) -> None:
                     st.session_state["report_author"] = name_in
                     st.rerun()
                 else:
-                    st.error("이름이 올바르지 않습니다.")
+                    st.error("비밀번호가 올바르지 않습니다.")
             if col_cancel.button("취소", key=f"rpt_cancel_auth_{tab_name}_{exp_name}", use_container_width=True):
                 st.session_state[edit_key] = False
                 st.rerun()
         else:
-            # 텍스트 에디터
+            # 마크다운 에디터 + 미리보기
             st.caption(f"편집 중: {sess_author}")
-            new_content = st.text_area(
-                "내용", value=content, height=220,
+            col_edit, col_preview = st.columns(2)
+            col_edit.caption("편집")
+            col_preview.caption("미리보기")
+            new_content = col_edit.text_area(
+                "내용", value=content, height=300,
                 key=f"rpt_area_{tab_name}_{exp_name}",
                 label_visibility="collapsed",
             )
+            with col_preview:
+                st.markdown(new_content if new_content else "_내용 없음_")
             col_save, col_cancel = st.columns([1, 1])
             if col_save.button("저장", key=f"rpt_save_{tab_name}_{exp_name}", use_container_width=True):
                 with st.spinner("저장 중..."):
