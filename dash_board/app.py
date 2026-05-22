@@ -276,37 +276,47 @@ def _parse_gnn_log(text: str) -> dict:
 
 
 @st.cache_data(ttl=3600)
-def _list_gnn_experiments(project_folder_id: str) -> list[dict]:
+def _get_gnn_base_folders(project_folder_id: str) -> dict[str, str]:
+    """gnn/experiments 하위 logs/, models/ 폴더 ID 반환"""
     gnn_id = _get_folder_id(project_folder_id, "gnn")
     if not gnn_id:
-        return []
+        return {}
     exp_id = _get_folder_id(gnn_id, "experiments")
     if not exp_id:
-        return []
-    folders = _drive_list(
-        f"'{exp_id}' in parents"
-        " and mimeType='application/vnd.google-apps.folder'"
-        " and trashed=false"
-    )
-    return [{"name": f["name"], "id": f["id"]} for f in folders]
+        return {}
+    return {
+        "logs":   _get_folder_id(exp_id, "logs"),
+        "models": _get_folder_id(exp_id, "models"),
+    }
 
 
 @st.cache_data(ttl=3600)
-def _load_gnn_experiment(exp_folder_id: str) -> dict:
-    logs_id   = _get_folder_id(exp_folder_id, "logs")
-    models_id = _get_folder_id(exp_folder_id, "models")
+def _list_gnn_experiments(project_folder_id: str) -> list[str]:
+    """logs/ 폴더의 .log 파일 이름에서 실험 목록 추출"""
+    base = _get_gnn_base_folders(project_folder_id)
+    if not base.get("logs"):
+        return []
+    lf = _list_files(base["logs"])
+    return sorted(name[:-4] for name in lf if name.endswith(".log"))
+
+
+@st.cache_data(ttl=3600)
+def _load_gnn_experiment(project_folder_id: str, exp_name: str) -> dict:
+    base      = _get_gnn_base_folders(project_folder_id)
+    logs_id   = base.get("logs", "")
+    models_id = base.get("models", "")
     out: dict = {}
 
     if models_id:
         mf      = _list_files(models_id)
-        args_fn = next((k for k in mf if k.endswith("_args.json")), None)
-        if args_fn:
+        args_fn = f"checkpoint_{exp_name}_args.json"
+        if args_fn in mf:
             out["args"] = _download_json(mf[args_fn])
 
     if logs_id:
         lf     = _list_files(logs_id)
-        log_fn = next((k for k in lf if k.endswith(".log")), None)
-        if log_fn:
+        log_fn = f"{exp_name}.log"
+        if log_fn in lf:
             r = requests.get(
                 f"https://drive.google.com/uc?export=download&id={lf[log_fn]}",
                 timeout=60,
@@ -398,9 +408,7 @@ exp_labels   = list(exp_data.keys())
 _default_idx = 0
 
 # GNN 실험 목록 로드
-gnn_exps = _list_gnn_experiments(PROJECT_FOLDER_ID)
-gnn_exp_map  = {e["name"]: e["id"] for e in gnn_exps}
-gnn_exp_names = [e["name"] for e in gnn_exps]
+gnn_exp_names = _list_gnn_experiments(PROJECT_FOLDER_ID)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -435,7 +443,7 @@ with tab_gnn:
                                label_visibility="collapsed")
 
         with st.spinner("GNN 실험 로드 중..."):
-            gnn_d  = _load_gnn_experiment(gnn_exp_map[sel_gnn])
+            gnn_d  = _load_gnn_experiment(PROJECT_FOLDER_ID, sel_gnn)
 
         args   = gnn_d.get("args", {})
         parsed = gnn_d.get("parsed", {})
@@ -443,17 +451,6 @@ with tab_gnn:
 
         if not epochs:
             st.info("학습 로그를 파싱할 수 없습니다.")
-            with st.expander("🔍 디버그"):
-                st.write("gnn_d keys:", list(gnn_d.keys()))
-                st.write("parsed keys:", list(parsed.keys()) if parsed else "없음")
-                _dbg_logs_id   = _get_folder_id(gnn_exp_map[sel_gnn], "logs")
-                _dbg_models_id = _get_folder_id(gnn_exp_map[sel_gnn], "models")
-                st.write("logs 폴더 ID:", _dbg_logs_id or "찾지 못함")
-                st.write("models 폴더 ID:", _dbg_models_id or "찾지 못함")
-                if _dbg_logs_id:
-                    st.write("logs 파일 목록:", list(_list_files(_dbg_logs_id).keys()))
-                _dbg_root_files = _list_files(gnn_exp_map[sel_gnn])
-                st.write("실험 루트 파일/폴더:", list(_dbg_root_files.keys()))
         else:
             ep_df = pd.DataFrame(epochs)
             ep_df.index = ep_df.index + 1
