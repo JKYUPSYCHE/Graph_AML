@@ -461,12 +461,22 @@ with tab_gnn:
             best_ep  = ep_df.loc[best_idx]
 
             # ── 핵심 지표 ──────────────────────────────────────────────────
+            st.markdown("#### Metrics")
             c1, c2, c3, c4, c5 = st.columns(5)
-            _metric(c1, "Best Val AUPRC",   f"{best_ep['val_auprc']:.4f}",   f"epoch {int(best_ep['epoch'])}")
-            _metric(c2, "Test AUPRC",       f"{best_ep['test_auprc']:.4f}",  "at best val")
-            _metric(c3, "Test F1",          f"{best_ep['test_f1']:.4f}",     "at best val")
-            _metric(c4, "Test Recall",      f"{best_ep['test_recall']:.4f}", "at best val")
-            _metric(c5, "Test Precision",   f"{best_ep['test_precision']:.4f}", "at best val")
+            c1.metric("F1",            f"{best_ep['test_f1']:.4f}")
+            c2.metric("AUPRC",         f"{best_ep['test_auprc']:.4f}")
+            c3.metric("Precision",     f"{best_ep['test_precision']:.4f}")
+            c4.metric("Recall",        f"{best_ep['test_recall']:.4f}")
+            c5.metric("Best Val AUPRC", f"{best_ep['val_auprc']:.4f}",
+                      help=f"epoch {int(best_ep['epoch'])}")
+
+            c6, c7 = st.columns(2)
+            _n_txns  = parsed.get("n_txns")
+            _ir      = parsed.get("illicit_ratio")
+            _metric(c6, "거래 수", f"{_n_txns:,}" if _n_txns else "—",
+                    f"illicit {_ir:.2f}%" if _ir else "")
+            _metric(c7, "Best epoch / 총 에폭",
+                    f"{int(best_ep['epoch'])}  /  {len(ep_df)}", "")
 
             st.divider()
 
@@ -500,7 +510,7 @@ with tab_gnn:
             _mc, _ = st.columns([3, 5])
             metric_sel = _mc.radio(
                 "지표", ["F1", "AUPRC", "Recall", "Precision"],
-                horizontal=True, key="gnn_metric",
+                horizontal=True, key="gnn_metric", label_visibility="collapsed",
             )
             mc = metric_sel.lower()
 
@@ -534,16 +544,11 @@ with tab_gnn:
             # ── 데이터 통계 ────────────────────────────────────────────────
             st.markdown("##### 데이터 통계")
             _dc1, _dc2 = st.columns([1, 2])
-            _n_nodes = parsed.get("n_nodes")
-            _n_txns  = parsed.get("n_txns")
-            _ir      = parsed.get("illicit_ratio")
-            _params  = parsed.get("total_params")
+            _params = parsed.get("total_params")
             _dc1.markdown(f"""
 | 항목 | 값 |
 |------|-----|
-| 노드 수 | {f'{_n_nodes:,}' if _n_nodes else '—'} |
-| 거래 수 | {f'{_n_txns:,}' if _n_txns else '—'} |
-| Illicit ratio | {f'{_ir:.2f}%' if _ir else '—'} |
+| 노드 수 | {f'{parsed.get("n_nodes"):,}' if parsed.get("n_nodes") else '—'} |
 | 총 파라미터 | {f'{_params:,}' if _params else '—'} |
 """)
             _ef = parsed.get("edge_features", [])
@@ -583,7 +588,7 @@ with tab_ml:
         f1    = m.get("f1", 0)
         aucpr = m.get("average_precision") or train_summary.get("best_score")
         c1.metric("F1",        f"{f1:.4f}")
-        c2.metric("AUCPR",     f"{aucpr:.4f}" if aucpr is not None else "—")
+        c2.metric("AUPRC",     f"{aucpr:.4f}" if aucpr is not None else "—")
         c3.metric("Precision", f"{m.get('precision', 0):.4f}")
         c4.metric("Recall",    f"{m.get('recall', 0):.4f}")
         c5.metric("Threshold", f"{m.get('threshold', 0):.4f}",
@@ -623,7 +628,7 @@ with tab_ml:
             if eval_res.get("f1"):
                 curve_key, curve_label, curve_best = "f1", "F1", f1
             else:
-                curve_key, curve_label, curve_best = "aucpr", "AUCPR", aucpr or 0
+                curve_key, curve_label, curve_best = "aucpr", "AUPRC", aucpr or 0
             curve_vals = eval_res.get(curve_key, [])
             if curve_vals:
                 fig_curve = px.line(
