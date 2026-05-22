@@ -220,7 +220,8 @@ def _sa_find_folder(name: str, parent_id: str, token: str) -> str:
     )
     files = r.json().get("files", []) if r.ok else []
     result = files[0]["id"] if files else ""
-    cache[key] = result
+    if result:
+        cache[key] = result
     return result
 
 
@@ -255,7 +256,8 @@ def _sa_find_file(name: str, parent_id: str, token: str) -> str:
     )
     files = r.json().get("files", []) if r.ok else []
     result = files[0]["id"] if files else ""
-    cache[key] = result
+    if result:
+        cache[key] = result
     return result
 
 
