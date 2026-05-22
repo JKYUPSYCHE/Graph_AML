@@ -35,6 +35,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
     memory_mb_list = []
     t_train_start = time.perf_counter()
     for epoch in range(config.epochs):
+        logging.info(f"[epoch {epoch + 1}/{config.epochs}]")
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
         total_loss = total_examples = 0
@@ -104,14 +105,14 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
             best_val_f1 = val_result['f1']
             best_val_result = val_result
             best_te_result = te_result
-            best_epoch = epoch
+            best_epoch = epoch + 1
             patience_counter = 0
             if args.save_model:
                 save_model(model, optimizer, epoch, args, data_config)
         else:
             patience_counter += 1
             if args.patience is not None and patience_counter >= args.patience:
-                logging.info(f'Early stopping at epoch {epoch} (patience={args.patience})')
+                logging.info(f'Early stopping at epoch {epoch + 1} (patience={args.patience})')
                 break
 
     total_time_s = time.perf_counter() - t_train_start
@@ -132,6 +133,7 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
     memory_mb_list = []
     t_train_start = time.perf_counter()
     for epoch in range(config.epochs):
+        logging.info(f"[epoch {epoch + 1}/{config.epochs}]")
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
         total_loss = total_examples = 0
@@ -204,14 +206,14 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
             best_val_f1 = val_result['f1']
             best_val_result = val_result
             best_te_result = te_result
-            best_epoch = epoch
+            best_epoch = epoch + 1
             patience_counter = 0
             if args.save_model:
                 save_model(model, optimizer, epoch, args, data_config)
         else:
             patience_counter += 1
             if args.patience is not None and patience_counter >= args.patience:
-                logging.info(f'Early stopping at epoch {epoch} (patience={args.patience})')
+                logging.info(f'Early stopping at epoch {epoch + 1} (patience={args.patience})')
                 break
 
     total_time_s = time.perf_counter() - t_train_start
