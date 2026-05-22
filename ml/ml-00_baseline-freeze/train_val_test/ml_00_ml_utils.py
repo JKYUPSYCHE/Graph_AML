@@ -20,7 +20,7 @@ def set_seed(seed: int = 42, use_torch: bool = False) -> None:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-# ml_utils.py 파일 위치
+# ml_00_ml_utils.py 파일 위치
 UTILS_DIR = Path(__file__).resolve().parent
 
 # Git 프로젝트 루트를 기준으로 경로 계산
