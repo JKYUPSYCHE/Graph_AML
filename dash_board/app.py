@@ -230,6 +230,7 @@ def _render_report(tab_name: str, exp_name: str) -> None:
     VALID_AUTHORS: list[str] = list(st.secrets.get("REPORT_AUTHORS", []))
     sess_author = st.session_state.get("report_author", "")
     cache_key   = f"rpt_{tab_name}_{exp_name}"
+    edit_key    = f"rpt_editing_{tab_name}_{exp_name}"
 
     if cache_key not in st.session_state:
         with st.spinner("리포트 로드 중..."):
@@ -238,46 +239,63 @@ def _render_report(tab_name: str, exp_name: str) -> None:
     content    = report.get("content", "")
     written_by = report.get("author", "")
     updated_at = report.get("updated_at", "")
+    is_editing = st.session_state.get(edit_key, False)
 
-    with st.expander("📝 리포트", expanded=bool(content)):
+    # ── 제목 + 편집 버튼 ───────────────────────────────────────────────────
+    col_title, col_btn = st.columns([8, 1])
+    col_title.markdown("##### Report")
+    if not is_editing:
+        if col_btn.button("편집", key=f"rpt_edit_btn_{tab_name}_{exp_name}", use_container_width=True):
+            st.session_state[edit_key] = True
+            st.rerun()
+
+    # ── 읽기 모드 ──────────────────────────────────────────────────────────
+    if not is_editing:
         if content:
             st.markdown(content)
             st.caption(f"작성자: {written_by}  ({updated_at})")
         else:
             st.caption("작성된 리포트가 없습니다.")
 
+    # ── 편집 모드 ──────────────────────────────────────────────────────────
+    else:
         if not sess_author:
+            # 비밀번호(이름) 입력
+            st.caption("이름을 입력하세요")
             name_in = st.text_input(
-                "이름을 입력하면 편집할 수 있습니다",
-                key=f"rpt_auth_{tab_name}_{exp_name}",
-                placeholder="이름 입력",
+                "이름", key=f"rpt_auth_{tab_name}_{exp_name}",
+                placeholder="이름 입력", label_visibility="collapsed",
             )
-            if st.button("확인", key=f"rpt_auth_btn_{tab_name}_{exp_name}"):
+            col_ok, col_cancel = st.columns([1, 1])
+            if col_ok.button("확인", key=f"rpt_auth_btn_{tab_name}_{exp_name}", use_container_width=True):
                 if name_in in VALID_AUTHORS:
                     st.session_state["report_author"] = name_in
                     st.rerun()
                 else:
                     st.error("이름이 올바르지 않습니다.")
+            if col_cancel.button("취소", key=f"rpt_cancel_auth_{tab_name}_{exp_name}", use_container_width=True):
+                st.session_state[edit_key] = False
+                st.rerun()
         else:
-            st.markdown(f"<span style='font-size:0.82rem;color:#888'>편집 중: {sess_author}</span>",
-                        unsafe_allow_html=True)
+            # 텍스트 에디터
+            st.caption(f"편집 중: {sess_author}")
             new_content = st.text_area(
-                "내용 (마크다운)",
-                value=content, height=220,
+                "내용", value=content, height=220,
                 key=f"rpt_area_{tab_name}_{exp_name}",
                 label_visibility="collapsed",
             )
-            col_save, col_out = st.columns([1, 1])
+            col_save, col_cancel = st.columns([1, 1])
             if col_save.button("저장", key=f"rpt_save_{tab_name}_{exp_name}", use_container_width=True):
                 with st.spinner("저장 중..."):
                     ok = _save_report(tab_name, exp_name, new_content, sess_author)
                 if ok:
                     st.session_state.pop(cache_key, None)
-                    st.success("저장되었습니다.")
+                    st.session_state[edit_key] = False
                     st.rerun()
                 else:
                     st.error("저장 실패 — 서비스 계정 설정을 확인하세요.")
-            if col_out.button("로그아웃", key=f"rpt_logout_{tab_name}_{exp_name}", use_container_width=True):
+            if col_cancel.button("취소", key=f"rpt_cancel_{tab_name}_{exp_name}", use_container_width=True):
+                st.session_state[edit_key] = False
                 st.session_state.pop("report_author", None)
                 st.rerun()
 
@@ -1004,10 +1022,6 @@ with tab_ml:
 with tab_woe:
     sel_woe  = st.selectbox("실험 선택", exp_labels, key="woe_sel",
                             index=_default_idx, label_visibility="collapsed")
-    st.caption(
-        "**WOE(Weight of Evidence)**: 각 구간에서 fraud 비율과 정상 비율의 로그 비.  \n"
-        "**IV(Information Value)**: WOE를 전체 구간에 걸쳐 집계한 변수 단위 예측력 요약."
-    )
 
     _render_report("Univariate Analysis", sel_woe)
     st.divider()
@@ -1117,6 +1131,10 @@ with tab_woe:
         st.divider()
 
         st.markdown("##### Information Value")
+        st.caption(
+            "**WOE(Weight of Evidence)**: 각 구간에서 fraud 비율과 정상 비율의 로그 비.  \n"
+            "**IV(Information Value)**: WOE를 전체 구간에 걸쳐 집계한 변수 단위 예측력 요약."
+        )
         _col_n, _col_s = st.columns([4, 1])
         top_n    = _col_n.slider("N Features", 10, max(10, len(iv_df)), min(20, len(iv_df)), key="woe_top_n", label_visibility="collapsed")
         woe_desc = _col_s.radio("정렬", ["높은 순", "낮은 순"], horizontal=True, key="woe_sort") == "높은 순"
