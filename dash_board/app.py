@@ -198,8 +198,10 @@ def _get_sa_token() -> str:
         creds.refresh(ga_requests.Request())
         st.session_state["sa_token"]     = creds.token
         st.session_state["sa_token_exp"] = creds.expiry.timestamp() if creds.expiry else now + 3600
+        st.session_state.pop("_sa_last_error", None)
         return creds.token
-    except Exception:
+    except Exception as e:
+        st.session_state["_sa_last_error"] = f"토큰 발급 실패: {e}"
         return ""
 
 
@@ -293,6 +295,7 @@ def _save_report(tab_name: str, exp_name: str, content: str, author: str) -> boo
     tab_id  = _sa_get_or_create_folder(tab_name,    dash_id,            token)
     exp_id  = _sa_get_or_create_folder(exp_name,    tab_id,             token)
     if not exp_id:
+        st.session_state["_sa_last_error"] = "Drive 폴더 생성 실패 (403 권한 오류일 가능성 높음) — 서비스 계정을 PROJECT_FOLDER_ID 폴더에 Editor로 공유했는지 확인하세요."
         return False
 
     payload = json.dumps(
@@ -332,6 +335,8 @@ def _save_report(tab_name: str, exp_name: str, content: str, author: str) -> boo
             new_id = r.json().get("id", "")
             if new_id:
                 st.session_state.setdefault("_sa_file_cache", {})[f"{exp_id}/report.json"] = new_id
+    if not r.ok:
+        st.session_state["_sa_last_error"] = f"Drive API {r.status_code}: {r.text[:300]}"
     return r.ok
 
 
@@ -425,7 +430,8 @@ def _render_report(tab_name: str, exp_name: str) -> None:
                     st.session_state[edit_key] = False
                     st.rerun()
                 else:
-                    st.error("저장 실패 — 서비스 계정 설정을 확인하세요.")
+                    err = st.session_state.pop("_sa_last_error", "서비스 계정 설정을 확인하세요.")
+                    st.error(f"저장 실패 — {err}")
             if col_cancel.button("취소", key=f"rpt_cancel_{tab_name}_{exp_name}", use_container_width=True):
                 st.session_state[edit_key] = False
                 st.session_state.pop("report_author", None)
