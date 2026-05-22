@@ -499,7 +499,7 @@ with tab_gnn:
             st.markdown("##### Learning Curve")
             _mc, _ = st.columns([3, 5])
             metric_sel = _mc.radio(
-                "지표", ["AUPRC", "F1", "Recall", "Precision"],
+                "지표", ["F1", "AUPRC", "Recall", "Precision"],
                 horizontal=True, key="gnn_metric",
             )
             mc = metric_sel.lower()
@@ -548,8 +548,11 @@ with tab_gnn:
 """)
             _ef = parsed.get("edge_features", [])
             if _ef:
-                _dc2.caption("사용된 Edge Features")
-                _dc2.code("  ".join(_ef), language=None)
+                with _dc2.expander(f"Edge Features ({len(_ef)}개)"):
+                    st.dataframe(
+                        pd.DataFrame({"feature": _ef}),
+                        use_container_width=True, hide_index=True,
+                    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
