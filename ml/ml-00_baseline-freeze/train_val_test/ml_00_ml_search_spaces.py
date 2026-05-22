@@ -23,7 +23,7 @@ Number = Union[int, float]
 # 1. XGBoost search space preset 정의
 # -----------------------------------------------------------------------------
 # 각 값은 random search에서 선택 가능한 discrete 후보 목록이다.
-# 실제 trial sampling은 ml_tune.py가 담당한다.
+# 실제 trial sampling은 ml_00_ml_tune.py가 담당한다.
 XGB_SEARCH_SPACES: dict[str, dict[str, list[Number]]] = {
     "model_select_minimal": {
         "n_estimators": [800, 1200],
