@@ -443,6 +443,17 @@ with tab_gnn:
 
         if not epochs:
             st.info("학습 로그를 파싱할 수 없습니다.")
+            with st.expander("🔍 디버그"):
+                st.write("gnn_d keys:", list(gnn_d.keys()))
+                st.write("parsed keys:", list(parsed.keys()) if parsed else "없음")
+                _dbg_logs_id   = _get_folder_id(gnn_exp_map[sel_gnn], "logs")
+                _dbg_models_id = _get_folder_id(gnn_exp_map[sel_gnn], "models")
+                st.write("logs 폴더 ID:", _dbg_logs_id or "찾지 못함")
+                st.write("models 폴더 ID:", _dbg_models_id or "찾지 못함")
+                if _dbg_logs_id:
+                    st.write("logs 파일 목록:", list(_list_files(_dbg_logs_id).keys()))
+                _dbg_root_files = _list_files(gnn_exp_map[sel_gnn])
+                st.write("실험 루트 파일/폴더:", list(_dbg_root_files.keys()))
         else:
             ep_df = pd.DataFrame(epochs)
             ep_df.index = ep_df.index + 1
