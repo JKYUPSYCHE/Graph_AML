@@ -316,7 +316,11 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
     sample_edge_attr = sample_batch.edge_attr if not isinstance(sample_batch, HeteroData) else sample_batch.edge_attr_dict
     logging.info(summary(model, sample_x, sample_edge_index, sample_edge_attr))
 
-    loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config.w_ce1, config.w_ce2]).to(device))
+    if getattr(args, 'weighted_sampler', False):
+        loss_fn = torch.nn.CrossEntropyLoss()
+        logging.info("WeightedRandomSampler 활성화: CE loss 가중치 [1, 1] (균등)")
+    else:
+        loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config.w_ce1, config.w_ce2]).to(device))
 
     run_name = args.unique_name
     writer = SummaryWriter(log_dir=f"runs/{run_name}")

@@ -57,5 +57,6 @@ def create_parser():
     parser.add_argument("--finetune", action='store_true', help="Fine-tune a model. Note that args.unique_name needs to point to the pre-trained model.")
     parser.add_argument("--inference", action='store_true', help="Load a trained model and only do AML inference with it. args.unique name needs to point to the trained model.")
     parser.add_argument("--patience", default=None, type=int, help="Early stopping patience in epochs (disabled if not set).")
+    parser.add_argument("--weighted_sampler", action='store_true', help="Use WeightedRandomSampler for training (oversamples minority class). CE loss weights are set to [1,1] when enabled.")
 
     return parser

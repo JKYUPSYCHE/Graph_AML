@@ -7,6 +7,7 @@ from torch_geometric.transforms import BaseTransform
 from typing import Union
 from torch_geometric.data import Data, HeteroData
 from torch_geometric.loader import LinkNeighborLoader
+from torch.utils.data import WeightedRandomSampler
 from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score, log_loss, confusion_matrix
 import json
 
@@ -64,14 +65,29 @@ def add_arange_ids(data_list):
         else:
             data.edge_attr = torch.cat([torch.arange(data.edge_attr.shape[0]).view(-1, 1), data.edge_attr], dim=1)
 
+def _make_weighted_sampler(labels: torch.Tensor) -> WeightedRandomSampler:
+    class_counts = torch.bincount(labels)
+    class_weights = 1.0 / class_counts.float()
+    sample_weights = class_weights[labels]
+    return WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
+
 def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transform, args):
+    use_wrs = getattr(args, 'weighted_sampler', False)
     if isinstance(tr_data, HeteroData):
         tr_edge_label_index = tr_data['node', 'to', 'node'].edge_index
         tr_edge_label = tr_data['node', 'to', 'node'].y
 
-        tr_loader =  LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
-                                    edge_label_index=(('node', 'to', 'node'), tr_edge_label_index),
-                                    edge_label=tr_edge_label, batch_size=args.batch_size, shuffle=True, drop_last=True, transform=transform)
+        if use_wrs:
+            sampler = _make_weighted_sampler(tr_edge_label)
+            tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
+                                        edge_label_index=(('node', 'to', 'node'), tr_edge_label_index),
+                                        edge_label=tr_edge_label, batch_size=args.batch_size,
+                                        sampler=sampler, drop_last=True, transform=transform)
+        else:
+            tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
+                                        edge_label_index=(('node', 'to', 'node'), tr_edge_label_index),
+                                        edge_label=tr_edge_label, batch_size=args.batch_size,
+                                        shuffle=True, drop_last=True, transform=transform)
 
         val_edge_label_index = val_data['node', 'to', 'node'].edge_index[:,val_inds]
         val_edge_label = val_data['node', 'to', 'node'].y[val_inds]
@@ -87,7 +103,15 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
                                     edge_label_index=(('node', 'to', 'node'), te_edge_label_index),
                                     edge_label=te_edge_label, batch_size=args.batch_size, shuffle=False, transform=transform)
     else:
-        tr_loader =  LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs, batch_size=args.batch_size, shuffle=True, drop_last=True, transform=transform)
+        if use_wrs:
+            sampler = _make_weighted_sampler(tr_data.y)
+            tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
+                                        batch_size=args.batch_size, sampler=sampler,
+                                        drop_last=True, transform=transform)
+        else:
+            tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
+                                        batch_size=args.batch_size, shuffle=True,
+                                        drop_last=True, transform=transform)
         val_loader = LinkNeighborLoader(val_data,num_neighbors=args.num_neighs, edge_label_index=val_data.edge_index[:, val_inds],
                                         edge_label=val_data.y[val_inds], batch_size=args.batch_size, shuffle=False, transform=transform)
         te_loader =  LinkNeighborLoader(te_data,num_neighbors=args.num_neighs, edge_label_index=te_data.edge_index[:, te_inds],
