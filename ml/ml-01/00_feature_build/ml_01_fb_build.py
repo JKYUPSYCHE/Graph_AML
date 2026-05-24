@@ -16,6 +16,25 @@ Feature build 전체 실행 모듈
 - 컬럼명이 바뀌면 노트북의 `column_map` dict를 우선 수정한다.
 - full data 실행 전 sample_rows로 smoke build를 먼저 수행하는 것을 권장한다.
 - overwrite=False가 기본이며 기존 산출물이 있으면 즉시 중단한다.
+
+처음 읽는 순서
+--------------
+1. `FeatureBuildConfig`와 `FeatureBuildResult`로 입력/출력 계약을 확인한다.
+2. 공개 진입점인 `build_features()`와 `build_features_from_frame()`을 먼저 읽는다.
+3. 두 진입점이 공통으로 도달하는 `_build_from_raw_frame()`과 `_build_from_split_frame()`을 읽는다.
+4. operation 세부 계산은 이 파일이 아니라 `ml_01_fb_operations.py`와 `ml_01_fb_rolling.py`에서 확인한다.
+5. `validate_stage0_rolling_outputs()`는 build 후 저장 전 semantic guard로 따로 읽는다.
+
+섹션 지도
+---------
+1. 실행 설정과 결과 객체
+2. split/frame 조립 helper
+3. Stage 0 rolling semantic validation
+4. 기존 split metadata 검증 helper
+5. 공개 feature build 진입점
+6. 내부 FeatureSpec/build 검증 helper
+7. 공통 build 본체
+8. artifact summary helper
 """
 
 from __future__ import annotations
@@ -71,6 +90,8 @@ class FeatureBuildConfig:
         build_features_from_frame()을 써야 한다.
     output_dir:
         산출물 저장 폴더. None이면 파일 저장 없이 메모리 결과만 반환한다.
+        공식 노트북 경로는 output_dir=None으로 build 후 encode_split_frame()에서 저장한다.
+        output_dir을 지정하는 direct-save 모드는 보조 실행 경로다.
     feature_specs:
         생성할 ML-01 Stage 0 feature 선언 목록. 명시하지 않으면 실행을 중단한다.
     column_map:
@@ -86,7 +107,7 @@ class FeatureBuildConfig:
     input_path: Optional[Union[str, Path]] = DEFAULT_INPUT_PATH
     output_dir: Optional[Union[str, Path]] = DEFAULT_OUTPUT_DIR
     # base_dir: input_path/output_dir이 상대경로일 때 해석 기준이 되는 루트.
-    # None이면 ml_00_fb_io.resolve_path() 내부에서 ml_00_fb_utils.BASE_DIR(=Git 루트)를 사용한다.
+    # None이면 ml_01_fb_io.resolve_path() 내부에서 ml_01_fb_utils.BASE_DIR(=Git 루트)를 사용한다.
     base_dir: Optional[Union[str, Path]] = None
 
     # --- 실행 식별자 (재현성 메타데이터 + 산출물 파일명 prefix) ---
@@ -101,7 +122,7 @@ class FeatureBuildConfig:
 
     # --- 컬럼명 매핑 ---
     # 노트북의 COLUMN_MAP이 그대로 들어온다. 예: {"amount": "Amount Paid"}.
-    # 여기 없는 logical key는 ml_00_fb_schema.COLUMN_CANDIDATES로 자동 fallback된다.
+    # 여기 없는 logical key는 ml_01_fb_schema.COLUMN_CANDIDATES로 자동 fallback된다.
     # 명시성을 위해 모든 key를 직접 넘기는 것을 권장.
     column_map: Optional[Mapping[str, str]] = None
 
@@ -172,9 +193,10 @@ class FeatureBuildResult:
 
 
 # -----------------------------------------------------------------------------
-# 2. train/val/test split 검증
+# 2. split/frame 조립 helper
 # -----------------------------------------------------------------------------
 # ML-01 feature build 기본 흐름은 source parquet의 기존 split 컬럼만 사용한다.
+# 이 섹션은 split 경계 검증과 원본 frame + 생성 feature 조립에 필요한 작은 helper를 모은다.
 # -----------------------------------------------------------------------------
 def _validate_time_split(df: pd.DataFrame) -> None:
     """
@@ -282,6 +304,12 @@ def _append_generated_features(
     return source
 
 
+# =============================================================================
+# 3. Stage 0 rolling semantic validation
+# =============================================================================
+# build 후 저장 전에 실행하는 공개 검증 함수와 내부 helper다.
+# 누락/inf 검증으로 잡히지 않는 rolling window 의미 오류를 차단한다.
+# -----------------------------------------------------------------------------
 def _numeric_validation_series(frame: pd.DataFrame, column: str) -> pd.Series:
     """semantic validation에서 사용할 feature column을 finite numeric series로 변환한다."""
 
@@ -537,9 +565,10 @@ def validate_stage0_rolling_outputs(
 
 
 # =============================================================================
-# 3. 기존 split 컬럼 기준 단일 parquet 분할
+# 4. 기존 split metadata 검증 helper
 # =============================================================================
 # ML-01 build는 기존 split 컬럼을 검증하고 보존한다.
+# split을 새로 만들지 않으며, train/val/test 시간 경계가 깨지면 즉시 실패한다.
 # -----------------------------------------------------------------------------
 def _normalize_existing_split_values(series: pd.Series, *, source_path: Path, split_col: str) -> pd.Series:
     """기존 split 컬럼 값을 train/val/test canonical 값으로 정규화하고 검증한다."""
@@ -645,7 +674,7 @@ def _existing_split_metadata_frame(
 
 
 # =============================================================================
-# 4. 공개 feature build 진입점 (사용자 코드/노트북에서 직접 호출)
+# 5. 공개 feature build 진입점 (사용자 코드/노트북에서 직접 호출)
 # =============================================================================
 # 기본 권장 흐름은 단일 parquet 입력이다. DataFrame 입력은 smoke/debug용 보조 진입점으로 유지한다.
 # 두 진입점은 모두 최종적으로 _build_from_split_frame()으로 수렴한다.
@@ -772,9 +801,9 @@ def build_features_from_frame(
 
 
 # =============================================================================
-# 4. 내부 검증 헬퍼
+# 6. 내부 FeatureSpec/build 검증 helper
 # =============================================================================
-# 공개 진입점이 공유하는 검증 로직을 모은 섹션
+# 공개 진입점이 공유하는 검증 로직을 모은 섹션이다.
 # 모든 검증은 "조용히 통과시키지 않고 즉시 ValueError로 중단" 원칙
 # -----------------------------------------------------------------------------
 def _validate_specs_for_build(specs: Tuple[FeatureSpec, ...]) -> None:
@@ -844,7 +873,7 @@ def _validate_unique_tx_ids(df: pd.DataFrame) -> None:
         )
 
 # =============================================================================
-# 5. 공통 build 본체 (공개 진입점이 최종적으로 도달하는 곳)
+# 7. 공통 build 본체 (공개 진입점이 최종적으로 도달하는 곳)
 # =============================================================================
 # _build_from_raw_frame:  split 포함 입력 → 표준화 + 기존 split 검증/보존 → _build_from_split_frame 호출
 # _build_from_split_frame: split 확정 입력 → operation 실행 + catalog 생성 + 저장
@@ -1074,6 +1103,9 @@ def _build_from_split_frame(
     )
 
 
+# =============================================================================
+# 8. artifact summary helper
+# =============================================================================
 def _unknown_category_total(unknown_summary: pd.DataFrame) -> int:
     """
     category_unknown_summary artifact에서 전체 unknown category 건수를 합산
@@ -1092,7 +1124,7 @@ def _unknown_category_total(unknown_summary: pd.DataFrame) -> int:
 
     if unknown_summary.empty:
         return 0
-    # 빈 frame이 아닌데 컬럼이 없다면 ml_00_fb_operations.py의 schema가 깨진 것 → 즉시 중단.
+    # 빈 frame이 아닌데 컬럼이 없다면 ml_01_fb_operations.py의 schema가 깨진 것 → 즉시 중단.
     if "unknown_count" not in unknown_summary.columns:
         raise ValueError("category_unknown_summary artifact is missing unknown_count column.")
     return int(unknown_summary["unknown_count"].sum())

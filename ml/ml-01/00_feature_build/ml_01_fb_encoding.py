@@ -41,6 +41,11 @@ from ml_01_fb_schema import (
 SUPPORTED_ENCODINGS = {"passthrough", "label_code", "xgb_native"}
 SUPPORTED_BUILD_ACTIONS = {"carry_forward", "build", "encode"}
 META_COLUMNS = ("tx_id", "timestamp", "split", "label")
+FIXED_CATEGORY_DOMAINS: dict[str, list[str]] = {
+    "time__row__hour": [str(value) for value in range(24)],
+    "time__row__dayofweek": [str(value) for value in range(7)],
+    "time__row__is_weekend": ["0", "1"],
+}
 
 
 @dataclass(frozen=True)
@@ -432,6 +437,28 @@ def _split_indexed_category(series: pd.Series, split_values: pd.Series, source_c
     )
 
 
+def _fit_categories(normalized: pd.Series, source_column: str) -> list[str]:
+    """category 목록을 정한다.
+
+    일반 category는 split contamination을 막기 위해 train split에서만 fit한다.
+    시간 calendar category는 가능한 값의 domain이 사전에 닫혀 있으므로 fixed domain을 사용한다.
+    """
+
+    fixed_categories = FIXED_CATEGORY_DOMAINS.get(source_column)
+    if fixed_categories is None:
+        train_values = normalized.loc["train"]
+        return sorted(train_values.unique().tolist())
+
+    observed_values = set(normalized.tolist())
+    invalid_values = sorted(observed_values - set(fixed_categories))
+    if invalid_values:
+        raise ValueError(
+            "Fixed-domain categorical feature contains values outside allowed domain. "
+            f"source_column={source_column!r}, values={invalid_values[:10]}"
+        )
+    return list(fixed_categories)
+
+
 def encode_split_frame(
     split_df: pd.DataFrame,
     specs: Iterable[EncodingSpec],
@@ -499,8 +526,7 @@ def encode_split_frame(
         # label_code/xgb_native는 모두 train category 목록으로 fit한다.
         # train에 없는 val/test 값은 label_code=-1 또는 xgb_native missing category로 남기고 summary에 기록한다.
         normalized = _split_indexed_category(source, split_df["split"], spec.source_column)
-        train_values = normalized.loc["train"]
-        categories = sorted(train_values.unique().tolist())
+        categories = _fit_categories(normalized, spec.source_column)
         if not categories:
             raise ValueError(f"train split has no category values. source_column={spec.source_column!r}")
         category_values[spec.output_column] = categories
