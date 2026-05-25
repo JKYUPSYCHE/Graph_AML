@@ -42,7 +42,7 @@ import pandas as pd
 from ml_01_fb_schema import normalize_category_strict, parse_datetime_strict, parse_numeric_strict
 from ml_01_fb_specs import FeatureOpResult, FeatureSpec, META_COLUMNS, feature_columns, validate_feature_specs
 from ml_01_fb_rolling import execute_rolling_agg_specs_batched, op_rolling_agg, parse_window
-from ml_01_fb_op_utils import (
+from ml_01_fb_operation_result_validation import (
     finalize_result as _finalize_result,
     param_value as _param_value,
     require_allowed_params as _require_allowed_params,
@@ -85,6 +85,26 @@ def _empty_category_unknown_summary() -> pd.DataFrame:
     return pd.DataFrame(columns=list(CATEGORY_UNKNOWN_COLUMNS))
 
 
+def _entity_timestamp_work(df: pd.DataFrame, spec: FeatureSpec) -> tuple[pd.DataFrame, dict[str, str]]:
+    """entity/timestamp 기반 past-only operation이 공유하는 정렬 work frame을 만든다."""
+
+    roles = _require_roles(spec, ("entity_col", "timestamp_col"))
+    entity_col = roles["entity_col"]
+    timestamp_col = roles["timestamp_col"]
+    _require_columns(df, (entity_col, timestamp_col), spec.operation)
+
+    entity = normalize_category_strict(df[entity_col], source_col=entity_col)
+    timestamps = parse_datetime_strict(df, timestamp_col, spec.output_col)
+    work = pd.DataFrame(
+        {
+            "_entity": entity,
+            "_timestamp": timestamps,
+            "_row_order": np.arange(len(df)),
+        }
+    ).sort_values(["_entity", "_timestamp", "_row_order"], kind="mergesort")
+    return work, roles
+
+
 # -----------------------------------------------------------------------------
 # 2. Recency / first transaction operation
 # -----------------------------------------------------------------------------
@@ -105,29 +125,7 @@ def _entity_recency_parts(df: pd.DataFrame, spec: FeatureSpec) -> tuple[pd.Serie
             spec.input_cols에서 꺼낸 역할 매핑.
             예: {"entity_col": "sender_account_id", "timestamp_col": "timestamp"}
     """
-    # spec.input_cols에서 이 operation이 필요로 하는 역할을 꺼낸다.
-    # recency 계산에는 entity 기준 컬럼과 timestamp 컬럼이 필요하다.
-    roles = _require_roles(spec, ("entity_col", "timestamp_col"))
-    entity_col = roles["entity_col"]
-    timestamp_col = roles["timestamp_col"]
-
-    # 실제 입력 DataFrame에 필요한 컬럼이 있는지 확인한다.
-    _require_columns(df, (entity_col, timestamp_col), spec.operation)
-
-    # entity 컬럼을 strict하게 category/string 형태로 정규화한다.
-    entity = normalize_category_strict(df[entity_col], source_col=entity_col)
-
-    # timestamp 컬럼을 strict하게 datetime으로 파싱한다.
-    timestamps = parse_datetime_strict(df, timestamp_col, spec.output_col)
-
-    # 계산용 work DataFrame을 만든다.
-    work = pd.DataFrame(
-        {
-            "_entity": entity,
-            "_timestamp": timestamps,
-            "_row_order": np.arange(len(df)),
-        }
-    ).sort_values(["_entity", "_timestamp", "_row_order"], kind="mergesort")
+    work, roles = _entity_timestamp_work(df, spec)
 
     # 같은 entity/timestamp에 여러 거래가 있어도 서로를 직전 거래로 보지 않는다.
     # 그래서 row 단위가 아니라 entity + timestamp 단위로 먼저 중복 제거한다.
@@ -318,83 +316,9 @@ def op_cur_vs_mean_ratio(df: pd.DataFrame, spec: FeatureSpec) -> FeatureOpResult
         단독 실행 경로 = 여기서 rolling mean까지 직접 계산
         전체 build 경로 = rolling mean은 batch에서 계산, 여기 함수는 우회
     """
-    # 이 operation에서 허용하는 spec.params key를 제한한다.
-    _require_allowed_params(spec, ("window", "closed", "fill_value", "zero_division_value", "dtype"))
-
-    # spec.input_cols에서 계산에 필요한 역할 컬럼을 꺼낸다.
-    # entity_col    : sender_account_id 또는 receiver_account_id처럼 과거 평균을 묶을 기준 컬럼
-    # timestamp_col : 과거 window를 판단할 시간 컬럼
-    # value_col     : 현재 금액과 과거 평균을 계산할 금액 컬럼
-    roles = _require_roles(spec, ("entity_col", "timestamp_col", "value_col"))
-    entity_col = roles["entity_col"]
-    timestamp_col = roles["timestamp_col"]
-    value_col = roles["value_col"]
-
-    # 실제 입력 DataFrame에 필요한 컬럼들이 존재하는지 확인한다.
-    _require_columns(df, (entity_col, timestamp_col, value_col), spec.operation)
-
-    # rolling 평균을 계산할 과거 window다.
-    window = _param_value(spec, "window", "")
-
-    # closed는 rolling window 경계 정책이다.
-    closed = str(_param_value(spec, "closed", "left")).strip().lower()
-    if closed != "left":
-        raise ValueError(
-            "Feature operation failed: cur_vs_mean_ratio only supports closed='left' to avoid current/future leakage. "
-            f"observed_closed={closed!r}"
-        )
-    
-    zero_division_value = float(_param_value(spec, "zero_division_value", 0.0)) # rolling 평균이 없거나 0이라 나눗셈을 할 수 없을 때 사용할 값이다.
-    fill_value = float(_param_value(spec, "fill_value", 0.0))                   # 내부 rolling mean feature에서 과거 값이 없을 때 채울 값이다.
-    dtype = str(_param_value(spec, "dtype", "float32"))                         # 최종 ratio feature의 dtype이다.
-
-    # ratio 계산에 필요한 내부 rolling mean spec을 만든다.
-    # 이 spec은 사용자에게 노출되는 최종 feature가 아니라 현재 feature를 계산하기 위한 임시 중간 feature다.
-    rolling_mean_spec = FeatureSpec(
-        operation="rolling_agg",
-        output_col=f"__rolling_mean_for__{spec.output_col}",
-        input_cols=roles,
-        params={"window": window, "agg": "mean", "closed": closed, "fill_value": fill_value, "dtype": "float64"},
-        leakage_policy=spec.leakage_policy,
-    )
-
-    # 같은 entity의 과거 window 평균 금액을 계산한다.
-    rolling_mean = op_rolling_agg(df, rolling_mean_spec).features[rolling_mean_spec.output_col].astype("float64")
-
-    # 현재 row의 금액 컬럼을 strict하게 숫자로 파싱한다.
-    current_value = parse_numeric_strict(df, value_col, spec.output_col).reset_index(drop=True).astype("float64")
-
-    # 기본값은 zero_division_value로 초기화한다. 이후 유효한 denominator가 있는 row만 실제 ratio로 덮어쓴다.
-    ratio = pd.Series(zero_division_value, index=np.arange(len(df)), dtype="float64")
-
-    # denominator가 존재하고 0이 아닌 row만 나눗셈 가능하다.
-    valid_denominator = rolling_mean.notna() & (rolling_mean != 0)
-
-    # 유효한 row에 대해서만 현재 금액 / 과거 평균 금액 비율을 계산한다.
-    ratio.loc[valid_denominator] = current_value.loc[valid_denominator] / rolling_mean.loc[valid_denominator]
-
-    # 나눗셈 결과가 inf 또는 -inf가 되면 zero_division_value로 치환한다.
-    ratio = ratio.replace([np.inf, -np.inf], zero_division_value)
-
-    # feature_info에 기록할 실제 적용 파라미터다. parse_window()를 거쳐 window 표현을 정규화해서 기록한다.
-    params = {
-        "window": str(parse_window(window, spec.operation, spec.output_col)),
-        "closed": closed,
-        "fill_value": fill_value,
-        "zero_division_value": zero_division_value,
-    }
-
-    # ratio Series를 표준 FeatureOpResult로 포장한다.
-    # _finalize_result()는 output_col 적용, dtype 변환, row count 검증,
-    # NaN/inf/non-numeric 검증, feature_info 생성을 담당한다.
-    return _finalize_result(
-        ratio,
-        spec,
-        row_count=len(df),
-        input_columns=roles,
-        params=params,
-        dtype=dtype,
-    )
+    rolling_mean_spec = _rolling_mean_spec_for_ratio(spec)
+    rolling_mean = op_rolling_agg(df, rolling_mean_spec).features[rolling_mean_spec.output_col]
+    return _execute_cur_vs_mean_ratio_from_mean(df, spec, rolling_mean)
 
 def _rolling_mean_spec_for_ratio(spec: FeatureSpec) -> FeatureSpec:
     """
@@ -545,20 +469,7 @@ def op_cumulative_count(df: pd.DataFrame, spec: FeatureSpec) -> FeatureOpResult:
     """entity별 현재 timestamp 이전 누적 거래 건수를 계산한다."""
 
     _require_allowed_params(spec, ("dtype",))
-    roles = _require_roles(spec, ("entity_col", "timestamp_col"))
-    entity_col = roles["entity_col"]
-    timestamp_col = roles["timestamp_col"]
-    _require_columns(df, (entity_col, timestamp_col), spec.operation)
-
-    entity = normalize_category_strict(df[entity_col], source_col=entity_col)
-    timestamps = parse_datetime_strict(df, timestamp_col, spec.output_col)
-    work = pd.DataFrame(
-        {
-            "_entity": entity,
-            "_timestamp": timestamps,
-            "_row_order": np.arange(len(df)),
-        }
-    ).sort_values(["_entity", "_timestamp", "_row_order"], kind="mergesort")
+    work, roles = _entity_timestamp_work(df, spec)
 
     # 같은 timestamp group은 현재 시점 거래로 보고 history에서 제외한다.
     # group size를 먼저 구한 뒤 cumsum에서 현재 group size를 빼면 past_timestamp < current_timestamp 정책이 유지된다.
@@ -638,6 +549,34 @@ def _append_category_artifacts(
         category_unknown_parts.append(result.artifacts["category_unknown_summary"])
 
 
+def _precompute_batched_results(
+    df: pd.DataFrame,
+    feature_specs: Tuple[FeatureSpec, ...],
+) -> dict[str, FeatureOpResult]:
+    """공유 중간 계산이 필요한 operation 결과를 먼저 만든다."""
+
+    precomputed: dict[str, FeatureOpResult] = {}
+
+    rolling_specs = tuple(spec for spec in feature_specs if spec.operation == "rolling_agg")
+    ratio_specs = tuple(spec for spec in feature_specs if spec.operation == "cur_vs_mean_ratio")
+    ratio_mean_specs = {spec.output_col: _rolling_mean_spec_for_ratio(spec) for spec in ratio_specs}
+    rolling_results = execute_rolling_agg_specs_batched(df, (*rolling_specs, *ratio_mean_specs.values()))
+    precomputed.update({spec.output_col: rolling_results[spec.output_col] for spec in rolling_specs})
+    for spec in ratio_specs:
+        mean_spec = ratio_mean_specs[spec.output_col]
+        precomputed[spec.output_col] = _execute_cur_vs_mean_ratio_from_mean(
+            df,
+            spec,
+            rolling_results[mean_spec.output_col].features[mean_spec.output_col],
+        )
+
+    recency_specs = tuple(
+        spec for spec in feature_specs if spec.operation in {"recency_seconds_since_last", "is_first_by_entity"}
+    )
+    precomputed.update(execute_recency_specs_batched(df, recency_specs))
+    return precomputed
+
+
 def execute_feature_specs(
     df: pd.DataFrame,
     feature_specs: Tuple[FeatureSpec, ...],
@@ -665,38 +604,14 @@ def execute_feature_specs(
     category_mapping_parts: list[pd.DataFrame] = []
     category_unknown_parts: list[pd.DataFrame] = []
 
-    # [1] 공유 가능한 중간 계산을 먼저 만든다.
-    # 아래 dict들은 output_col -> FeatureOpResult 형태라 최종 조립 loop에서 바로 조회할 수 있다.
-    # rolling_agg와 cur_vs_mean_ratio는 같은 rolling 계산을 공유할 수 있다.
-    # ratio는 hidden rolling mean spec을 만들어 batch에 함께 넣고, 최종 loop에서는 ratio 컬럼만 반환한다.
-    rolling_specs = tuple(spec for spec in feature_specs if spec.operation == "rolling_agg")
-    ratio_specs = tuple(spec for spec in feature_specs if spec.operation == "cur_vs_mean_ratio")
-    ratio_mean_specs = {spec.output_col: _rolling_mean_spec_for_ratio(spec) for spec in ratio_specs}
-    rolling_results = execute_rolling_agg_specs_batched(df, (*rolling_specs, *ratio_mean_specs.values()))
-
-    # recency seconds와 is_first flag도 같은 entity/timestamp 정렬 결과를 공유한다.
-    recency_specs = tuple(
-        spec for spec in feature_specs if spec.operation in {"recency_seconds_since_last", "is_first_by_entity"}
-    )
-    recency_results = execute_recency_specs_batched(df, recency_specs)
+    # [1] 공유 가능한 중간 계산을 먼저 만든다. rolling 계산 구현은 그대로 두고 조립부만 단순 조회 구조로 유지한다.
+    precomputed_results = _precompute_batched_results(df, feature_specs)
 
     # [2] 사용자가 선언한 feature_specs 순서대로 결과를 조립한다.
     # batch로 먼저 계산한 feature도 여기서는 원래 spec 순서에 맞춰 feature_parts에 들어간다.
     for spec in feature_specs:
-        # rolling_agg는 같은 history 계산을 공유하기 위해 batch 결과를 사용한다.
-        if spec.operation == "rolling_agg":
-            result = rolling_results[spec.output_col]
-        elif spec.operation == "cur_vs_mean_ratio":
-            # hidden rolling mean은 사용자가 보는 feature_frame에 포함하지 않고 ratio 계산에만 사용한다.
-            mean_spec = ratio_mean_specs[spec.output_col]
-            result = _execute_cur_vs_mean_ratio_from_mean(
-                df,
-                spec,
-                rolling_results[mean_spec.output_col].features[mean_spec.output_col],
-            )
-        elif spec.operation in {"recency_seconds_since_last", "is_first_by_entity"}:
-            result = recency_results[spec.output_col]
-        else:
+        result = precomputed_results.get(spec.output_col)
+        if result is None:
             result = run_operation(df, spec)
 
         # operation이 선언한 output_col만 만들었고 입력과 같은 row 수를 반환했는지 확인한다.

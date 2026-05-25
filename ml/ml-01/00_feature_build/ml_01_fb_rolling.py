@@ -19,7 +19,7 @@ import pandas as pd
 
 from ml_01_fb_schema import normalize_category_strict, parse_datetime_strict, parse_numeric_strict
 from ml_01_fb_specs import FeatureOpResult, FeatureSpec, validate_feature_specs
-from ml_01_fb_op_utils import (
+from ml_01_fb_operation_result_validation import (
     finalize_result as _finalize_result,
     param_value as _param_value,
     require_allowed_params as _require_allowed_params,
