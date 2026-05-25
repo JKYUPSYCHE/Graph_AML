@@ -35,6 +35,7 @@ import pandas as pd
 # 제외 컬럼, 누락 컬럼, 또는 이름에 특정 패턴이 포함된 컬럼은 모델에서 사용하지 않도록 안전장치 역할
 FORBIDDEN_EXACT_NAMES = {"label", "target", "y", "is_laundering"}
 FORBIDDEN_SUBSTRINGS = {"laundering", "pattern", "typology", "attempt"}
+UNKNOWN_CATEGORY = "__UNKNOWN__"
 
 
 # -----------------------------------------------------------------------------
@@ -514,7 +515,17 @@ def apply_encoding_manifest(
     for column in categorical_columns:
         categories = [str(value) for value in category_values[column]]
         values = converted[column].astype("string")
-        converted[column] = pd.Categorical(values.where(values.isin(categories)), categories=categories)
+        known_mask = values.isna() | values.isin(categories)
+        if not bool(known_mask.all()):
+            if UNKNOWN_CATEGORY not in categories:
+                unknown_values = sorted(values[~known_mask].dropna().unique().tolist())
+                raise ValueError(
+                    "encoding manifest is missing the unknown category sentinel. "
+                    f"column={column!r}, sentinel={UNKNOWN_CATEGORY!r}, "
+                    f"unknown_values={unknown_values[:30]}, unknown_count={int((~known_mask).sum())}"
+                )
+            values = values.where(known_mask, UNKNOWN_CATEGORY)
+        converted[column] = pd.Categorical(values, categories=categories)
     return converted
 
 

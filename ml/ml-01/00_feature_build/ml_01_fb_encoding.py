@@ -42,6 +42,7 @@ from ml_01_fb_schema import (
 SUPPORTED_ENCODINGS = {"passthrough", "label_code", "xgb_native"}
 SUPPORTED_BUILD_ACTIONS = {"carry_forward", "build", "encode"}
 META_COLUMNS = ("tx_id", "timestamp", "split", "label")
+UNKNOWN_CATEGORY = "__UNKNOWN__"
 FIXED_CATEGORY_DOMAINS: dict[str, list[str]] = {
     "time__row__hour": [str(value) for value in range(24)],
     "time__row__dayofweek": [str(value) for value in range(7)],
@@ -183,6 +184,10 @@ def _category_mapping_row(spec: EncodingSpec, category: str, encoded_value: int 
         "encoding": spec.encoding,
         "fit_split": "train",
     }
+
+
+def _categories_with_unknown(categories: list[str]) -> list[str]:
+    return [*categories, UNKNOWN_CATEGORY]
 
 
 def load_encoding_specs(path: Union[str, Path]) -> list[EncodingSpec]:
@@ -601,7 +606,6 @@ def encode_split_frame(
         categories = _fit_categories(normalized, spec.source_column)
         if not categories:
             raise ValueError(f"train split has no category values. source_column={spec.source_column!r}")
-        category_values[spec.output_column] = categories
         unknown_rows.extend(
             _unknown_rows(
                 output_column=spec.output_column,
@@ -614,6 +618,7 @@ def encode_split_frame(
 
         if spec.encoding == "label_code":
             # label_code는 XGBoost에는 numeric(q) feature로 전달된다. unknown category는 -1 sentinel로 둔다.
+            category_values[spec.output_column] = categories
             mapping = {category: code for code, category in enumerate(categories)}
             feature_frame[spec.output_column] = normalized.reset_index(level="split", drop=True).map(mapping).fillna(-1).astype("int32")
             record_materialized_output(spec, "q")
@@ -623,10 +628,13 @@ def encode_split_frame(
 
         if spec.encoding == "xgb_native" or spec.xgb_feature_type == "c":
             # xgb_native는 pandas Categorical dtype으로 저장하고 XGBoost feature type을 categorical(c)로 기록한다.
+            categories_with_unknown = _categories_with_unknown(categories)
             values = normalized.reset_index(level="split", drop=True)
-            feature_frame[spec.output_column] = pd.Categorical(values.where(values.isin(categories)), categories=categories)
+            mapped_values = values.where(values.isna() | values.isin(categories), UNKNOWN_CATEGORY)
+            category_values[spec.output_column] = categories_with_unknown
+            feature_frame[spec.output_column] = pd.Categorical(mapped_values, categories=categories_with_unknown)
             record_materialized_output(spec, "c")
-            for category in categories:
+            for category in categories_with_unknown:
                 mapping_rows.append(_category_mapping_row(spec, category, None))
             continue
 
@@ -728,6 +736,11 @@ def encode_split_frame(
         "feature_types": feature_types,
         "categorical_columns": [column for column in feature_columns if feature_types[column] == "c"],
         "category_values": category_values,
+        "unknown_category_policy": {
+            "sentinel": UNKNOWN_CATEGORY,
+            "applies_to": "xgb_native",
+            "fit_split": "train",
+        },
         "encoding_specs": [spec.__dict__ for spec in materialized_specs],
         "row_counts": row_counts,
         "outputs": {field: str(getattr(paths, field)) for _name, field in OUTPUT_PATH_FIELDS},
