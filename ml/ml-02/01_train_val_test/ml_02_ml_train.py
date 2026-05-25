@@ -48,15 +48,15 @@ from typing import Any
 from uuid import uuid4
 
 import joblib
-from ml_01_cpugpu import XGBAccelerationConfig, resolve_xgb_acceleration
-from ml_01_ml_utils import set_seed
+from ml_02_cpugpu import XGBAccelerationConfig, resolve_xgb_acceleration
+from ml_02_ml_utils import set_seed
 
 # ml_00_ml_io는 이전 단계에서 만든 입출력/검증 유틸리티 모듈이다. 이 학습 모듈은 parquet를 직접 읽지 않고, load_split()에 위임한다.
 # 변경 영향:
 # - load_feature_columns()의 feature 선택 규칙이 바뀌면 모델 입력 컬럼 전체가 바뀐다.
 # - load_split()의 결측치/타입/expected_split 검증 규칙이 바뀌면 학습 가능 데이터가 달라진다.
 # 확인 필요: 각 함수의 세부 검증 기준은 ml_00_ml_io 구현을 확인해야 한다.
-from ml_01_ml_io import (
+from ml_02_ml_io import (
     InputPaths,
     categorical_columns_from_manifest,
     feature_columns_hash,
@@ -74,7 +74,7 @@ from ml_01_ml_io import (
 # ml_00_ml_resource는 학습 시간, 메모리, 데이터 프로파일, 환경 정보, XGBoost 진단 정보, feature importance 저장을 담당한다.
 # 이 모듈의 결과물 관리와 재현성 기록은 아래 함수들에 크게 의존한다.
 # 확인 필요: MemoryTracker가 측정하는 메모리 기준이 RSS인지 peak인지 등은 구현 확인 필요.
-from ml_01_ml_resource import (
+from ml_02_ml_resource import (
     MemoryTracker,
     RuntimeTracker,
     collect_environment,
@@ -142,7 +142,7 @@ class XGBTrainConfig:
     gamma: float = 0.0                      # 추가 split을 만들기 위한 최소 손실 감소량.
     early_stopping_rounds: int = 30         # validation AUPRC 개선이 멈췄을 때 학습을 중단하는 기준.
     n_jobs: int = -1                        # -1은 사용 가능한 모든 코어 사용.
-    accelerator: str = "auto"               # auto/cpu/cuda. 실제 XGBoost tree_method는 ml_01_cpugpu에서 중앙 관리.
+    accelerator: str = "auto"               # auto/cpu/cuda. 실제 XGBoost tree_method는 ml_02_cpugpu에서 중앙 관리.
     encoding_manifest_path: Path | str | None = None  # native categorical dtype 복원용 manifest. None이면 기존 numeric-only 흐름.
 
 
@@ -343,7 +343,7 @@ def build_xgb_model(
     --------------
     - objective="binary:logistic": 0/1 이진분류 확률 출력
     - eval_metric="aucpr": 불균형 데이터에서 ROC AUC보다 positive class 탐지 성능 변화를 더 민감하게 보기 위한 PR AUC 사용
-    - tree_method/predictor: ml_01_cpugpu에서 CPU/GPU 정책에 맞춰 결정
+    - tree_method/predictor: ml_02_cpugpu에서 CPU/GPU 정책에 맞춰 결정
     - early_stopping_rounds: validation 성능이 개선되지 않으면 불필요한 tree 추가 중단
     코드 주의점
     -----------
@@ -354,7 +354,7 @@ def build_xgb_model(
     # xgboost.XGBClassifier 클래스를 호출한다. get_xgb_classifier_class() 내부에서 xgboost 설치 여부도 함께 확인한다.
     XGBClassifier = get_xgb_classifier_class()
 
-    # CPU/GPU별 XGBoost 파라미터는 ml_01_cpugpu에서만 결정한다.
+    # CPU/GPU별 XGBoost 파라미터는 ml_02_cpugpu에서만 결정한다.
     acceleration_params = dict(acceleration.xgb_params)
 
     # 아래 객체는 하이퍼파라미터와 학습 정책이 설정된 모델 인스턴스다.

@@ -43,6 +43,7 @@ from ml_02_fb_schema import (
 SUPPORTED_ENCODINGS = {"passthrough", "label_code", "xgb_native"}
 SUPPORTED_BUILD_ACTIONS = {"carry_forward", "build", "encode"}
 META_COLUMNS = ("tx_id", "timestamp", "split", "label")
+UNKNOWN_CATEGORY = "__UNKNOWN__"
 OUTPUT_PATH_FIELDS = (
     ("all", "all_path"),
     ("train", "train_path"),
@@ -196,6 +197,10 @@ def _category_mapping_row(spec: EncodingSpec, category: str, encoded_value: int 
         "encoding": spec.encoding,
         "fit_split": "train",
     }
+
+
+def _categories_with_unknown(categories: list[str]) -> list[str]:
+    return categories if UNKNOWN_CATEGORY in categories else [*categories, UNKNOWN_CATEGORY]
 
 
 def load_encoding_specs(path: Union[str, Path]) -> list[EncodingSpec]:
@@ -550,7 +555,9 @@ def _xgb_native_series(normalized: pd.Series, categories: list[str]) -> pd.Categ
     """train category만 허용하는 XGBoost native categorical series를 만든다."""
 
     values = normalized.reset_index(level="split", drop=True)
-    return pd.Categorical(values.where(values.isin(categories)), categories=categories)
+    categories_with_unknown = _categories_with_unknown(categories)
+    mapped_values = values.where(values.isna() | values.isin(categories), UNKNOWN_CATEGORY)
+    return pd.Categorical(mapped_values, categories=categories_with_unknown)
 
 
 def _normalize_input_category_values(input_category_values: Mapping[str, Any] | None) -> dict[str, list[str]]:
@@ -751,7 +758,7 @@ def encode_split_frame(
                         "manual categorical carry-forward is missing category values. "
                         f"column={spec.output_column!r}"
                     )
-                category_values[spec.output_column] = carry_forward_category_values[spec.output_column]
+                category_values[spec.output_column] = _categories_with_unknown(carry_forward_category_values[spec.output_column])
             feature_frame[spec.output_column] = _passthrough_series(split_df, spec)
             record_materialized_output(spec, spec.xgb_feature_type)
             continue
@@ -781,10 +788,11 @@ def encode_split_frame(
 
         if spec.encoding == "xgb_native":
             # xgb_native는 pandas Categorical dtype으로 저장하고 XGBoost feature type을 categorical(c)로 기록한다.
-            category_values[spec.output_column] = categories
+            categories_with_unknown = _categories_with_unknown(categories)
+            category_values[spec.output_column] = categories_with_unknown
             feature_frame[spec.output_column] = _xgb_native_series(normalized, categories)
             record_materialized_output(spec, "c")
-            for category in categories:
+            for category in categories_with_unknown:
                 mapping_rows.append(_category_mapping_row(spec, category, None))
             continue
 
@@ -838,6 +846,11 @@ def encode_split_frame(
         "feature_types": feature_types,
         "categorical_columns": categorical_columns,
         "category_values": category_values,
+        "unknown_category_policy": {
+            "sentinel": UNKNOWN_CATEGORY,
+            "applies_to": "xgb_native",
+            "fit_split": "train",
+        },
         "encoding_specs": [spec.__dict__ for spec in materialized_specs],
         "row_counts": row_counts,
         "outputs": {field: str(getattr(paths, field)) for _name, field in OUTPUT_PATH_FIELDS},
