@@ -1,3 +1,4 @@
+import copy
 import time
 import torch
 import tqdm
@@ -31,6 +32,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
     best_val_f1 = 0
     best_val_result = best_te_result = None
     best_epoch = 0
+    best_model_state = None
     patience_counter = 0
     memory_mb_list = []
     t_train_start = time.perf_counter()
@@ -106,6 +108,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
             best_val_result = val_result
             best_te_result = te_result
             best_epoch = epoch + 1
+            best_model_state = copy.deepcopy(model.state_dict())
             patience_counter = 0
             if args.save_model:
                 save_model(model, optimizer, epoch, args, data_config)
@@ -123,12 +126,15 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
         logging.warning("학습 중 val F1 개선 없음. best 결과 없음.")
     else:
         _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
     return model, best_te_result
 
 def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer):
     best_val_f1 = 0
     best_val_result = best_te_result = None
     best_epoch = 0
+    best_model_state = None
     patience_counter = 0
     memory_mb_list = []
     t_train_start = time.perf_counter()
@@ -207,6 +213,7 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
             best_val_result = val_result
             best_te_result = te_result
             best_epoch = epoch + 1
+            best_model_state = copy.deepcopy(model.state_dict())
             patience_counter = 0
             if args.save_model:
                 save_model(model, optimizer, epoch, args, data_config)
@@ -224,6 +231,8 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
         logging.warning("학습 중 val F1 개선 없음. best 결과 없음.")
     else:
         _log_best(best_epoch, best_val_result, best_te_result, total_time_s, avg_memory_mb)
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
     return model, best_te_result
 
 def get_model(sample_batch, config, args):
