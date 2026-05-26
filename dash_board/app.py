@@ -1295,7 +1295,7 @@ with tab_ml:
     note = rep.get("note", "")
     st.caption(f"**Status**: {rep.get('status', '—')}")
 
-    _render_report("ML Result", sel)
+    _render_report("ML Result", _woe_iv_folder_name(rep["ml_folder"]))
     st.divider()
 
     if not ml:
@@ -1552,7 +1552,7 @@ with tab_woe:
             st.session_state.pop(f"catalog_{prev_woe}", None)
         st.session_state["_woe_prev_sel"] = sel_woe
 
-    _render_report("Univariate Analysis", sel_woe)
+    _render_report("Univariate Analysis", _woe_iv_folder_name(exp_data[sel_woe]["rep"]["ml_folder"]))
     st.divider()
 
     d_woe    = exp_data[sel_woe]
