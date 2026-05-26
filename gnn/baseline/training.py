@@ -3,6 +3,7 @@ import time
 import torch
 import tqdm
 import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score, log_loss
 from torch.utils.tensorboard import SummaryWriter
@@ -331,9 +332,11 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
     else:
         loss_fn = torch.nn.CrossEntropyLoss(weight=torch.FloatTensor([config.w_ce1, config.w_ce2]).to(device))
 
-    run_name = args.unique_name
-    writer = SummaryWriter(log_dir=f"runs/{run_name}")
-    logging.info(f"TensorBoard log dir: runs/{run_name}")
+    run_name   = args.unique_name
+    tb_log_dir = data_config["paths"].get("tb_log_dir", "runs")
+    tb_run_dir = str(Path(tb_log_dir) / run_name)
+    writer = SummaryWriter(log_dir=tb_run_dir)
+    logging.info(f"TensorBoard log dir: {tb_run_dir}")
 
     if args.reverse_mp:
         model, best_te_result = train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, model, optimizer, loss_fn, args, config, device, val_data, te_data, data_config, writer)
