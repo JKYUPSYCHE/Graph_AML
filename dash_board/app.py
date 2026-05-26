@@ -1008,7 +1008,7 @@ with tab_overview:
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_gnn:
     if not gnn_exp_names:
-        st.info("Drive의 gnn/experiments 폴더에서 실험을 찾을 수 없습니다.")
+        st.info("Drive의 gnn/logs 폴더에서 실험을 찾을 수 없습니다.")
     else:
         sel_gnn = st.selectbox("실험 선택", gnn_exp_names, key="gnn_sel",
                                label_visibility="collapsed")
