@@ -475,7 +475,7 @@ def _is_valid_rep(rep: dict) -> bool:
 
 def _exp_label(rep: dict) -> str:
     desc = rep.get("description", "")
-    return f"{_woe_iv_folder_name(rep['ml_folder'])}  {('— ' + desc) if desc else ''}".strip()
+    return f"{_woe_iv_folder_name(rep['ml_folder']).upper()}  {('— ' + desc) if desc else ''}".strip()
 
 
 # ── Data loaders ───────────────────────────────────────────────────────────
@@ -1443,10 +1443,12 @@ with tab_ml:
                             available[metric] = (tuple(t_vals), tuple(evals[val_key][metric]))
 
             if available:
-                metric_options = list(available.keys())
+                _lc_display = {"aucpr": "AUPRC", "logloss": "LogLoss"}
+                metric_options = [_lc_display.get(m, m) for m in available]
+                _lc_raw = {_lc_display.get(m, m): m for m in available}
                 lc_sel = st.radio("지표", metric_options, horizontal=True,
                                   key=f"lc_metric_{sel}", label_visibility="collapsed")
-                t_v, v_v = available[lc_sel]
+                t_v, v_v = available[_lc_raw[lc_sel]]
                 fig_curve = _make_ml_lc_fig2(t_v, v_v, lc_sel, int(best_iter))
                 st.plotly_chart(fig_curve, use_container_width=True)
             else:
