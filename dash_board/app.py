@@ -1547,7 +1547,6 @@ with tab_ml:
     _note = rep.get("note", "")
     if _note:
         st.caption(f"**Note**: {_note}")
-    st.caption(f"**Status**: {rep.get('status', '—')}")
 
     _render_report("ML Result", _woe_iv_folder_name(rep["ml_folder"]))
     st.divider()
