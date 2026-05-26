@@ -1185,30 +1185,44 @@ with tab_gnn:
             fi_df_gnn = gnn_d.get("feature_importance")
             st.markdown("##### Feature Importance (XAI — Gradient Saliency)")
             if fi_df_gnn is not None and not fi_df_gnn.empty:
-                # wide → long: mean 컬럼만 추출
                 mean_cols = [c for c in fi_df_gnn.columns if c.endswith("__mean")]
                 feat_names = [c.replace("__mean", "") for c in mean_cols]
                 fi_long_rows = []
                 for _, row in fi_df_gnn.iterrows():
-                    for col, fname in zip(mean_cols, feat_names):
-                        fi_long_rows.append({"group": row["group"], "feature": fname, "saliency": row[col]})
+                    n_samples = int(row.get("n_samples", 0))
+                    for mc2, fname in zip(mean_cols, feat_names):
+                        std_col = fname + "__std"
+                        fi_long_rows.append({
+                            "group":    row["group"],
+                            "feature":  fname,
+                            "saliency": row[mc2],
+                            "std":      row.get(std_col, 0),
+                            "n":        n_samples,
+                        })
                 fi_long = pd.DataFrame(fi_long_rows)
 
-                # 그룹 선택 radio
                 groups = fi_long["group"].unique().tolist()
                 _gc, _ = st.columns([3, 5])
-                sel_group = _gc.radio("그룹", groups, horizontal=True, key="gnn_fi_group", label_visibility="collapsed")
+                sel_group = _gc.radio("그룹", groups, horizontal=True,
+                                      key="gnn_fi_group", label_visibility="collapsed")
 
                 fi_sub = fi_long[fi_long["group"] == sel_group].sort_values("saliency", ascending=False)
-                fig_gnn_fi = px.bar(
-                    fi_sub, x="feature", y="saliency",
-                    color_discrete_sequence=["#4f9cf9"],
-                    labels={"feature": "Feature", "saliency": "Mean Saliency"},
-                    title=f"Feature Importance — {sel_group}",
-                )
+                n_val  = int(fi_sub["n"].iloc[0]) if not fi_sub.empty else 0
+
+                fig_gnn_fi = go.Figure(go.Bar(
+                    x=fi_sub["feature"],
+                    y=fi_sub["saliency"],
+                    error_y=dict(type="data", array=fi_sub["std"].tolist(), visible=True,
+                                 color="#888888", thickness=1.2, width=4),
+                    marker_color="#4f9cf9",
+                    hovertemplate="<b>%{x}</b><br>Mean: %{y:.4f}<br>Std: %{error_y.array:.4f}<extra></extra>",
+                ))
                 fig_gnn_fi.update_layout(
+                    title=f"Feature Importance — {sel_group}  (n={n_val:,})",
                     height=380, margin=dict(t=40, b=80),
                     xaxis_tickangle=-40,
+                    yaxis_title="Mean Saliency",
+                    xaxis_title="Feature",
                 )
                 st.plotly_chart(fig_gnn_fi, use_container_width=True)
             else:
