@@ -1,5 +1,5 @@
 """
-ML-01 Stage 0 rolling aggregation 전용 모듈.
+ML-02 feature build rolling aggregation 모듈.
 
 정책
 ----
@@ -17,15 +17,9 @@ from typing import Any, Tuple
 import numpy as np
 import pandas as pd
 
-from ml_01_fb_schema import normalize_category_strict, parse_datetime_strict, parse_numeric_strict
-from ml_01_fb_specs import FeatureOpResult, FeatureSpec, validate_feature_specs
-from ml_01_fb_operation_result_validation import (
-    finalize_result as _finalize_result,
-    param_value as _param_value,
-    require_allowed_params as _require_allowed_params,
-    require_columns as _require_columns,
-    require_roles as _require_roles,
-)
+from ml_02_fb_schema import normalize_category_strict, parse_datetime_strict, parse_numeric_strict
+from ml_02_fb_specs import FeatureOpResult, FeatureSpec, validate_feature_specs
+from ml_02_fb_operation_result_validation import finalize_result, param_value, require_allowed_params, require_columns, require_roles
 
 
 SUPPORTED_ROLLING_AGGS: Tuple[str, ...] = ("sum", "mean", "std", "min", "max", "count")
@@ -52,11 +46,11 @@ def parse_window(window: Any, operation: str, output_col: str) -> pd.Timedelta:
 def _rolling_agg_spec_parts(spec: FeatureSpec) -> tuple[dict[str, str], pd.Timedelta, str, str, Any, str]:
     """rolling_agg FeatureSpec에서 실행에 필요한 role/param을 추출하고 검증한다."""
 
-    _require_allowed_params(spec, ("window", "agg", "closed", "fill_value", "dtype"))
-    roles = _require_roles(spec, ("entity_col", "timestamp_col", "value_col"))
-    window = parse_window(_param_value(spec, "window", ""), spec.operation, spec.output_col)
-    agg = str(_param_value(spec, "agg", "")).strip().lower()
-    closed = str(_param_value(spec, "closed", "left")).strip().lower()
+    require_allowed_params(spec, ("window", "agg", "closed", "fill_value", "dtype"))
+    roles = require_roles(spec, ("entity_col", "timestamp_col", "value_col"))
+    window = parse_window(param_value(spec, "window", ""), spec.operation, spec.output_col)
+    agg = str(param_value(spec, "agg", "")).strip().lower()
+    closed = str(param_value(spec, "closed", "left")).strip().lower()
     entity_col = roles["entity_col"]
     timestamp_col = roles["timestamp_col"]
     value_col = roles["value_col"]
@@ -74,8 +68,8 @@ def _rolling_agg_spec_parts(spec: FeatureSpec) -> tuple[dict[str, str], pd.Timed
             f"timestamp_col={timestamp_col!r}, value_col={value_col!r}, supported={list(SUPPORTED_ROLLING_AGGS)}"
         )
 
-    fill_value = _param_value(spec, "fill_value", 0.0)
-    dtype = str(_param_value(spec, "dtype", "float32"))
+    fill_value = param_value(spec, "fill_value", 0.0)
+    dtype = str(param_value(spec, "dtype", "float32"))
     return roles, window, agg, closed, fill_value, dtype
 
 
@@ -231,7 +225,7 @@ def _execute_rolling_agg_group(df: pd.DataFrame, specs: Tuple[FeatureSpec, ...])
     entity_col = first_roles["entity_col"]
     timestamp_col = first_roles["timestamp_col"]
     value_col = first_roles["value_col"]
-    _require_columns(df, (entity_col, timestamp_col, value_col), "rolling_agg")
+    require_columns(df, (entity_col, timestamp_col, value_col), "rolling_agg")
 
     entity = normalize_category_strict(df[entity_col], source_col=entity_col)
     timestamps = parse_datetime_strict(df, timestamp_col, specs[0].output_col)
@@ -277,7 +271,7 @@ def _execute_rolling_agg_group(df: pd.DataFrame, specs: Tuple[FeatureSpec, ...])
     for spec, roles, window, agg, closed, fill_value, dtype in spec_parts:
         values_out = pd.Series(raw_results[(int(window.value), agg)].copy(), index=df.index).fillna(fill_value)
         params = {"window": str(window), "agg": agg, "closed": closed, "fill_value": fill_value}
-        results[spec.output_col] = _finalize_result(
+        results[spec.output_col] = finalize_result(
             values_out,
             spec,
             row_count=len(df),
@@ -300,7 +294,7 @@ def execute_rolling_agg_specs_batched(
 ) -> dict[str, FeatureOpResult]:
     """rolling_agg spec 목록을 group key별로 묶어 실행하고 output_col별 결과를 반환한다.
 
-    group key가 같으면 정렬과 entity별 순회 비용을 공유한다. Stage 0처럼 rolling feature가 많은 경우
+    group key가 같으면 정렬과 entity별 순회 비용을 공유한다. rolling feature가 많은 경우
     spec별 독립 실행보다 같은 semantics를 유지하면서 중복 계산을 줄일 수 있다.
     """
 

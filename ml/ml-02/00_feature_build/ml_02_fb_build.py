@@ -3,10 +3,10 @@ Feature build 전체 실행 모듈
 
 이 파일의 역할
 ----------------
-1. 기존 split 컬럼이 있는 단일 parquet를 train/val/test parquet로 분리한다.
+1. 기존 split 컬럼이 있는 단일 parquet 또는 DataFrame을 검증한다.
 2. split 컬럼이 있는 단일 parquet 또는 DataFrame 입력에서 feature build 전체 흐름을 실행한다.
 3. 입력 컬럼 resolve, strict parsing, 기존 split 검증/보존, operation 실행을 순서대로 연결한다.
-4. train/val/test parquet와 catalog/summary CSV를 저장한다.
+4. 파일 저장 없이 메모리 결과를 반환한다. 최종 parquet/csv/json 저장은 encode_split_frame()이 담당한다.
 5. 사용자가 선택한 FeatureSpec 목록을 feature 생성의 유일한 기준으로 사용한다.
 
 중요한 설계 원칙
@@ -15,13 +15,7 @@ Feature build 전체 실행 모듈
 - `feature_specs` 목록만 어떤 feature가 생성될지 결정한다.
 - 컬럼명이 바뀌면 노트북의 `column_map` dict를 우선 수정한다.
 - full data 실행 전 sample_rows로 smoke build를 먼저 수행하는 것을 권장한다.
-- overwrite=False가 기본이며 기존 산출물이 있으면 즉시 중단한다.
-
-읽는 순서
----------
-`FeatureBuildConfig`와 공개 진입점(`build_features`, `build_features_from_frame`)을 먼저 본다.
-두 진입점은 `_build_from_raw_frame()`을 거쳐 `_build_from_split_frame()`으로 수렴한다.
-operation 세부 계산은 `ml_01_fb_operations.py`와 `ml_01_fb_rolling.py`가 담당한다.
+- build 단계는 산출물을 저장하지 않는다. overwrite 보호는 encoding/export 단계에서 처리한다.
 """
 
 from __future__ import annotations
@@ -32,32 +26,20 @@ from typing import Any, Mapping, Optional, Tuple, Union
 
 import pandas as pd
 
-from ml_01_fb_build_artifacts import (
-    assemble_build_artifacts as _assemble_build_artifacts,
-    preserve_source_columns as _preserve_source_columns,
-    save_build_artifacts as _save_build_artifacts,
-)
-from ml_01_fb_build_validation import (
-    existing_split_metadata_frame as _existing_split_metadata_frame,
-    validate_stage0_rolling_outputs,
-    validate_time_split as _validate_time_split,
-)
-from ml_01_fb_io import (
+import ml_02_fb_build_validation as build_validation
+from ml_02_fb_build_artifacts import assemble_build_artifacts, preserve_source_columns
+from ml_02_fb_io import (
     DEFAULT_INPUT_PATH,
-    DEFAULT_OUTPUT_DIR,
-    FeatureBuildOutputPaths,
     load_parquet_columns,
-    make_output_paths,
     parquet_columns,
-    require_no_existing_outputs,
     resolve_path,
 )
-from ml_01_fb_schema import (
+from ml_02_fb_schema import (
     resolve_requested_columns,
     standardize_input_frame,
     validate_no_forbidden_input_columns,
 )
-from ml_01_fb_specs import (
+from ml_02_fb_specs import (
     FeatureSpec,
     required_input_columns,
     validate_feature_specs,
@@ -78,45 +60,42 @@ class FeatureBuildConfig:
         입력 parquet 경로. None이면 build_features()에서는 사용할 수 없고
         build_features_from_frame()을 써야 한다.
     output_dir:
-        산출물 저장 폴더. None이면 파일 저장 없이 메모리 결과만 반환한다.
-        공식 노트북 경로는 output_dir=None으로 build 후 encode_split_frame()에서 저장한다.
-        output_dir을 지정하는 direct-save 모드는 보조 실행 경로다.
+        더 이상 build 단계에서 사용하지 않는다. 최종 저장은 encode_split_frame()이 담당한다.
     feature_specs:
-        생성할 ML-01 Stage 0 feature 선언 목록. 명시하지 않으면 실행을 중단한다.
+        생성할 ML-02 Stage 1 feature 선언 목록. 명시하지 않으면 실행을 중단한다.
     column_map:
         노트북에서 직접 지정하는 logical column -> source column 매핑이다.
         예: {"amount": "Amount Paid"}. 지정된 값은 기본 후보보다 우선한다.
     sample_rows:
         sample smoke build용 row 수. None이면 전체 parquet를 읽는다.
     overwrite:
-        기존 산출물 덮어쓰기 허용 여부. 기본값 False.
+        build 단계에서는 사용하지 않는다. encoding/export 단계 인자와 맞추기 위해 보존한다.
     """
-    # --- 입력 / 출력 경로 (None 허용 = 호출 방식에 따라 다름) ---
+    # --- 입력 경로 / build 단계 미사용 출력 경로 ---
     # 상대경로로 들어와도 __post_init__에서 절대경로로 정규
     input_path: Optional[Union[str, Path]] = DEFAULT_INPUT_PATH
-    output_dir: Optional[Union[str, Path]] = DEFAULT_OUTPUT_DIR
-    # base_dir: input_path/output_dir이 상대경로일 때 해석 기준이 되는 루트.
-    # None이면 ml_01_fb_io.resolve_path() 내부에서 ml_01_fb_utils.BASE_DIR(=Git 루트)를 사용한다.
+    output_dir: Optional[Union[str, Path]] = None
+    # base_dir: input_path가 상대경로일 때 해석 기준이 되는 루트.
+    # None이면 ml_02_fb_io.resolve_path() 내부에서 ml_02_fb_utils.BASE_DIR(=Git 루트)를 사용한다.
     base_dir: Optional[Union[str, Path]] = None
 
     # --- 실행 식별자 (재현성 메타데이터 + 산출물 파일명 prefix) ---
-    # experiment_id는 {experiment_id}_Xy_train.parquet 같은 파일명에 들어간다.
-    # run_name은 feature_catalog.csv에 기록되어 사람이 어떤 실행이었는지 추적하는 용도.
+    # experiment_id/run_name은 build_summary에 기록되어 어떤 실행이었는지 추적하는 용도.
     experiment_id: str = "feature_build"
     run_name: str = "user_selected_operations"
 
     # --- feature 생성 선언 ---
-    # ML-01은 contract가 확정한 BUILD_FEATURE_SPECS를 명시적으로 넘겨야 한다.
+    # ML-02는 contract가 확정한 BUILD_FEATURE_SPECS를 명시적으로 넘겨야 한다.
     feature_specs: Optional[Tuple[FeatureSpec, ...]] = None
 
     # --- 컬럼명 매핑 ---
     # 노트북의 COLUMN_MAP이 그대로 들어온다. 예: {"amount": "Amount Paid"}.
-    # 여기 없는 logical key는 ml_01_fb_schema.COLUMN_CANDIDATES로 자동 fallback된다.
+    # 여기 없는 logical key는 ml_02_fb_schema.COLUMN_CANDIDATES로 자동 fallback된다.
     # 명시성을 위해 모든 key를 직접 넘기는 것을 권장.
     column_map: Optional[Mapping[str, str]] = None
 
     sample_rows: Optional[int] = None    # smoke build 옵션
-    overwrite: bool = False              # overwrite 옵션
+    overwrite: bool = False              # build 단계에서는 파일 저장을 하지 않으므로 사용하지 않음
 
     tx_id_col: str = "tx_id"
     timestamp_col: str = "timestamp"
@@ -135,7 +114,10 @@ class FeatureBuildConfig:
         if self.input_path is not None:
             object.__setattr__(self, "input_path", resolve_path(self.input_path, self.base_dir))
         if self.output_dir is not None:
-            object.__setattr__(self, "output_dir", resolve_path(self.output_dir, self.base_dir))
+            raise ValueError(
+                "FeatureBuildConfig.output_dir is no longer used. "
+                "Run build_features() for in-memory feature creation, then save final artifacts with encode_split_frame()."
+            )
 
         # [2] sample_rows 검증: None은 허용(=전체 로드), 0이나 음수는 의미가 없으므로 차단.
         if self.sample_rows is not None and self.sample_rows <= 0:
@@ -173,7 +155,7 @@ class FeatureBuildConfig:
 class FeatureBuildResult:
     """feature build 실행 후 사용자에게 반환되는 결과 객체다."""
 
-    output_paths: Optional[FeatureBuildOutputPaths]
+    output_paths: None
     feature_columns: list[str]
     row_counts: dict[str, int]
     build_summary: Mapping[str, Any]
@@ -182,7 +164,7 @@ class FeatureBuildResult:
 
 
 # =============================================================================
-# 5. 공개 feature build 진입점 (사용자 코드/노트북에서 직접 호출)
+# 4. 공개 feature build 진입점 (사용자 코드/노트북에서 직접 호출)
 # =============================================================================
 # 기본 권장 흐름은 단일 parquet 입력이다. DataFrame 입력은 smoke/debug용 보조 진입점으로 유지한다.
 # 두 진입점은 모두 최종적으로 _build_from_split_frame()으로 수렴한다.
@@ -224,7 +206,7 @@ def build_features(config: Optional[FeatureBuildConfig] = None) -> FeatureBuildR
     specs = _require_feature_specs(config.feature_specs)
     _validate_specs_for_build(specs)                                                           # 중복/빈 spec + 누수 위험 컬럼 차단 동시 수행.
 
-    # meta column(tx_id/timestamp/label)과 feature operation이 요구하는 컬럼만 read해서 로드한다. 컬럼 매핑도 여기서 한 번에 수행한다.
+    # meta column(tx_id/timestamp/label)과 feature operation이 요구하는 logical 컬럼 목록을 확정한다.
     requested_columns = required_input_columns(
         specs,
         extra_columns=[config.tx_id_col, config.timestamp_col, config.label_col],
@@ -234,7 +216,8 @@ def build_features(config: Optional[FeatureBuildConfig] = None) -> FeatureBuildR
     source_columns = parquet_columns(input_path)
     column_map = resolve_requested_columns(source_columns, requested_columns, column_map=config.column_map)
 
-    # ML-01 이후 산출 parquet는 원본 메타데이터/원본 컬럼을 모두 보존해야 하므로 전체 컬럼을 읽는다.
+    # ML-02 이후 산출 parquet는 ML-01 승인본의 기존 컬럼과 feature를 보존해야 하므로 전체 컬럼을 읽는다.
+    # 대용량 입력에서는 sample_rows smoke build를 먼저 실행하고, full build 메모리 사용량을 별도로 확인한다.
     # sample_rows가 지정되면 첫 batch만 읽어 smoke build 속도 확보
     raw_df = load_parquet_columns(input_path, source_columns, sample_rows=config.sample_rows)
 
@@ -269,7 +252,7 @@ def build_features_from_frame(
     용도
     ----
     - 작은 toy DataFrame으로 operation 동작을 빠르게 검증할 때.
-    - output_dir=None이면 파일 저장 없이 FeatureBuildResult만 반환한다. (단위 테스트, 노트북 디버깅용)
+    - build 단계는 항상 파일 저장 없이 FeatureBuildResult만 반환한다. (단위 테스트, 노트북 디버깅용)
 
     build_features()와의 차이
     -------------------------
@@ -309,9 +292,9 @@ def build_features_from_frame(
 
 
 # =============================================================================
-# 6. 내부 FeatureSpec/build 검증 helper
+# 4. 내부 검증 헬퍼
 # =============================================================================
-# 공개 진입점이 공유하는 검증 로직을 모은 섹션이다.
+# 공개 진입점이 공유하는 검증 로직을 모은 섹션
 # 모든 검증은 "조용히 통과시키지 않고 즉시 ValueError로 중단" 원칙
 # -----------------------------------------------------------------------------
 def _validate_specs_for_build(specs: Tuple[FeatureSpec, ...]) -> None:
@@ -332,14 +315,13 @@ def _validate_specs_for_build(specs: Tuple[FeatureSpec, ...]) -> None:
 
 
 def _require_feature_specs(feature_specs: Optional[Tuple[FeatureSpec, ...]]) -> Tuple[FeatureSpec, ...]:
-    """ML-01 build는 contract가 확정한 FeatureSpec 목록을 명시적으로 받아야 한다."""
+    """ML-02 build는 contract가 확정한 FeatureSpec 목록을 명시적으로 받아야 한다."""
 
     if feature_specs is None:
         raise ValueError(
-            "ML-01 feature build requires explicit feature_specs. "
+            "ML-02 feature build requires explicit feature_specs. "
             "Build BUILD_FEATURE_SPECS from the fb input contract and pass it to FeatureBuildConfig."
         )
-    validate_feature_specs(feature_specs)
     return feature_specs
 
 
@@ -368,10 +350,10 @@ def _validate_resolved_feature_source_columns(
 
 
 # =============================================================================
-# 7. 공통 build 본체 (공개 진입점이 최종적으로 도달하는 곳)
+# 5. 공통 build 본체 (공개 진입점이 최종적으로 도달하는 곳)
 # =============================================================================
 # _build_from_raw_frame:  split 포함 입력 → 표준화 + 기존 split 검증/보존 → _build_from_split_frame 호출
-# _build_from_split_frame: split 확정 입력 → operation 실행 + catalog 생성 + 저장
+# _build_from_split_frame: split 확정 입력 → operation 실행 + 메모리 결과 반환
 # -----------------------------------------------------------------------------
 
 def _build_from_raw_frame(
@@ -405,18 +387,18 @@ def _build_from_raw_frame(
         label_col=config.label_col,
     )
 
-    source_with_meta = _preserve_source_columns(raw_df, clean_df)
+    source_with_meta = preserve_source_columns(raw_df, clean_df)
 
     # [2] 기존 split 확정.
     # SOURCE_PARQUET_PATH의 split 컬럼만 truth source로 사용한다. split이 없으면 재분할하지 않고 중단한다.
     if "split" not in source_with_meta.columns:
         raise ValueError(
             "Feature build requires an existing split column in the input parquet/DataFrame. "
-            "This ML-01 path does not create a new train/val/test split. "
+            "This ML-02 path does not create a new train/val/test split. "
             f"input={input_label}"
         )
 
-    metadata = _existing_split_metadata_frame(
+    metadata = build_validation.existing_split_metadata_frame(
         source_with_meta,
         source_path=Path(input_label),
         tx_id_col="tx_id",
@@ -450,41 +432,31 @@ def _build_from_split_frame(
     input_mode: str,
 ) -> FeatureBuildResult:
     """
-    split 컬럼이 확정된 DataFrame에서 feature 계산과 저장을 수행한다.
+    split 컬럼이 확정된 DataFrame에서 feature 계산을 수행한다.
 
-    공식 노트북 경로는 output_dir=None으로 이 함수의 파일 저장을 건너뛰고,
-    validate_stage0_rolling_outputs() 통과 후 encode_split_frame()에서 최종 parquet와
-    output contract를 저장한다. output_dir이 지정된 direct-save 모드는 보조 실행 경로다.
+    build 단계는 파일 저장 없이 메모리 결과만 반환한다.
+    최종 parquet/csv/json 저장은 encode_split_frame()이 담당한다.
     """
     specs = _require_feature_specs(config.feature_specs)
     _validate_resolved_feature_source_columns(specs, column_map)
-    output_paths = make_output_paths(config.output_dir, config.experiment_id) if config.output_dir is not None else None
-
-    if output_paths is not None:
-        require_no_existing_outputs(output_paths, overwrite=config.overwrite)
 
     split_df = split_df.sort_values(["timestamp", "tx_id"], kind="mergesort").reset_index(drop=True)
-    _validate_time_split(split_df)
+    build_validation.validate_time_split(split_df)
 
-    build_artifacts = _assemble_build_artifacts(
+    build_artifacts = assemble_build_artifacts(
         split_df,
         specs=specs,
         config=config,
         column_map=column_map,
         input_label=input_label,
         input_mode=input_mode,
-        output_paths=output_paths,
     )
 
-    result_summary = build_artifacts.build_summary
-    if output_paths is not None:
-        result_summary = _save_build_artifacts(output_paths, build_artifacts)
-
     return FeatureBuildResult(
-        output_paths=output_paths,
+        output_paths=None,
         feature_columns=build_artifacts.selected_feature_columns,
         row_counts=build_artifacts.row_counts,
-        build_summary=result_summary,
+        build_summary=build_artifacts.build_summary,
         feature_frame=build_artifacts.feature_frame,
         feature_info=build_artifacts.feature_info,
     )
