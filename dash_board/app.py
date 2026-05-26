@@ -1201,7 +1201,8 @@ with tab_overview:
                 ml_rows.append({"exp": exp, "metric": metric, "value": val, "description": desc})
 
     # ── GNN ───────────────────────────────────────────────────────────────────
-    gnn_rows: list[dict] = []
+    gnn_rows:      list[dict] = []
+    gnn_time_rows: list[dict] = []
     for label, d in sorted(gnn_exp_data.items(),
                             key=lambda kv: kv[1]["rep"]["folder"]):
         rep    = d["rep"]
@@ -1209,6 +1210,9 @@ with tab_overview:
         epochs = parsed.get("epochs", [])
         desc   = rep.get("description", "")
         exp    = rep["folder"]
+        t_sec  = parsed.get("training_time_sec")
+        if t_sec is not None:
+            gnn_time_rows.append({"exp": exp, "time_sec": t_sec, "description": desc})
         if epochs:
             _ep_df = pd.DataFrame(epochs)
             _ep_df.index = _ep_df.index + 1
@@ -1278,8 +1282,69 @@ with tab_overview:
         )
         st.plotly_chart(fig, use_container_width=True)
 
+    def _overview_line_gnn(rows: list[dict], time_rows: list[dict], title: str) -> None:
+        if not rows:
+            st.caption(f"{title} — 데이터 없음")
+            return
+        from plotly.subplots import make_subplots as _make_subplots
+        df_ov   = pd.DataFrame(rows)
+        df_time = pd.DataFrame(time_rows) if time_rows else pd.DataFrame(columns=["exp", "time_sec", "description"])
+        exps    = df_ov["exp"].unique().tolist()
+        fig = _make_subplots(specs=[[{"secondary_y": True}]])
+        for metric, color in _METRIC_COLORS.items():
+            sub  = df_ov[df_ov["metric"] == metric]
+            dash = "solid" if metric == "F1" else "dash"
+            fig.add_trace(go.Scatter(
+                x=sub["exp"],
+                y=sub["value"],
+                mode="lines+markers",
+                name=metric,
+                line=dict(color=color, width=2, dash=dash),
+                marker=dict(size=8, color=color),
+                customdata=sub["description"],
+                hovertemplate=(
+                    "<b>%{x}</b><br>"
+                    f"{metric}: " + "%{y:.4f}<br>"
+                    "<i>%{customdata}</i><extra></extra>"
+                ),
+            ), secondary_y=False)
+        if not df_time.empty:
+            fig.add_trace(go.Bar(
+                x=df_time["exp"],
+                y=df_time["time_sec"],
+                name="학습시간 (s)",
+                marker_color="rgba(255,200,80,0.25)",
+                marker_line=dict(color="rgba(255,200,80,0.6)", width=1),
+                customdata=df_time["description"],
+                hovertemplate=(
+                    "<b>%{x}</b><br>학습시간: %{y:.0f}s<br>"
+                    "<i>%{customdata}</i><extra></extra>"
+                ),
+            ), secondary_y=True)
+        # x label 호버용 투명 마커
+        desc_map = df_ov.drop_duplicates("exp").set_index("exp")["description"]
+        fig.add_trace(go.Scatter(
+            x=exps, y=[0] * len(exps), mode="markers",
+            marker=dict(opacity=0, size=16),
+            customdata=[desc_map.get(e, "") for e in exps],
+            hovertemplate="<b>%{x}</b><br><i>%{customdata}</i><extra></extra>",
+            showlegend=False, name="",
+        ), secondary_y=False)
+        fig.update_layout(
+            title=title, height=320, margin=dict(t=40, b=20),
+            xaxis=dict(categoryorder="array", categoryarray=exps),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                itemclick="toggleothers", itemdoubleclick="toggle",
+            ),
+            barmode="overlay",
+        )
+        fig.update_yaxes(range=[0, 1], title_text="Metric", secondary_y=False)
+        fig.update_yaxes(title_text="학습시간 (s)", secondary_y=True, showgrid=False)
+        st.plotly_chart(fig, use_container_width=True)
+
     _overview_line(ml_rows, "ML")
-    _overview_line(gnn_rows, "GNN")
+    _overview_line_gnn(gnn_rows, gnn_time_rows, "GNN")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
