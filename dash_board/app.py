@@ -1201,29 +1201,38 @@ with tab_gnn:
                         })
                 fi_long = pd.DataFrame(fi_long_rows)
 
-                groups = fi_long["group"].unique().tolist()
-                _gc, _ = st.columns([3, 5])
-                sel_group = _gc.radio("그룹", groups, horizontal=True,
-                                      key="gnn_fi_group", label_visibility="collapsed")
+                groups_order = [g for g in ["TP", "FP", "FN", "TN"]
+                                if g in fi_long["group"].values]
+                subplot_titles = []
+                for grp in groups_order:
+                    n_val = int(fi_long.loc[fi_long["group"] == grp, "n"].iloc[0])
+                    subplot_titles.append(f"{grp}  (n={n_val:,})")
 
-                fi_sub = fi_long[fi_long["group"] == sel_group].sort_values("saliency", ascending=False)
-                n_val  = int(fi_sub["n"].iloc[0]) if not fi_sub.empty else 0
-
-                fig_gnn_fi = go.Figure(go.Bar(
-                    x=fi_sub["feature"],
-                    y=fi_sub["saliency"],
-                    error_y=dict(type="data", array=fi_sub["std"].tolist(), visible=True,
-                                 color="#888888", thickness=1.2, width=4),
-                    marker_color="#4f9cf9",
-                    hovertemplate="<b>%{x}</b><br>Mean: %{y:.4f}<br>Std: %{error_y.array:.4f}<extra></extra>",
-                ))
-                fig_gnn_fi.update_layout(
-                    title=f"Feature Importance — {sel_group}  (n={n_val:,})",
-                    height=380, margin=dict(t=40, b=80),
-                    xaxis_tickangle=-40,
-                    yaxis_title="Mean Saliency",
-                    xaxis_title="Feature",
+                fig_gnn_fi = make_subplots(
+                    rows=2, cols=2,
+                    shared_yaxes="all",
+                    subplot_titles=subplot_titles,
+                    vertical_spacing=0.18,
+                    horizontal_spacing=0.06,
                 )
+                for idx, grp in enumerate(groups_order):
+                    r, c = idx // 2 + 1, idx % 2 + 1
+                    fi_grp = fi_long[fi_long["group"] == grp].sort_values("saliency", ascending=False)
+                    fig_gnn_fi.add_trace(go.Bar(
+                        x=fi_grp["feature"],
+                        y=fi_grp["saliency"],
+                        error_y=dict(type="data", array=fi_grp["std"].tolist(),
+                                     visible=True, color="#888888", thickness=1.2, width=4),
+                        marker_color="#4f9cf9",
+                        showlegend=False,
+                        hovertemplate="<b>%{x}</b><br>Mean: %{y:.4f}<br>Std: %{error_y.array:.4f}<extra></extra>",
+                    ), row=r, col=c)
+
+                fig_gnn_fi.update_layout(
+                    height=660, margin=dict(t=60, b=60),
+                )
+                fig_gnn_fi.update_xaxes(tickangle=-40)
+                fig_gnn_fi.update_yaxes(title_text="Mean Saliency", col=1)
                 st.plotly_chart(fig_gnn_fi, use_container_width=True)
             else:
                 st.info("Feature importance 파일 없음 (feature_importance/ 폴더 확인)")
