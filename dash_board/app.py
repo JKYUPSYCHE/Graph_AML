@@ -756,9 +756,13 @@ def _load_gnn_experiment_rep(project_folder_id: str, folder: str, run_id: str) -
     fi_id = _get_folder_id(run_folder_id, "feature_importance")
     if fi_id:
         fi_files = _list_files(fi_id)
-        fi_fns   = [n for n in fi_files if n.endswith("_feature_importance.csv")]
+        fi_fns   = [n for n in fi_files if n.endswith("_feature_importance.csv")
+                    and "individual" not in n]
         if fi_fns:
             out["feature_importance"] = _download_csv(fi_files[fi_fns[0]])
+        fi_indiv_fns = [n for n in fi_files if n.endswith("_feature_importance_individual.csv")]
+        if fi_indiv_fns:
+            out["feature_importance_individual"] = _download_csv(fi_files[fi_indiv_fns[0]])
 
     return out
 
@@ -1012,6 +1016,86 @@ def _make_woe_bin_fig(feat_bins_json: str, sel_feature: str) -> go.Figure:
     fig_woe.update_yaxes(title_text="WOE", secondary_y=False)
     fig_woe.update_yaxes(title_text="Count", secondary_y=True, showgrid=False)
     return fig_woe
+
+
+# ── Mann-Whitney U + FDR ──────────────────────────────────────────────────
+
+def _compute_mann_whitney(indiv_df: pd.DataFrame, feat_names: list[str]) -> pd.DataFrame:
+    """TP/FP/FN 쌍별 Mann-Whitney U 검정 + BH FDR 보정, rank-biserial r 반환."""
+    from scipy import stats
+    try:
+        from scipy.stats import false_discovery_control as _fdr
+    except ImportError:
+        _fdr = None  # scipy < 1.11 fallback: Bonferroni
+
+    comparisons = [("TP", "FP"), ("TP", "FN"), ("FP", "FN")]
+    rows = []
+    for g1, g2 in comparisons:
+        d1 = indiv_df[indiv_df["group"] == g1][feat_names].values
+        d2 = indiv_df[indiv_df["group"] == g2][feat_names].values
+        if len(d1) < 5 or len(d2) < 5:
+            continue
+        p_vals, u_vals = [], []
+        for i in range(len(feat_names)):
+            res = stats.mannwhitneyu(d1[:, i], d2[:, i], alternative="two-sided")
+            p_vals.append(res.pvalue)
+            u_vals.append(res.statistic)
+        import numpy as _np
+        p_arr = _np.array(p_vals)
+        p_adj = _fdr(p_arr, method="bh") if _fdr is not None else _np.minimum(p_arr * len(p_arr), 1.0)
+        for f, u, pa in zip(feat_names, u_vals, p_adj):
+            n1, n2 = len(d1), len(d2)
+            r = 1 - (2 * u) / (n1 * n2)  # rank-biserial: 양수 = g1이 더 높음
+            rows.append({"comparison": f"{g1} vs {g2}", "feature": f,
+                         "r": round(r, 3), "p_adj": float(pa),
+                         "sig": "*" if pa < 0.05 else ""})
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=3600)
+def _make_mw_heatmap(indiv_json: str, feat_names: tuple) -> go.Figure:
+    """Mann-Whitney effect size heatmap (rank-biserial r)."""
+    import pandas as _pd
+    indiv_df = _pd.read_json(StringIO(indiv_json))
+    mw_df    = _compute_mann_whitney(indiv_df, list(feat_names))
+    if mw_df.empty:
+        return go.Figure()
+
+    comparisons = mw_df["comparison"].unique().tolist()
+    r_mat, t_mat = [], []
+    for f in feat_names:
+        r_row, t_row = [], []
+        for c in comparisons:
+            sub = mw_df[(mw_df["feature"] == f) & (mw_df["comparison"] == c)]
+            if sub.empty:
+                r_row.append(None); t_row.append("")
+            else:
+                rv = sub.iloc[0]["r"]
+                r_row.append(rv)
+                t_row.append(f"{rv:+.2f}{sub.iloc[0]['sig']}")
+        r_mat.append(r_row)
+        t_mat.append(t_row)
+
+    fig = go.Figure(go.Heatmap(
+        z=r_mat, x=comparisons, y=list(feat_names),
+        text=t_mat, texttemplate="%{text}",
+        colorscale="RdBu_r", zmid=0, zmin=-1, zmax=1,
+        colorbar=dict(title="r", tickvals=[-1, -0.5, 0, 0.5, 1], len=0.8),
+        hovertemplate="<b>%{y}</b><br>%{x}<br>r = %{z:.3f}<extra></extra>",
+    ))
+    fig.update_layout(
+        height=max(260, 42 * len(feat_names) + 90),
+        margin=dict(t=20, b=70, l=10, r=10),
+        yaxis=dict(autorange="reversed"),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    fig.add_annotation(
+        xref="paper", yref="paper", x=0, y=-0.14,
+        text="* FDR < 0.05 (Benjamini-Hochberg)  |  r: rank-biserial correlation  |  양수 = 왼쪽 그룹이 saliency 더 높음",
+        showarrow=False, font=dict(size=10, color="#8b90a0"), align="left",
+    )
+    return fig
 
 
 # ── Fragment sections ──────────────────────────────────────────────────────
@@ -1581,6 +1665,18 @@ def _tab_gnn_render():
                 fig_gnn_fi.update_yaxes(range=[y_min, y_max])
                 fig_gnn_fi.update_yaxes(title_text="Mean Saliency", col=1)
                 st.plotly_chart(fig_gnn_fi, use_container_width=True)
+
+                # ── Group Comparison (Mann-Whitney U) ─────────────────────
+                fi_indiv = gnn_d.get("feature_importance_individual")
+                with st.expander("Group Comparison (Mann-Whitney U, FDR corrected)"):
+                    if fi_indiv is not None and not fi_indiv.empty:
+                        fig_mw = _make_mw_heatmap(
+                            fi_indiv.to_json(orient="records"),
+                            tuple(feat_names),
+                        )
+                        st.plotly_chart(fig_mw, use_container_width=True)
+                    else:
+                        st.info("개별 샘플 파일 없음 (feature_importance_individual.csv 확인)")
             else:
                 st.info("Feature importance 파일 없음 (feature_importance/ 폴더 확인)")
 
