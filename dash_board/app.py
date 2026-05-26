@@ -374,7 +374,7 @@ def _render_report(tab_name: str, exp_name: str) -> None:
     if not is_editing:
         if col_btn.button("편집", key=f"rpt_edit_btn_{tab_name}_{exp_name}", use_container_width=True):
             st.session_state[edit_key] = True
-            st.rerun()
+            st.rerun(scope="fragment")
 
     # ── 읽기 모드 ──────────────────────────────────────────────────────────
     if not is_editing:
@@ -397,12 +397,12 @@ def _render_report(tab_name: str, exp_name: str) -> None:
             if col_ok.button("확인", key=f"rpt_auth_btn_{tab_name}_{exp_name}", use_container_width=True):
                 if name_in in VALID_AUTHORS:
                     st.session_state["report_author"] = name_in
-                    st.rerun()
+                    st.rerun(scope="fragment")
                 else:
                     st.error("비밀번호가 올바르지 않습니다.")
             if col_cancel.button("취소", key=f"rpt_cancel_auth_{tab_name}_{exp_name}", use_container_width=True):
                 st.session_state[edit_key] = False
-                st.rerun()
+                st.rerun(scope="fragment")
         else:
             # ace 에디터 + 실시간 미리보기
             st.caption(f"편집 중: {sess_author}")
@@ -430,14 +430,14 @@ def _render_report(tab_name: str, exp_name: str) -> None:
                 if ok:
                     st.session_state.pop(cache_key, None)
                     st.session_state[edit_key] = False
-                    st.rerun()
+                    st.rerun(scope="fragment")
                 else:
                     err = st.session_state.pop("_sa_last_error", "서비스 계정 설정을 확인하세요.")
                     st.error(f"저장 실패 — {err}")
             if col_cancel.button("취소", key=f"rpt_cancel_{tab_name}_{exp_name}", use_container_width=True):
                 st.session_state[edit_key] = False
                 st.session_state.pop("report_author", None)
-                st.rerun()
+                st.rerun(scope="fragment")
 
 
 @st.cache_data(ttl=3600)
@@ -1146,9 +1146,11 @@ if not exp_data:
 
 exp_labels   = list(exp_data.keys())
 _default_idx = 0
+st.session_state["_exp_labels"] = exp_labels
 
 # GNN 실험 목록 + 데이터 pre-load
 gnn_reps = _load_gnn_representatives(PROJECT_FOLDER_ID)
+st.session_state["_gnn_reps"] = gnn_reps
 
 _gnn_reps_fp = [(r["folder"], r["run_id"], r.get("description", "")) for r in gnn_reps]
 if st.session_state.get("_gnn_exp_data_fp") != _gnn_reps_fp:
@@ -1425,7 +1427,11 @@ with tab_overview:
 # ──────────────────────────────────────────────────────────────────────────────
 # 탭 1: GNN 결과
 # ──────────────────────────────────────────────────────────────────────────────
-with tab_gnn:
+@st.fragment
+def _tab_gnn_render():
+    gnn_reps     = st.session_state.get("_gnn_reps", [])
+    gnn_exp_data = st.session_state.get("gnn_exp_data", {})
+
     if not gnn_reps:
         st.info("gnn_leaderboard_representatives.json에서 실험을 찾을 수 없습니다.")
     else:
@@ -1599,10 +1605,20 @@ with tab_gnn:
                     )
 
 
+
+with tab_gnn:
+    _tab_gnn_render()
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 탭 2: ML 결과
 # ──────────────────────────────────────────────────────────────────────────────
-with tab_ml:
+@st.fragment
+def _tab_ml_render():
+    exp_data     = st.session_state.get("exp_data", {})
+    exp_labels   = st.session_state.get("_exp_labels", [])
+    _default_idx = 0
+
     sel = st.selectbox("실험 선택", exp_labels, key="ml_sel",
                        index=_default_idx, label_visibility="collapsed")
 
@@ -1846,19 +1862,29 @@ with tab_ml:
             if _from_scat and _from_scat != _cur:
                 st.session_state[f"fi_sel_{sel}"]       = _from_scat
                 st.session_state[f"fi_bar_ver_{sel}"]   = _bar_ver + 1   # 바 선택 초기화
-                st.rerun()
+                st.rerun(scope="fragment")
             elif _from_bar and _from_bar != _cur:
                 st.session_state[f"fi_sel_{sel}"]        = _from_bar
                 st.session_state[f"fi_scat_ver_{sel}"]   = _scat_ver + 1  # 버블 선택 초기화
-                st.rerun()
+                st.rerun(scope="fragment")
         else:
             st.info("Feature importance 파일 없음")
+
+
+
+with tab_ml:
+    _tab_ml_render()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 탭 2: WOE / IV
 # ──────────────────────────────────────────────────────────────────────────────
-with tab_woe:
+@st.fragment
+def _tab_woe_render():
+    exp_data     = st.session_state.get("exp_data", {})
+    exp_labels   = st.session_state.get("_exp_labels", [])
+    _default_idx = 0
+
     sel_woe  = st.selectbox("실험 선택", exp_labels, key="woe_sel",
                             index=_default_idx, label_visibility="collapsed")
 
@@ -1973,7 +1999,7 @@ with tab_woe:
                 )
                 if not edited.equals(active_catalog):
                     st.session_state[ss_key] = edited
-                    st.rerun()
+                    st.rerun(scope="fragment")
         st.divider()
 
         st.markdown("##### Information Value")
@@ -2006,3 +2032,7 @@ with tab_woe:
         top_df["_iv_bar"] = top_df["iv"].clip(lower=0.003, upper=IV_CUT)
 
         _woe_iv_bin_section(top_df, bin_df, unregistered, woe_desc)
+
+
+with tab_woe:
+    _tab_woe_render()
