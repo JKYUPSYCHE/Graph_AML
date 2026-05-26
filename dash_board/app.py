@@ -494,10 +494,13 @@ def _load_representatives(ml_folder_id: str) -> list[dict]:
 def _load_ml_results(folder_id: str, prefix: str) -> dict:
     fm  = _list_files(folder_id)
     out: dict = {}
-    if f"{prefix}_metrics_val.json"         in fm: out["metrics"]           = _download_json(fm[f"{prefix}_metrics_val.json"])
-    if f"{prefix}_train_summary.json"        in fm: out["train_summary"]     = _download_json(fm[f"{prefix}_train_summary.json"])
-    if f"{prefix}_feature_importance.csv"    in fm: out["feature_importance"] = _download_csv(fm[f"{prefix}_feature_importance.csv"])
-    if f"{prefix}_confusion_matrix_val.csv"  in fm: out["confusion_matrix"]   = _download_csv(fm[f"{prefix}_confusion_matrix_val.csv"])
+    if f"{prefix}_metrics_val.json"                in fm: out["metrics"]           = _download_json(fm[f"{prefix}_metrics_val.json"])
+    if f"{prefix}_train_summary.json"              in fm: out["train_summary"]     = _download_json(fm[f"{prefix}_train_summary.json"])
+    if f"{prefix}_scores_train_summary.json"       in fm: out["scores_summary"]    = _download_json(fm[f"{prefix}_scores_train_summary.json"])
+    if f"{prefix}_feature_importance.csv"          in fm: out["feature_importance"] = _download_csv(fm[f"{prefix}_feature_importance.csv"])
+    if f"{prefix}_confusion_matrix_val.csv"        in fm: out["confusion_matrix"]   = _download_csv(fm[f"{prefix}_confusion_matrix_val.csv"])
+    if f"{prefix}_feature_assoc_mixed_val.json"    in fm: out["feature_assoc"]     = _download_json(fm[f"{prefix}_feature_assoc_mixed_val.json"])
+    elif f"{prefix}_feature_assoc_mixed_train.json" in fm: out["feature_assoc"]    = _download_json(fm[f"{prefix}_feature_assoc_mixed_train.json"])
     return out
 
 
@@ -693,17 +696,51 @@ def _make_gnn_lc_fig(epochs_json: str, mc: str, best_epoch: int, metric_sel: str
 
 
 @st.cache_data(ttl=3600)
-def _make_ml_lc_fig(curve_vals: tuple, curve_label: str, curve_best: float, best_iter: int) -> go.Figure:
-    vals = list(curve_vals)
+
+@st.cache_data(ttl=3600)
+def _make_ml_lc_fig2(train_vals: tuple, val_vals: tuple, metric_label: str, best_iter: int) -> go.Figure:
+    rows = (
+        [{"Iteration": i + 1, "split": "train", metric_label: v} for i, v in enumerate(train_vals)]
+        + [{"Iteration": i + 1, "split": "val",   metric_label: v} for i, v in enumerate(val_vals)]
+    )
     fig = px.line(
-        pd.DataFrame({"Iteration": range(1, len(vals) + 1), curve_label: vals}),
-        x="Iteration", y=curve_label,
-        title=f"Validation {curve_label}  (best={curve_best:.4f} @ iter {best_iter + 1})",
+        pd.DataFrame(rows), x="Iteration", y=metric_label, color="split",
+        color_discrete_map={"train": "#4f9cf9", "val": "#ff7f0e"},
     )
     fig.add_vline(x=best_iter + 1, line_dash="dash", line_color="#d62728",
                   annotation_text="best", annotation_font_size=11)
-    fig.update_layout(height=310, margin=dict(t=40, b=20))
+    fig.update_layout(height=310, margin=dict(t=40, b=20), legend_title_text="")
     return fig
+
+
+@st.cache_data(ttl=3600)
+def _make_assoc_heatmap(features_json: str, matrix_json: str, top_features: tuple) -> go.Figure:
+    features = json.loads(features_json)
+    matrix   = json.loads(matrix_json)
+    all_names = [f["name"] for f in features]
+    if top_features:
+        top_set = set(top_features)
+        idx = [i for i, n in enumerate(all_names) if n in top_set]
+        names  = [all_names[i] for i in idx]
+        matrix = [[matrix[r][c] for c in idx] for r in idx]
+    else:
+        names = all_names
+    fig = px.imshow(
+        matrix, x=names, y=names,
+        color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
+        title="Feature Association Matrix",
+    )
+    fig.update_layout(height=max(400, len(names) * 28), margin=dict(t=40, b=20))
+    fig.update_xaxes(tickangle=-45, tickfont_size=9)
+    fig.update_yaxes(tickfont_size=9)
+    return fig
+
+
+def _infer_model_name(train_summary: dict, metrics_raw: dict) -> str:
+    run_id = (train_summary.get("run_id") or metrics_raw.get("run_id") or "").lower()
+    if run_id.startswith("xgb"):
+        return "XGBoost"
+    return "XGBoost"
 
 
 @st.cache_data(ttl=3600)
@@ -1122,14 +1159,17 @@ with tab_ml:
     if not ml:
         st.info("학습된 모델이 없습니다.")
     else:
-        metrics_raw   = ml.get("metrics", {})
-        train_summary = ml.get("train_summary", {})
-        feat_imp      = ml.get("feature_importance")
-        conf_mat      = ml.get("confusion_matrix")
-        m             = metrics_raw.get("metrics", metrics_raw)
+        metrics_raw    = ml.get("metrics", {})
+        train_summary  = ml.get("train_summary", {})
+        scores_summary = ml.get("scores_summary", {})
+        feat_imp       = ml.get("feature_importance")
+        conf_mat       = ml.get("confusion_matrix")
+        feature_assoc  = ml.get("feature_assoc")
+        m              = metrics_raw.get("metrics", metrics_raw)
 
         # ── 성능 지표 카드 ────────────────────────────────────────────────────
-        st.markdown("#### Metrics")
+        _model_name = _infer_model_name(train_summary, metrics_raw)
+        st.markdown(f"#### Metrics (model: {_model_name})")
         c1, c2, c3, c4, c5 = st.columns(5)
         f1    = m.get("f1", 0)
         aucpr = m.get("average_precision") or train_summary.get("best_score")
@@ -1169,15 +1209,36 @@ with tab_ml:
 
         with col_curve:
             st.markdown("##### Learning Curve")
+            # scores_train_summary.learning_curve 우선, 없으면 evals_result fallback
+            lc       = (scores_summary.get("learning_curve") or {})
+            lc_curves = lc.get("curves", {})
+            aliases  = lc.get("eval_set_aliases", {})
             diag     = train_summary.get("xgboost_diagnostics", {})
-            eval_res = (diag.get("evals_result") or {}).get("validation_0", {})
-            if eval_res.get("f1"):
-                curve_key, curve_label, curve_best = "f1", "F1", f1
-            else:
-                curve_key, curve_label, curve_best = "aucpr", "AUPRC", aucpr or 0
-            curve_vals = eval_res.get(curve_key, [])
-            if curve_vals:
-                fig_curve = _make_ml_lc_fig(tuple(curve_vals), curve_label, float(curve_best), int(best_iter))
+            evals    = diag.get("evals_result", {})
+
+            # metric → (train_vals, val_vals)
+            available: dict[str, tuple] = {}
+            for metric, vals in lc_curves.get("train", {}).items():
+                val_vals = lc_curves.get("val", {}).get(metric)
+                if val_vals:
+                    available[metric] = (tuple(vals), tuple(val_vals))
+            # evals_result에서 추가 지표 수집
+            train_key = next((k for k, v in aliases.items() if v == "train"), None)
+            val_key   = next((k for k, v in aliases.items() if v == "val"),   None)
+            if not train_key and evals:
+                keys = list(evals.keys())
+                train_key, val_key = (keys[0], keys[1]) if len(keys) >= 2 else (keys[0], None) if keys else (None, None)
+            if train_key and val_key and evals.get(train_key) and evals.get(val_key):
+                for metric, t_vals in evals[train_key].items():
+                    if metric not in available and metric in evals[val_key]:
+                        available[metric] = (tuple(t_vals), tuple(evals[val_key][metric]))
+
+            if available:
+                metric_options = list(available.keys())
+                lc_sel = st.radio("지표", metric_options, horizontal=True,
+                                  key=f"lc_metric_{sel}", label_visibility="collapsed")
+                t_v, v_v = available[lc_sel]
+                fig_curve = _make_ml_lc_fig2(t_v, v_v, lc_sel, int(best_iter))
                 st.plotly_chart(fig_curve, use_container_width=True)
             else:
                 st.info("학습 곡선 데이터 없음")
@@ -1240,6 +1301,25 @@ with tab_ml:
                     _from_bar = _c
 
             _sel_fi = _sel_fi_pre
+
+            with st.expander("Feature Association Heatmap"):
+                if feature_assoc:
+                    assoc    = feature_assoc.get("association", {})
+                    feat_list = assoc.get("features", [])
+                    matrix   = assoc.get("metric_matrix") or assoc.get("matrix", [])
+                    if feat_list and matrix:
+                        top_fi_names = tuple(fi_df["feature"].tolist())
+                        split_label  = feature_assoc.get("split", "?")
+                        methods      = feature_assoc.get("association_methods", {})
+                        st.caption(f"Split: {split_label}  |  numeric↔numeric: {methods.get('numeric_numeric','?')}  |  cat↔cat: {methods.get('categorical_categorical','?')}  |  mixed: {methods.get('numeric_categorical','?')}")
+                        fig_heatmap = _make_assoc_heatmap(
+                            json.dumps(feat_list), json.dumps(matrix), top_fi_names
+                        )
+                        st.plotly_chart(fig_heatmap, use_container_width=True)
+                    else:
+                        st.info("Association 데이터 없음")
+                else:
+                    st.info("feature_assoc_mixed 파일 없음")
 
             st.divider()
             st.markdown("##### Weight vs Gain")
