@@ -308,14 +308,28 @@ def _save_report(tab_name: str, exp_name: str, content: str, author: str) -> boo
 
     file_id = _sa_find_file("report.json", exp_id, token)
     if not file_id:
-        # 서비스 계정은 개인 Drive에 파일을 새로 생성할 수 없음 (스토리지 쿼터 없음).
-        # report.json 플레이스홀더를 Drive에서 직접 만들어 두면 이후 PATCH로 저장 가능.
-        st.session_state["_sa_last_error"] = (
-            f"report.json 파일이 없습니다. "
-            f"Drive에서 dashboard › {tab_name} › {exp_name} 폴더 안에 "
-            f"report.json 파일을 직접 만들어 주세요 (내용: {{}})."
+        # 파일이 없으면 multipart POST로 직접 생성
+        boundary = "mpart_boundary_report"
+        meta     = json.dumps({"name": "report.json", "parents": [exp_id]})
+        body     = (
+            f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+            f"{meta}\r\n"
+            f"--{boundary}\r\nContent-Type: application/json\r\n\r\n"
+            f"{payload.decode('utf-8')}\r\n"
+            f"--{boundary}--"
+        ).encode("utf-8")
+        r = requests.post(
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type":  f"multipart/related; boundary={boundary}",
+            },
+            data=body,
+            timeout=15,
         )
-        return False
+        if not r.ok:
+            st.session_state["_sa_last_error"] = f"Drive API {r.status_code}: {r.text[:300]}"
+        return r.ok
 
     r = requests.patch(
         f"https://www.googleapis.com/upload/drive/v3/files/{file_id}",
