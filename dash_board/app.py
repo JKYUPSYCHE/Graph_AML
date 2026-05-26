@@ -614,16 +614,13 @@ def _parse_gnn_log(text: str) -> dict:
 
 @st.cache_data(ttl=3600)
 def _get_gnn_base_folders(project_folder_id: str) -> dict[str, str]:
-    """gnn/experiments 하위 logs/, models/ 폴더 ID 반환"""
+    """gnn/ 하위 logs/, models/ 폴더 ID 반환"""
     gnn_id = _get_folder_id(project_folder_id, "gnn")
     if not gnn_id:
         return {}
-    exp_id = _get_folder_id(gnn_id, "experiments")
-    if not exp_id:
-        return {}
     return {
-        "logs":   _get_folder_id(exp_id, "logs"),
-        "models": _get_folder_id(exp_id, "models"),
+        "logs":   _get_folder_id(gnn_id, "logs"),
+        "models": _get_folder_id(gnn_id, "models"),
     }
 
 
