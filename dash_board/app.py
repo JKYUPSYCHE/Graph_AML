@@ -1182,7 +1182,7 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 with tab_overview:
     st.markdown("#### 실험 성능 요약")
 
-    _BAR_COLORS = {"F1": "#4f9cf9", "AUPRC": "#ff7f0e", "Recall": "#2ca02c"}
+    _BAR_COLORS = {"F1": "#4f9cf9", "AUPRC": "#a78bfa", "Recall": "#34d399"}
 
     def _overview_bar(rows: list[dict], title: str) -> None:
         if not rows:
@@ -1259,11 +1259,8 @@ with tab_overview:
                 if val is not None:
                     gnn_rows.append({"exp": exp, "metric": metric, "value": val, "description": desc})
 
-    col_ml, col_gnn = st.columns(2)
-    with col_ml:
-        _overview_bar(ml_rows, "ML")
-    with col_gnn:
-        _overview_bar(gnn_rows, "GNN")
+    _overview_bar(ml_rows, "ML")
+    _overview_bar(gnn_rows, "GNN")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
