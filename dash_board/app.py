@@ -1180,7 +1180,7 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 # 탭 0: Overview
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_overview:
-    st.markdown("#### 실험 성능 요약")
+    st.markdown("#### Project Summary")
 
     _METRIC_COLORS = {"F1": "#4f9cf9", "AUPRC": "#a78bfa", "Recall": "#34d399"}
 
@@ -1263,7 +1263,6 @@ with tab_overview:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("#### 실험 추세")
     _overview_line(ml_rows, "ML")
     _overview_line(gnn_rows, "GNN")
 
