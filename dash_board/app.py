@@ -1087,7 +1087,7 @@ if not valid_reps:
 
 # 실험별 데이터 로드 + stale 상태 계산
 # valid_reps 내용으로 fingerprint를 만들어, 실험 목록이 바뀐 경우에만 재빌드
-_reps_fp = [(r["ml_folder"], _artifact_prefix(r)) for r in valid_reps]
+_reps_fp = [(r["ml_folder"], _artifact_prefix(r), r.get("description", "")) for r in valid_reps]
 if st.session_state.get("_exp_data_fp") != _reps_fp:
     _exp_data_build: dict[str, dict] = {}
     bar = st.progress(0, text="실험 데이터 로드 중...")
@@ -1370,9 +1370,9 @@ with tab_ml:
     ml  = d["ml"]
 
     _note = rep.get("note", "")
-    st.caption(f"**Status**: {rep.get('status', '—')}")
     if _note:
         st.caption(f"**Note**: {_note}")
+    st.caption(f"**Status**: {rep.get('status', '—')}")
 
     _render_report("ML Result", _woe_iv_folder_name(rep["ml_folder"]))
     st.divider()
