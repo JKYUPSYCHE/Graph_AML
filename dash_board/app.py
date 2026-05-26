@@ -1126,7 +1126,12 @@ with tab_gnn:
             ep_df.index.name = "epoch"
             ep_df = ep_df.reset_index()
 
-            best_idx = ep_df["val_auprc"].idxmax()
+            _log_best = parsed.get("best_epoch")
+            if _log_best is not None:
+                _match = ep_df[ep_df["epoch"] == _log_best].index
+                best_idx = _match[0] if len(_match) else ep_df["val_auprc"].idxmax()
+            else:
+                best_idx = ep_df["val_auprc"].idxmax()
             best_ep  = ep_df.loc[best_idx]
 
             # ── 핵심 지표 ──────────────────────────────────────────────────
