@@ -1147,8 +1147,26 @@ if not exp_data:
 exp_labels   = list(exp_data.keys())
 _default_idx = 0
 
-# GNN 실험 목록 로드
+# GNN 실험 목록 + 데이터 pre-load
 gnn_reps = _load_gnn_representatives(PROJECT_FOLDER_ID)
+
+_gnn_reps_fp = [(r["folder"], r["run_id"], r.get("description", "")) for r in gnn_reps]
+if st.session_state.get("_gnn_exp_data_fp") != _gnn_reps_fp:
+    _gnn_exp_data_build: dict[str, dict] = {}
+    if gnn_reps:
+        bar = st.progress(0, text="GNN 실험 데이터 로드 중...")
+        for i, rep in enumerate(gnn_reps):
+            label = _gnn_exp_label(rep)
+            _gnn_exp_data_build[label] = {
+                "rep": rep,
+                "d":   _load_gnn_experiment_rep(PROJECT_FOLDER_ID, rep["folder"], rep["run_id"]),
+            }
+            bar.progress((i + 1) / len(gnn_reps), text=f"로드: {rep['folder']}")
+        bar.empty()
+    st.session_state["gnn_exp_data"]    = _gnn_exp_data_build
+    st.session_state["_gnn_exp_data_fp"] = _gnn_reps_fp
+
+gnn_exp_data: dict[str, dict] = st.session_state.get("gnn_exp_data", {})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1188,10 +1206,7 @@ with tab_gnn:
             st.caption(f"**Note**: {_gnn_note}")
         _render_report("GNN Result", sel_gnn_rep["folder"])
         st.divider()
-        with st.spinner("GNN 실험 로드 중..."):
-            gnn_d = _load_gnn_experiment_rep(
-                PROJECT_FOLDER_ID, sel_gnn_rep["folder"], sel_gnn_rep["run_id"]
-            )
+        gnn_d  = gnn_exp_data.get(sel_gnn_label, {}).get("d", {})
 
         args   = gnn_d.get("args", {})
         parsed = gnn_d.get("parsed", {})
