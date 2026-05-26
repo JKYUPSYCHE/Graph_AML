@@ -27,7 +27,7 @@ _BASE_FEATURE_NAMES = [
     'time__row__is_weekend',
 ]
 N_HOPS    = 2
-N_SAMPLES = 50
+N_SAMPLES = 500
 
 
 def _feature_names(args):
