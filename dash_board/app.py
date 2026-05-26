@@ -1212,7 +1212,7 @@ with tab_gnn:
                     rows=2, cols=2,
                     shared_yaxes="all",
                     subplot_titles=subplot_titles,
-                    vertical_spacing=0.18,
+                    vertical_spacing=0.32,
                     horizontal_spacing=0.06,
                 )
                 for idx, grp in enumerate(groups_order):
