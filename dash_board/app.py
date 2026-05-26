@@ -1093,16 +1093,11 @@ def _make_mw_heatmap(indiv_json: str, feat_names: tuple) -> go.Figure:
         hovertemplate="<b>%{y}</b><br>%{x}<br>r = %{z:.3f}<extra></extra>",
     ))
     fig.update_layout(
-        height=max(260, 42 * len(feat_names) + 90),
-        margin=dict(t=20, b=70, l=10, r=10),
+        height=max(260, 42 * len(feat_names) + 110),
+        margin=dict(t=20, b=60, l=10, r=10),
         yaxis=dict(autorange="reversed"),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-    )
-    fig.add_annotation(
-        xref="paper", yref="paper", x=0, y=-0.14,
-        text="* FDR < 0.05 (Benjamini-Hochberg)  |  r: rank-biserial correlation  |  양수 = 왼쪽 그룹이 saliency 더 높음",
-        showarrow=False, font=dict(size=10, color="#8b90a0"), align="left",
     )
     return fig
 
@@ -1684,6 +1679,7 @@ def _tab_gnn_render():
                             tuple(feat_names),
                         )
                         st.plotly_chart(fig_mw, use_container_width=True)
+                        st.caption("\\* FDR < 0.05 (Benjamini-Hochberg)  |  r: rank-biserial correlation  |  양수 = 왼쪽 그룹이 saliency 더 높음")
                     else:
                         st.info("개별 샘플 파일 없음 (feature_importance_individual.csv 확인)")
             else:
