@@ -496,7 +496,6 @@ def _load_ml_results(folder_id: str, prefix: str) -> dict:
     out: dict = {}
     if f"{prefix}_metrics_val.json"                in fm: out["metrics"]           = _download_json(fm[f"{prefix}_metrics_val.json"])
     if f"{prefix}_train_summary.json"              in fm: out["train_summary"]     = _download_json(fm[f"{prefix}_train_summary.json"])
-    if f"{prefix}_scores_train_summary.json"       in fm: out["scores_summary"]    = _download_json(fm[f"{prefix}_scores_train_summary.json"])
     if f"{prefix}_feature_importance.csv"          in fm: out["feature_importance"] = _download_csv(fm[f"{prefix}_feature_importance.csv"])
     if f"{prefix}_confusion_matrix_val.csv"        in fm: out["confusion_matrix"]   = _download_csv(fm[f"{prefix}_confusion_matrix_val.csv"])
     if f"{prefix}_feature_assoc_mixed_val.json"    in fm: out["feature_assoc"]     = _download_json(fm[f"{prefix}_feature_assoc_mixed_val.json"])
@@ -1301,9 +1300,8 @@ with tab_ml:
     if not ml:
         st.info("학습된 모델이 없습니다.")
     else:
-        metrics_raw    = ml.get("metrics", {})
-        train_summary  = ml.get("train_summary", {})
-        scores_summary = ml.get("scores_summary", {})
+        metrics_raw   = ml.get("metrics", {})
+        train_summary = ml.get("train_summary", {})
         feat_imp       = ml.get("feature_importance")
         conf_mat       = ml.get("confusion_matrix")
         feature_assoc  = ml.get("feature_assoc")
@@ -1351,29 +1349,18 @@ with tab_ml:
 
         with col_curve:
             st.markdown("##### Learning Curve")
-            # scores_train_summary.learning_curve 우선, 없으면 evals_result fallback
-            lc       = (scores_summary.get("learning_curve") or {})
-            lc_curves = lc.get("curves", {})
-            aliases  = lc.get("eval_set_aliases", {})
-            diag     = train_summary.get("xgboost_diagnostics", {})
-            evals    = diag.get("evals_result", {})
+            diag  = train_summary.get("xgboost_diagnostics", {})
+            evals = diag.get("evals_result", {})
 
             # metric → (train_vals, val_vals)
             available: dict[str, tuple] = {}
-            for metric, vals in lc_curves.get("train", {}).items():
-                val_vals = lc_curves.get("val", {}).get(metric)
-                if val_vals:
-                    available[metric] = (tuple(vals), tuple(val_vals))
-            # evals_result에서 추가 지표 수집
-            train_key = next((k for k, v in aliases.items() if v == "train"), None)
-            val_key   = next((k for k, v in aliases.items() if v == "val"),   None)
-            if not train_key and evals:
+            if evals:
                 keys = list(evals.keys())
                 train_key, val_key = (keys[0], keys[1]) if len(keys) >= 2 else (keys[0], None) if keys else (None, None)
-            if train_key and val_key and evals.get(train_key) and evals.get(val_key):
-                for metric, t_vals in evals[train_key].items():
-                    if metric not in available and metric in evals[val_key]:
-                        available[metric] = (tuple(t_vals), tuple(evals[val_key][metric]))
+                if train_key and val_key and evals.get(train_key) and evals.get(val_key):
+                    for metric, t_vals in evals[train_key].items():
+                        if metric in evals[val_key]:
+                            available[metric] = (tuple(t_vals), tuple(evals[val_key][metric]))
 
             if available:
                 metric_options = list(available.keys())
