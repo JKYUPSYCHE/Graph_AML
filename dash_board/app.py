@@ -1061,7 +1061,16 @@ def _make_mw_heatmap(indiv_json: str, feat_names: tuple) -> go.Figure:
     if mw_df.empty:
         return go.Figure()
 
-    comparisons = mw_df["comparison"].unique().tolist()
+    _comp_labels = {
+        "TP vs TN": "TP vs TN<br><sub>탐지 기준</sub>",
+        "TP vs FP": "TP vs FP<br><sub>오탐 원인</sub>",
+        "TP vs FN": "TP vs FN<br><sub>미탐 원인</sub>",
+        "FP vs TN": "FP vs TN<br><sub>오탐 특성</sub>",
+        "FN vs TN": "FN vs TN<br><sub>미탐 특성</sub>",
+        "FP vs FN": "FP vs FN<br><sub>두 오류 비교</sub>",
+    }
+    comparisons     = mw_df["comparison"].unique().tolist()
+    comparisons_lbl = [_comp_labels.get(c, c) for c in comparisons]
     r_mat, t_mat = [], []
     for f in feat_names:
         r_row, t_row = [], []
@@ -1077,7 +1086,7 @@ def _make_mw_heatmap(indiv_json: str, feat_names: tuple) -> go.Figure:
         t_mat.append(t_row)
 
     fig = go.Figure(go.Heatmap(
-        z=r_mat, x=comparisons, y=list(feat_names),
+        z=r_mat, x=comparisons_lbl, y=list(feat_names),
         text=t_mat, texttemplate="%{text}",
         colorscale="RdBu_r", zmid=0, zmin=-1, zmax=1,
         showscale=False,
