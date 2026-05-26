@@ -150,5 +150,6 @@ def create_hetero_obj(x, y, edge_index, edge_attr, timestamps, args):
         data['node', 'rev_to', 'node'].edge_attr[:, [-1, -2]] = data['node', 'rev_to', 'node'].edge_attr[:, [-2, -1]]
     data['node', 'to', 'node'].y = y
     data['node', 'to', 'node'].timestamps = timestamps
+    data['node', 'rev_to', 'node'].timestamps = timestamps
 
     return data

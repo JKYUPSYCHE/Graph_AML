@@ -14,18 +14,23 @@ def logger_setup(log_dir=None, log_name='logs'):
     log_directory.mkdir(parents=True, exist_ok=True)
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
-    # basicConfig은 기존 핸들러가 있으면 무시됨 (Colab 등) → 강제 초기화
+
     root = logging.getLogger()
     for h in root.handlers[:]:
         root.removeHandler(h)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)-5.5s] %(message)s",
-        handlers=[
-            logging.FileHandler(log_directory / f"{log_name}.log", encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+    root.setLevel(logging.INFO)
+
+    fmt = logging.Formatter("%(asctime)s [%(levelname)-5.5s] %(message)s")
+
+    fh = logging.FileHandler(log_directory / f"{log_name}.log", encoding='utf-8')
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(fmt)
+    root.addHandler(fh)
+
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setLevel(logging.INFO)
+    sh.setFormatter(fmt)
+    root.addHandler(sh)
 
 def create_parser():
     parser = argparse.ArgumentParser()
@@ -52,5 +57,7 @@ def create_parser():
     parser.add_argument("--finetune", action='store_true', help="Fine-tune a model. Note that args.unique_name needs to point to the pre-trained model.")
     parser.add_argument("--inference", action='store_true', help="Load a trained model and only do AML inference with it. args.unique name needs to point to the trained model.")
     parser.add_argument("--patience", default=None, type=int, help="Early stopping patience in epochs (disabled if not set).")
+    parser.add_argument("--weighted_sampler", action='store_true', help="Use WeightedRandomSampler for training (oversamples minority class). CE loss weights are set to [1,1] when enabled.")
+    parser.add_argument("--temporal_strategy", default=None, type=str, help="Temporal neighbor sampling strategy. 'last' = most-recent k neighbors by timestamp. None = uniform random (default).")
 
     return parser
