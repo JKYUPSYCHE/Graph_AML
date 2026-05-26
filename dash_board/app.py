@@ -7,7 +7,7 @@ Secrets (.streamlit/secrets.toml):
 
 Drive layout (PROJECT_FOLDER_ID 하위):
     ml/
-        ml_dashboard_representatives.json
+        ml_leaderboard_representatives.json
         ml-01/  ml-02/ ...
             {run_id}/
                 {exp}__{run}__{model}_metrics_val.json
@@ -484,7 +484,7 @@ def _exp_label(rep: dict) -> str:
 def _load_representatives(ml_folder_id: str) -> list[dict]:
     files = _drive_list(
         f"'{ml_folder_id}' in parents"
-        " and name='ml_dashboard_representatives.json'"
+        " and name='ml_leaderboard_representatives.json'"
         " and trashed=false"
     )
     return _download_json(files[0]["id"]) if files else []
@@ -937,7 +937,7 @@ reps       = _load_representatives(ml_folder_id)
 valid_reps = [r for r in reps if _is_valid_rep(r)]
 
 if not valid_reps:
-    st.warning("ml_dashboard_representatives.json에 유효한 실험이 없습니다.")
+    st.warning("ml_leaderboard_representatives.json에 유효한 실험이 없습니다.")
     st.stop()
 
 # 실험별 데이터 로드 + stale 상태 계산
