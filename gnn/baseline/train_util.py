@@ -73,6 +73,9 @@ def _make_weighted_sampler(labels: torch.Tensor) -> WeightedRandomSampler:
 
 def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transform, args):
     use_wrs = getattr(args, 'weighted_sampler', False)
+    temporal_strategy = getattr(args, 'temporal_strategy', None)
+    time_attr = "timestamps" if temporal_strategy else None
+
     if isinstance(tr_data, HeteroData):
         tr_edge_label_index = tr_data['node', 'to', 'node'].edge_index
         tr_edge_label = tr_data['node', 'to', 'node'].y
@@ -82,40 +85,54 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
             tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
                                         edge_label_index=(('node', 'to', 'node'), tr_edge_label_index),
                                         edge_label=tr_edge_label, batch_size=args.batch_size,
-                                        sampler=sampler, drop_last=True, transform=transform)
+                                        sampler=sampler, drop_last=True, transform=transform,
+                                        time_attr=time_attr, temporal_strategy=temporal_strategy)
         else:
             tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
                                         edge_label_index=(('node', 'to', 'node'), tr_edge_label_index),
                                         edge_label=tr_edge_label, batch_size=args.batch_size,
-                                        shuffle=True, drop_last=True, transform=transform)
+                                        shuffle=True, drop_last=True, transform=transform,
+                                        time_attr=time_attr, temporal_strategy=temporal_strategy)
 
         val_edge_label_index = val_data['node', 'to', 'node'].edge_index[:,val_inds]
         val_edge_label = val_data['node', 'to', 'node'].y[val_inds]
 
-        val_loader =  LinkNeighborLoader(val_data, num_neighbors=args.num_neighs,
+        val_loader = LinkNeighborLoader(val_data, num_neighbors=args.num_neighs,
                                     edge_label_index=(('node', 'to', 'node'), val_edge_label_index),
-                                    edge_label=val_edge_label, batch_size=args.batch_size, shuffle=False, transform=transform)
+                                    edge_label=val_edge_label, batch_size=args.batch_size,
+                                    shuffle=False, transform=transform,
+                                    time_attr=time_attr, temporal_strategy=temporal_strategy)
 
         te_edge_label_index = te_data['node', 'to', 'node'].edge_index[:,te_inds]
         te_edge_label = te_data['node', 'to', 'node'].y[te_inds]
 
-        te_loader =  LinkNeighborLoader(te_data, num_neighbors=args.num_neighs,
+        te_loader = LinkNeighborLoader(te_data, num_neighbors=args.num_neighs,
                                     edge_label_index=(('node', 'to', 'node'), te_edge_label_index),
-                                    edge_label=te_edge_label, batch_size=args.batch_size, shuffle=False, transform=transform)
+                                    edge_label=te_edge_label, batch_size=args.batch_size,
+                                    shuffle=False, transform=transform,
+                                    time_attr=time_attr, temporal_strategy=temporal_strategy)
     else:
         if use_wrs:
             sampler = _make_weighted_sampler(tr_data.y)
             tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
                                         batch_size=args.batch_size, sampler=sampler,
-                                        drop_last=True, transform=transform)
+                                        drop_last=True, transform=transform,
+                                        time_attr=time_attr, temporal_strategy=temporal_strategy)
         else:
             tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
                                         batch_size=args.batch_size, shuffle=True,
-                                        drop_last=True, transform=transform)
-        val_loader = LinkNeighborLoader(val_data,num_neighbors=args.num_neighs, edge_label_index=val_data.edge_index[:, val_inds],
-                                        edge_label=val_data.y[val_inds], batch_size=args.batch_size, shuffle=False, transform=transform)
-        te_loader =  LinkNeighborLoader(te_data,num_neighbors=args.num_neighs, edge_label_index=te_data.edge_index[:, te_inds],
-                                edge_label=te_data.y[te_inds], batch_size=args.batch_size, shuffle=False, transform=transform)
+                                        drop_last=True, transform=transform,
+                                        time_attr=time_attr, temporal_strategy=temporal_strategy)
+        val_loader = LinkNeighborLoader(val_data, num_neighbors=args.num_neighs,
+                                        edge_label_index=val_data.edge_index[:, val_inds],
+                                        edge_label=val_data.y[val_inds], batch_size=args.batch_size,
+                                        shuffle=False, transform=transform,
+                                        time_attr=time_attr, temporal_strategy=temporal_strategy)
+        te_loader  = LinkNeighborLoader(te_data, num_neighbors=args.num_neighs,
+                                        edge_label_index=te_data.edge_index[:, te_inds],
+                                        edge_label=te_data.y[te_inds], batch_size=args.batch_size,
+                                        shuffle=False, transform=transform,
+                                        time_attr=time_attr, temporal_strategy=temporal_strategy)
 
     return tr_loader, val_loader, te_loader
 

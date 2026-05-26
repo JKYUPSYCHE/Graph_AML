@@ -58,5 +58,6 @@ def create_parser():
     parser.add_argument("--inference", action='store_true', help="Load a trained model and only do AML inference with it. args.unique name needs to point to the trained model.")
     parser.add_argument("--patience", default=None, type=int, help="Early stopping patience in epochs (disabled if not set).")
     parser.add_argument("--weighted_sampler", action='store_true', help="Use WeightedRandomSampler for training (oversamples minority class). CE loss weights are set to [1,1] when enabled.")
+    parser.add_argument("--temporal_strategy", default=None, type=str, help="Temporal neighbor sampling strategy. 'last' = most-recent k neighbors by timestamp. None = uniform random (default).")
 
     return parser
