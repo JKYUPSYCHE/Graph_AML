@@ -1180,14 +1180,89 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 # 탭 0: Overview
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_overview:
-    st.markdown(
-        "<div style='text-align:center; padding: 60px 0 20px'>"
-        "<div style='font-size: 3rem'>🚧</div>"
-        "<div style='font-size: 1.4rem; font-weight: 600; margin-top: 12px'>공사중</div>"
-        "<div style='color: #888; margin-top: 8px'>이 탭은 현재 준비 중입니다.</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("#### 실험 성능 요약")
+
+    _BAR_COLORS = {"F1": "#4f9cf9", "AUPRC": "#ff7f0e", "Recall": "#2ca02c"}
+
+    def _overview_bar(rows: list[dict], title: str) -> None:
+        if not rows:
+            st.caption(f"{title} — 데이터 없음")
+            return
+        df_ov = pd.DataFrame(rows)
+        fig = go.Figure()
+        for metric, color in _BAR_COLORS.items():
+            sub = df_ov[df_ov["metric"] == metric]
+            fig.add_trace(go.Bar(
+                x=sub["exp"],
+                y=sub["value"],
+                name=metric,
+                marker_color=color,
+                customdata=sub["description"],
+                hovertemplate=(
+                    "<b>%{x}</b><br>"
+                    f"{metric}: " + "%{y:.4f}<br>"
+                    "<i>%{customdata}</i><extra></extra>"
+                ),
+            ))
+        fig.update_layout(
+            barmode="group",
+            title=title,
+            height=340,
+            margin=dict(t=40, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            yaxis=dict(range=[0, 1]),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── ML ────────────────────────────────────────────────────────────────────
+    ml_rows: list[dict] = []
+    for label, d in sorted(exp_data.items(),
+                            key=lambda kv: _woe_iv_folder_name(kv[1]["rep"]["ml_folder"])):
+        rep  = d["rep"]
+        m    = d["ml"].get("metrics", {})
+        m    = m.get("metrics", m)
+        desc = rep.get("description", "")
+        exp  = _woe_iv_folder_name(rep["ml_folder"]).upper()
+        f1      = m.get("f1")
+        auprc   = m.get("average_precision") or d["ml"].get("train_summary", {}).get("best_score")
+        recall  = m.get("recall")
+        for metric, val in [("F1", f1), ("AUPRC", auprc), ("Recall", recall)]:
+            if val is not None:
+                ml_rows.append({"exp": exp, "metric": metric, "value": val, "description": desc})
+
+    # ── GNN ───────────────────────────────────────────────────────────────────
+    gnn_rows: list[dict] = []
+    for label, d in sorted(gnn_exp_data.items(),
+                            key=lambda kv: kv[1]["rep"]["folder"]):
+        rep    = d["rep"]
+        parsed = d["d"].get("parsed", {})
+        epochs = parsed.get("epochs", [])
+        desc   = rep.get("description", "")
+        exp    = rep["folder"]
+        if epochs:
+            _ep_df = pd.DataFrame(epochs)
+            _ep_df.index = _ep_df.index + 1
+            _ep_df = _ep_df.reset_index()
+            _log_best = parsed.get("best_epoch")
+            if _log_best is not None:
+                _match = _ep_df[_ep_df["epoch"] == _log_best].index
+                _bi = _match[0] if len(_match) else _ep_df["val_auprc"].idxmax()
+            else:
+                _bi = _ep_df["val_auprc"].idxmax()
+            _bp = _ep_df.loc[_bi]
+            for metric, val in [
+                ("F1",     _bp.get("test_f1")),
+                ("AUPRC",  _bp.get("test_auprc")),
+                ("Recall", _bp.get("test_recall")),
+            ]:
+                if val is not None:
+                    gnn_rows.append({"exp": exp, "metric": metric, "value": val, "description": desc})
+
+    col_ml, col_gnn = st.columns(2)
+    with col_ml:
+        _overview_bar(ml_rows, "ML")
+    with col_gnn:
+        _overview_bar(gnn_rows, "GNN")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1232,10 +1307,10 @@ with tab_gnn:
             _model_name = args.get("model", "—") if args else "—"
             st.markdown(f"#### Metrics (model: {_model_name})")
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("F1",            f"{best_ep['test_f1']:.4f}")
-            c2.metric("AUPRC",         f"{best_ep['test_auprc']:.4f}")
-            c3.metric("Precision",     f"{best_ep['test_precision']:.4f}")
-            c4.metric("Recall",        f"{best_ep['test_recall']:.4f}")
+            c1.metric("F1",             f"{best_ep['test_f1']:.4f}")
+            c2.metric("AUPRC",          f"{best_ep['test_auprc']:.4f}")
+            c3.metric("Recall",         f"{best_ep['test_recall']:.4f}")
+            c4.metric("Precision",      f"{best_ep['test_precision']:.4f}")
             c5.metric("Best Val AUPRC", f"{best_ep['val_auprc']:.4f}")
 
             c6, c7 = st.columns(2)
@@ -1412,8 +1487,8 @@ with tab_ml:
         aucpr = m.get("average_precision") or train_summary.get("best_score")
         c1.metric("F1",        f"{f1:.4f}")
         c2.metric("AUPRC",     f"{aucpr:.4f}" if aucpr is not None else "—")
-        c3.metric("Precision", f"{m.get('precision', 0):.4f}")
-        c4.metric("Recall",    f"{m.get('recall', 0):.4f}")
+        c3.metric("Recall",    f"{m.get('recall', 0):.4f}")
+        c4.metric("Precision", f"{m.get('precision', 0):.4f}")
         c5.metric("Threshold", f"{m.get('threshold', 0):.4f}",
                   help=f"전략: {train_summary.get('xgboost_params', {}).get('eval_metric', '—')}")
 
