@@ -563,19 +563,25 @@ def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
 def _parse_gnn_log(text: str) -> dict:
     train_re = re.compile(
         r"Train F1:\s*([\d.]+)\s*\|\s*Recall:\s*([\d.]+)\s*\|\s*Precision:\s*([\d.]+)\s*\|\s*AUPRC:\s*([\d.]+)"
+        r"(?:\s*\|\s*LogLoss:\s*([\d.]+))?"
     )
     val_re = re.compile(
         r"Val\s+[—\-]\s*F1:\s*([\d.]+)\s*\|\s*Recall:\s*([\d.]+)\s*\|\s*Precision:\s*([\d.]+)\s*\|\s*AUPRC:\s*([\d.]+)"
+        r"(?:\s*\|\s*LogLoss:\s*([\d.]+))?"
     )
     test_re = re.compile(
         r"Test\s+[—\-]\s*F1:\s*([\d.]+)\s*\|\s*Recall:\s*([\d.]+)\s*\|\s*Precision:\s*([\d.]+)\s*\|\s*AUPRC:\s*([\d.]+)"
+        r"(?:\s*\|\s*LogLoss:\s*([\d.]+))?"
     )
-    nodes_re   = re.search(r"Number of nodes = (\d+)", text)
-    txns_re    = re.search(r"Number of transactions = (\d+)", text)
-    ir_re      = re.search(r"Illicit ratio = \d+ / \d+ = ([\d.]+)%", text)
-    edge_re    = re.search(r"Edge features being used: (\[.*?\])", text)
-    params_re  = re.search(r"GraphModule\s+\|[^|]+\|[^|]+\|\s*([\d,]+)", text)
-    time_re    = re.search(r"Total training time:\s*([\d.]+)s", text)
+    nodes_re        = re.search(r"Number of nodes = (\d+)", text)
+    txns_re         = re.search(r"Number of transactions = (\d+)", text)
+    ir_re           = re.search(r"Illicit ratio = \d+ / \d+ = ([\d.]+)%", text)
+    edge_re         = re.search(r"Edge features being used: (\[.*?\])", text)
+    params_re       = re.search(r"GraphModule\s+\|[^|]+\|[^|]+\|\s*([\d,]+)", text)
+    time_re         = re.search(r"Total training time:\s*([\d.]+)s", text)
+    best_epoch_re   = re.search(r"Best epoch:\s*(\d+)", text)
+    early_stop_re   = re.search(r"Early stopping at epoch\s*(\d+)", text)
+    xai_cm_re       = re.search(r"\[XAI\].*?TP=(\d+)\s+FP=(\d+)\s+FN=(\d+)\s+TN=(\d+)", text)
 
     epochs: list[dict] = []
     buf: dict = {}
@@ -584,16 +590,22 @@ def _parse_gnn_log(text: str) -> dict:
         if m:
             buf = dict(train_f1=float(m[1]), train_recall=float(m[2]),
                        train_precision=float(m[3]), train_auprc=float(m[4]))
+            if m[5] is not None:
+                buf["train_logloss"] = float(m[5])
             continue
         m = val_re.search(line)
         if m and buf:
             buf.update(val_f1=float(m[1]), val_recall=float(m[2]),
                        val_precision=float(m[3]), val_auprc=float(m[4]))
+            if m[5] is not None:
+                buf["val_logloss"] = float(m[5])
             continue
         m = test_re.search(line)
         if m and buf:
             buf.update(test_f1=float(m[1]), test_recall=float(m[2]),
                        test_precision=float(m[3]), test_auprc=float(m[4]))
+            if m[5] is not None:
+                buf["test_logloss"] = float(m[5])
             epochs.append(buf)
             buf = {}
 
@@ -606,12 +618,17 @@ def _parse_gnn_log(text: str) -> dict:
 
     return {
         "epochs":            epochs,
-        "n_nodes":           int(nodes_re[1])                   if nodes_re  else None,
-        "n_txns":            int(txns_re[1])                    if txns_re   else None,
-        "illicit_ratio":     float(ir_re[1])                    if ir_re     else None,
+        "n_nodes":           int(nodes_re[1])                   if nodes_re      else None,
+        "n_txns":            int(txns_re[1])                    if txns_re       else None,
+        "illicit_ratio":     float(ir_re[1])                    if ir_re         else None,
         "edge_features":     edge_feats,
-        "total_params":      int(params_re[1].replace(",", "")) if params_re else None,
-        "training_time_sec": float(time_re[1])                  if time_re   else None,
+        "total_params":      int(params_re[1].replace(",", "")) if params_re     else None,
+        "training_time_sec": float(time_re[1])                  if time_re       else None,
+        "best_epoch":        int(best_epoch_re[1])              if best_epoch_re else None,
+        "early_stop_epoch":  int(early_stop_re[1])              if early_stop_re else None,
+        "xai_cm":            {"tp": int(xai_cm_re[1]), "fp": int(xai_cm_re[2]),
+                              "fn": int(xai_cm_re[3]), "tn": int(xai_cm_re[4])}
+                             if xai_cm_re else None,
     }
 
 
@@ -622,8 +639,9 @@ def _get_gnn_base_folders(project_folder_id: str) -> dict[str, str]:
     if not gnn_id:
         return {}
     return {
-        "logs":   _get_folder_id(gnn_id, "logs"),
-        "models": _get_folder_id(gnn_id, "models"),
+        "logs":               _get_folder_id(gnn_id, "logs"),
+        "models":             _get_folder_id(gnn_id, "models"),
+        "feature_importance": _get_folder_id(gnn_id, "feature_importance"),
     }
 
 
@@ -661,6 +679,13 @@ def _load_gnn_experiment(project_folder_id: str, exp_name: str) -> dict:
             if r.ok:
                 out["parsed"] = _parse_gnn_log(r.text)
 
+    fi_id = base.get("feature_importance", "")
+    if fi_id:
+        fi_files = _list_files(fi_id)
+        fi_fn    = f"{exp_name}_feature_importance.csv"
+        if fi_fn in fi_files:
+            out["feature_importance"] = _download_csv(fi_files[fi_fn])
+
     return out
 
 
@@ -670,21 +695,21 @@ def _load_gnn_experiment(project_folder_id: str, exp_name: str) -> dict:
 def _make_gnn_lc_fig(epochs_json: str, mc: str, best_epoch: int, metric_sel: str) -> go.Figure:
     ep_df = pd.read_json(StringIO(epochs_json))
     fig = go.Figure()
-    for split, color, dash in [
-        ("train", "#aec7e8", "dot"),
-        ("val",   "#1f77b4", "solid"),
-        ("test",  "#ff7f0e", "dash"),
+    for split, color in [
+        ("train", "#4f9cf9"),
+        ("val",   "#ff7f0e"),
+        ("test",  "#2ca02c"),
     ]:
         col_name = f"{split}_{mc}"
         if col_name in ep_df.columns:
             fig.add_trace(go.Scatter(
                 x=ep_df["epoch"], y=ep_df[col_name],
                 mode="lines", name=split,
-                line=dict(color=color, dash=dash, width=2),
+                line=dict(color=color, width=2),
             ))
     fig.add_vline(
-        x=best_epoch, line_dash="dot", line_color="#888888",
-        annotation_text=f"best val  epoch {best_epoch}",
+        x=best_epoch, line_dash="dot", line_color="#d62728",
+        annotation_text=f"best epoch {best_epoch}",
         annotation_font_size=10,
     )
     fig.update_layout(
@@ -694,8 +719,6 @@ def _make_gnn_lc_fig(epochs_json: str, mc: str, best_epoch: int, metric_sel: str
     )
     return fig
 
-
-@st.cache_data(ttl=3600)
 
 @st.cache_data(ttl=3600)
 def _make_ml_lc_fig2(train_vals: tuple, val_vals: tuple, metric_label: str, best_iter: int) -> go.Figure:
@@ -923,10 +946,10 @@ def _make_woe_bin_fig(feat_bins_json: str, sel_feature: str) -> go.Figure:
 def _gnn_lc_section(ep_df: pd.DataFrame, best_ep: pd.Series) -> None:
     _mc, _ = st.columns([3, 5])
     metric_sel = _mc.radio(
-        "지표", ["F1", "AUPRC", "Recall", "Precision"],
+        "지표", ["F1", "AUPRC", "Recall", "Precision", "LogLoss"],
         horizontal=True, key="gnn_metric", label_visibility="collapsed",
     )
-    mc = metric_sel.lower()
+    mc = "logloss" if metric_sel == "LogLoss" else metric_sel.lower()
     fig_lc = _make_gnn_lc_fig(ep_df.to_json(orient="records"), mc, int(best_ep["epoch"]), metric_sel)
     st.plotly_chart(fig_lc, use_container_width=True)
 
@@ -1134,9 +1157,62 @@ with tab_gnn:
 
             st.divider()
 
-            # ── Learning Curve ─────────────────────────────────────────────
-            st.markdown("##### Learning Curve")
-            _gnn_lc_section(ep_df, best_ep)
+            # ── Learning Curve + Confusion Matrix ─────────────────────────
+            col_curve, col_cm = st.columns([3, 2])
+
+            with col_curve:
+                st.markdown("##### Learning Curve")
+                _gnn_lc_section(ep_df, best_ep)
+
+            with col_cm:
+                st.markdown("##### Confusion Matrix")
+                xai_cm = parsed.get("xai_cm")
+                if xai_cm:
+                    tp, fp, fn, tn = xai_cm["tp"], xai_cm["fp"], xai_cm["fn"], xai_cm["tn"]
+                    fig_cm = _make_cm_fig(tp, fn, fp, tn)
+                    st.plotly_chart(fig_cm, use_container_width=True)
+                    st.markdown(
+                        f"<div style='text-align:center;font-size:0.8rem;color:#888'>"
+                        f"TP={tp:,} | FP={fp:,} | FN={fn:,} | TN={tn:,}</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.info("Confusion matrix 정보 없음 (XAI 미실행)")
+
+            st.divider()
+
+            # ── Feature Importance (XAI) ───────────────────────────────────
+            fi_df_gnn = gnn_d.get("feature_importance")
+            st.markdown("##### Feature Importance (XAI — Gradient Saliency)")
+            if fi_df_gnn is not None and not fi_df_gnn.empty:
+                # wide → long: mean 컬럼만 추출
+                mean_cols = [c for c in fi_df_gnn.columns if c.endswith("__mean")]
+                feat_names = [c.replace("__mean", "") for c in mean_cols]
+                fi_long_rows = []
+                for _, row in fi_df_gnn.iterrows():
+                    for col, fname in zip(mean_cols, feat_names):
+                        fi_long_rows.append({"group": row["group"], "feature": fname, "saliency": row[col]})
+                fi_long = pd.DataFrame(fi_long_rows)
+
+                # 그룹 선택 radio
+                groups = fi_long["group"].unique().tolist()
+                _gc, _ = st.columns([3, 5])
+                sel_group = _gc.radio("그룹", groups, horizontal=True, key="gnn_fi_group", label_visibility="collapsed")
+
+                fi_sub = fi_long[fi_long["group"] == sel_group].sort_values("saliency", ascending=False)
+                fig_gnn_fi = px.bar(
+                    fi_sub, x="feature", y="saliency",
+                    color_discrete_sequence=["#4f9cf9"],
+                    labels={"feature": "Feature", "saliency": "Mean Saliency"},
+                    title=f"Feature Importance — {sel_group}",
+                )
+                fig_gnn_fi.update_layout(
+                    height=380, margin=dict(t=40, b=80),
+                    xaxis_tickangle=-40,
+                )
+                st.plotly_chart(fig_gnn_fi, use_container_width=True)
+            else:
+                st.info("Feature importance 파일 없음 (feature_importance/ 폴더 확인)")
 
             st.divider()
 
