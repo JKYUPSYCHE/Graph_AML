@@ -714,23 +714,51 @@ def _make_ml_lc_fig2(train_vals: tuple, val_vals: tuple, metric_label: str, best
 
 
 @st.cache_data(ttl=3600)
-def _make_assoc_heatmap(features_json: str, matrix_json: str, top_features: tuple) -> go.Figure:
-    features = json.loads(features_json)
-    matrix   = json.loads(matrix_json)
-    all_names = [f["name"] for f in features]
+def _make_assoc_heatmap(
+    features_json: str, matrix_json: str, top_features: tuple,
+    metric_matrix_json: str = "[]", desc_map_json: str = "{}",
+) -> go.Figure:
+    features      = json.loads(features_json)
+    matrix        = json.loads(matrix_json)
+    metric_matrix = json.loads(metric_matrix_json)
+    desc_map      = json.loads(desc_map_json)
+    all_names     = [f["name"] for f in features]
+
     if top_features:
         top_set = set(top_features)
-        idx = [i for i, n in enumerate(all_names) if n in top_set]
-        names  = [all_names[i] for i in idx]
-        matrix = [[matrix[r][c] for c in idx] for r in idx]
+        idx           = [i for i, n in enumerate(all_names) if n in top_set]
+        names         = [all_names[i] for i in idx]
+        matrix        = [[matrix[r][c] for c in idx] for r in idx]
+        metric_matrix = [[metric_matrix[r][c] for c in idx] for r in idx] if metric_matrix else []
     else:
         names = all_names
-    fig = px.imshow(
-        matrix, x=names, y=names,
-        color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
-        title="Feature Association Matrix",
+
+    n = len(names)
+    custom = [
+        [
+            [desc_map.get(names[c], ""), desc_map.get(names[r], ""),
+             metric_matrix[r][c] if metric_matrix else ""]
+            for c in range(n)
+        ]
+        for r in range(n)
+    ]
+
+    fig = go.Figure(go.Heatmap(
+        z=matrix, x=names, y=names,
+        colorscale="RdBu_r", zmin=-1, zmax=1,
+        customdata=custom,
+        hovertemplate=(
+            "<b>X: %{x}</b><br>%{customdata[0]}<br>"
+            "<b>Y: %{y}</b><br>%{customdata[1]}<br>"
+            "<b>%{customdata[2]}: %{z:.4f}</b><extra></extra>"
+        ),
+        showscale=False,
+    ))
+    fig.update_layout(
+        title="Feature Correlation Matrix",
+        height=max(400, n * 28),
+        margin=dict(t=40, b=20),
     )
-    fig.update_layout(height=max(400, len(names) * 28), margin=dict(t=40, b=20))
     fig.update_xaxes(tickangle=-45, tickfont_size=9)
     fig.update_yaxes(tickfont_size=9)
     return fig
@@ -1274,12 +1302,11 @@ with tab_ml:
                 .sort_values("importance_gain")
                 .reset_index(drop=True)
             )
-            _cat_fi = d.get("catalog")
+            _cat_fi   = d.get("catalog")
+            _desc_map: dict = {}
             if _cat_fi is not None and not _cat_fi.empty and "피처명" in _cat_fi.columns:
                 _desc_map = _cat_fi.set_index("피처명")["설명"].to_dict()
-                fi_df["_desc"] = fi_df["feature"].map(lambda f: _desc_map.get(f) or "")
-            else:
-                fi_df["_desc"] = ""
+            fi_df["_desc"] = fi_df["feature"].map(lambda f: _desc_map.get(f) or "")
             fig_fi = _make_fi_bar_fig(fi_df.to_json(orient="records"), top_n_fi, fi_desc)
             # 바/버블 선택이 서로를 덮어쓰지 않도록 versioned key 사용
             _bar_ver  = st.session_state.get(f"fi_bar_ver_{sel}", 0)
@@ -1313,7 +1340,9 @@ with tab_ml:
                         methods      = feature_assoc.get("association_methods", {})
                         st.caption(f"Split: {split_label}  |  numeric↔numeric: {methods.get('numeric_numeric','?')}  |  cat↔cat: {methods.get('categorical_categorical','?')}  |  mixed: {methods.get('numeric_categorical','?')}")
                         fig_heatmap = _make_assoc_heatmap(
-                            json.dumps(feat_list), json.dumps(matrix), top_fi_names
+                            json.dumps(feat_list), json.dumps(matrix), top_fi_names,
+                            json.dumps(assoc.get("metric_matrix", [])),
+                            json.dumps(_desc_map),
                         )
                         st.plotly_chart(fig_heatmap, use_container_width=True)
                     else:
