@@ -1182,6 +1182,80 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 with tab_overview:
     st.markdown("#### Project Summary")
 
+    # ── 최신 실험 F1 불릿 차트 ───────────────────────────────────────────────
+    _bullet_rows: list[dict] = []
+
+    _ml_sorted = sorted(exp_data.items(),
+                        key=lambda kv: _woe_iv_folder_name(kv[1]["rep"]["ml_folder"]))
+    if _ml_sorted:
+        _, _ld = _ml_sorted[-1]
+        _lm = _ld["ml"].get("metrics", {})
+        _lm = _lm.get("metrics", _lm)
+        _lf1 = _lm.get("f1")
+        if _lf1 is not None:
+            _bullet_rows.append({
+                "label": f"ML  ({_woe_iv_folder_name(_ld['rep']['ml_folder']).upper()})",
+                "f1": _lf1, "color": "#4f9cf9",
+            })
+
+    _gnn_sorted = sorted(gnn_exp_data.items(),
+                         key=lambda kv: kv[1]["rep"]["folder"])
+    if _gnn_sorted:
+        _, _gd = _gnn_sorted[-1]
+        _gp = _gd["d"].get("parsed", {})
+        _ge = _gp.get("epochs", [])
+        if _ge:
+            _gdf = pd.DataFrame(_ge)
+            _gdf.index = _gdf.index + 1
+            _gdf.index.name = "epoch"
+            _gdf = _gdf.reset_index()
+            _glb = _gp.get("best_epoch")
+            if _glb is not None:
+                _gm = _gdf[_gdf["epoch"] == _glb].index
+                _gi = _gm[0] if len(_gm) else _gdf["val_auprc"].idxmax()
+            else:
+                _gi = _gdf["val_auprc"].idxmax()
+            _gf1 = _gdf.loc[_gi].get("test_f1")
+            if _gf1 is not None:
+                _bullet_rows.append({
+                    "label": f"GNN  ({_gd['rep']['folder']})",
+                    "f1": _gf1, "color": "#a78bfa",
+                })
+
+    if _bullet_rows:
+        _labels = [r["label"] for r in _bullet_rows]
+        _f1s    = [r["f1"]    for r in _bullet_rows]
+        _colors = [r["color"] for r in _bullet_rows]
+        _fig_b  = go.Figure()
+        _fig_b.add_trace(go.Bar(
+            y=_labels, x=[1.0] * len(_bullet_rows), orientation="h",
+            marker_color="rgba(255,255,255,0.06)", marker_line_width=0,
+            showlegend=False, hoverinfo="skip",
+        ))
+        _fig_b.add_trace(go.Bar(
+            y=_labels, x=_f1s, orientation="h",
+            marker_color=_colors, marker_line_width=0,
+            showlegend=False,
+            text=[f"F1  {v:.4f}" for v in _f1s],
+            textposition="outside",
+            textfont=dict(size=13, color="#e2e5ec"),
+            hovertemplate="<b>%{y}</b><br>F1: %{x:.4f}<extra></extra>",
+        ))
+        _fig_b.update_layout(
+            barmode="overlay",
+            height=110 + 50 * len(_bullet_rows),
+            margin=dict(t=10, b=10, l=10, r=130),
+            xaxis=dict(
+                range=[0, 1.18],
+                tickvals=[0, 0.25, 0.5, 0.75, 1.0],
+                gridcolor="rgba(255,255,255,0.08)",
+            ),
+            yaxis=dict(showgrid=False),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(_fig_b, use_container_width=True)
+
     _METRIC_COLORS = {"F1": "#4f9cf9", "AUPRC": "#a78bfa", "Recall": "#34d399"}
 
     # ── ML ────────────────────────────────────────────────────────────────────
