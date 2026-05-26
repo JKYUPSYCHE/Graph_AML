@@ -75,7 +75,7 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from ml_01_ml_io import (
+from ml_02_ml_io import (
     categorical_columns_from_manifest,
     feature_columns_hash,
     file_sha256,
@@ -88,8 +88,8 @@ from ml_01_ml_io import (
     resolve_project_path,
     save_json,
 )
-from ml_01_ml_metrics import confusion_matrix_frame, evaluate_at_threshold, select_threshold_by_f1
-from ml_01_ml_resource import (
+from ml_02_ml_metrics import confusion_matrix_frame, evaluate_at_threshold, select_threshold_by_f1
+from ml_02_ml_resource import (
     MemoryTracker,
     RuntimeTracker,
     collect_environment,
@@ -416,7 +416,7 @@ def validate_xgb(config: ValidationConfig) -> ValidationResult:
 
             if not scores_train_summary_path.exists():
                 raise FileNotFoundError(
-                    "scores train summary file not found. Rerun ml_01_ml_train.train_xgb() with logloss learning curve enabled: "
+                    "scores train summary file not found. Rerun ml_02_ml_train.train_xgb() with logloss learning curve enabled: "
                     f"{scores_train_summary_path}"
                 )
 

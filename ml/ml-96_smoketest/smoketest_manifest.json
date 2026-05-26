@@ -1,0 +1,12 @@
+{
+  "label_signal_injected": true,
+  "not_for": [
+    "model_performance",
+    "feature_importance",
+    "business_validation"
+  ],
+  "notes": "Synthetic fixtures validate ML pipeline I/O contracts only.",
+  "planned_file_count": 38,
+  "purpose": "schema_contract_smoketest_only",
+  "seed": 42
+}

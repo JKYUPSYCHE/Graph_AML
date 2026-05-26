@@ -1,0 +1,29 @@
+[
+  {
+    "ml_folder": "ml-00_baseline",
+    "experiment_id": "ml_00_test",
+    "run_id": "run_02_xgb_native_cat_15f",
+    "model_run_id": "default_00",
+    "status": "representative_final",
+    "selected_at": "2026-05-21",
+    "note": "ML-00, 파이프라인구축 및 코드 실행 준비용 기본 실험"
+  },
+  {
+    "ml_folder": "ml-01",
+    "experiment_id": "ml_01",
+    "run_id": "r02",
+    "model_run_id": "d00-fixparam",
+    "status": "candidate_val_only",
+    "selected_at": "2026-05-25",
+    "note": "ML-01, 파라미터 고정, 고카디널리티 컬럼(bank code, bank pair code)을 제외한 정책으로 학습"
+  },
+  {
+    "ml_folder": "ml-02",
+    "experiment_id": "ml_02",
+    "run_id": "r01",
+    "model_run_id": "d00-optuna",
+    "status": "candidate_val_only",
+    "selected_at": "2026-05-25",
+    "note": "ML-02, ML-01과 동일 정책, optuna 하이퍼 파라미터 튜닝 적용함"
+  }
+]
