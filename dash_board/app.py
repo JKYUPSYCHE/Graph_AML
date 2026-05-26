@@ -856,7 +856,6 @@ def _make_assoc_heatmap(
         showscale=False,
     ))
     fig.update_layout(
-        title="Feature Correlation Matrix",
         height=max(400, n * 28),
         margin=dict(t=40, b=20),
         yaxis=dict(scaleanchor="x", tickfont_size=9),
@@ -1028,7 +1027,8 @@ def _compute_mann_whitney(indiv_df: pd.DataFrame, feat_names: list[str]) -> pd.D
     except ImportError:
         _fdr = None  # scipy < 1.11 fallback: Bonferroni
 
-    comparisons = [("TP", "FP"), ("TP", "FN"), ("FP", "FN")]
+    comparisons = [("TP", "TN"), ("TP", "FP"), ("TP", "FN"),
+                   ("FP", "TN"), ("FN", "TN"), ("FP", "FN")]
     rows = []
     for g1, g2 in comparisons:
         d1 = indiv_df[indiv_df["group"] == g1][feat_names].values
@@ -1080,7 +1080,7 @@ def _make_mw_heatmap(indiv_json: str, feat_names: tuple) -> go.Figure:
         z=r_mat, x=comparisons, y=list(feat_names),
         text=t_mat, texttemplate="%{text}",
         colorscale="RdBu_r", zmid=0, zmin=-1, zmax=1,
-        colorbar=dict(title="r", tickvals=[-1, -0.5, 0, 0.5, 1], len=0.8),
+        showscale=False,
         hovertemplate="<b>%{y}</b><br>%{x}<br>r = %{z:.3f}<extra></extra>",
     ))
     fig.update_layout(
@@ -1872,7 +1872,7 @@ def _tab_ml_render():
 
             _sel_fi = _sel_fi_pre
 
-            with st.expander("Feature Association Heatmap"):
+            with st.expander("Feature Correlation Heatmap"):
                 if feature_assoc:
                     assoc     = feature_assoc.get("association", {})
                     feat_list = feature_assoc.get("features", [])  # top-level: [{name, feature_type}, ...]
