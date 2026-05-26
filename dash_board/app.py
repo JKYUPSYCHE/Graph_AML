@@ -1026,38 +1026,45 @@ if not valid_reps:
     st.stop()
 
 # 실험별 데이터 로드 + stale 상태 계산
-exp_data: dict[str, dict] = {}
-bar = st.progress(0, text="실험 데이터 로드 중...")
-for i, rep in enumerate(valid_reps):
-    ml_exp_folder_id = _get_folder_id(ml_folder_id, rep["ml_folder"])
-    run_folder_id    = _get_folder_id(ml_exp_folder_id, rep["run_id"]) if ml_exp_folder_id else ""
-    woe_iv_name      = _woe_iv_folder_name(rep["ml_folder"])
-    woe_iv_exp_id    = _get_folder_id(woe_iv_root_id, woe_iv_name) if woe_iv_root_id else ""
-    prefix           = _artifact_prefix(rep)
-    cat_fn           = _catalog_filename(rep["ml_folder"])
-    label            = _exp_label(rep)
+# valid_reps 내용으로 fingerprint를 만들어, 실험 목록이 바뀐 경우에만 재빌드
+_reps_fp = [(r["ml_folder"], _artifact_prefix(r)) for r in valid_reps]
+if st.session_state.get("_exp_data_fp") != _reps_fp:
+    _exp_data_build: dict[str, dict] = {}
+    bar = st.progress(0, text="실험 데이터 로드 중...")
+    for i, rep in enumerate(valid_reps):
+        ml_exp_folder_id = _get_folder_id(ml_folder_id, rep["ml_folder"])
+        run_folder_id    = _get_folder_id(ml_exp_folder_id, rep["run_id"]) if ml_exp_folder_id else ""
+        woe_iv_name      = _woe_iv_folder_name(rep["ml_folder"])
+        woe_iv_exp_id    = _get_folder_id(woe_iv_root_id, woe_iv_name) if woe_iv_root_id else ""
+        prefix           = _artifact_prefix(rep)
+        cat_fn           = _catalog_filename(rep["ml_folder"])
+        label            = _exp_label(rep)
 
-    woe     = _load_woe_results(woe_iv_exp_id)
-    catalog = _load_catalog(ml_exp_folder_id, cat_fn)
-    cached_prefix = woe.get("meta", {}).get("prefix") if woe else None
+        woe     = _load_woe_results(woe_iv_exp_id)
+        catalog = _load_catalog(ml_exp_folder_id, cat_fn)
+        cached_prefix = woe.get("meta", {}).get("prefix") if woe else None
 
-    if not woe or "iv_df" not in woe:
-        stale_status = "no_woe"
-    elif cached_prefix != prefix:
-        stale_status = "stale"
-    else:
-        stale_status = "fresh"
+        if not woe or "iv_df" not in woe:
+            stale_status = "no_woe"
+        elif cached_prefix != prefix:
+            stale_status = "stale"
+        else:
+            stale_status = "fresh"
 
-    exp_data[label] = {
-        "rep":          rep,
-        "ml":           _load_ml_results(run_folder_id, prefix) if run_folder_id else {},
-        "woe":          woe,
-        "catalog":      catalog,
-        "stale_status": stale_status,
-        "prefix":       prefix,
-    }
-    bar.progress((i + 1) / len(valid_reps), text=f"로드: {rep['ml_folder']}")
-bar.empty()
+        _exp_data_build[label] = {
+            "rep":          rep,
+            "ml":           _load_ml_results(run_folder_id, prefix) if run_folder_id else {},
+            "woe":          woe,
+            "catalog":      catalog,
+            "stale_status": stale_status,
+            "prefix":       prefix,
+        }
+        bar.progress((i + 1) / len(valid_reps), text=f"로드: {rep['ml_folder']}")
+    bar.empty()
+    st.session_state["exp_data"]    = _exp_data_build
+    st.session_state["_exp_data_fp"] = _reps_fp
+
+exp_data: dict[str, dict] = st.session_state["exp_data"]
 
 if not exp_data:
     st.warning("로드 가능한 실험이 없습니다.")
