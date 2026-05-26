@@ -1304,9 +1304,9 @@ with tab_ml:
 
             with st.expander("Feature Association Heatmap"):
                 if feature_assoc:
-                    assoc    = feature_assoc.get("association", {})
-                    feat_list = assoc.get("features", [])
-                    matrix   = assoc.get("metric_matrix") or assoc.get("matrix", [])
+                    assoc     = feature_assoc.get("association", {})
+                    feat_list = feature_assoc.get("features", [])  # top-level: [{name, feature_type}, ...]
+                    matrix    = assoc.get("metric_matrix") or assoc.get("matrix", [])
                     if feat_list and matrix:
                         top_fi_names = tuple(fi_df["feature"].tolist())
                         split_label  = feature_assoc.get("split", "?")
