@@ -1253,13 +1253,28 @@ with tab_overview:
                     "<i>%{customdata}</i><extra></extra>"
                 ),
             ))
+        # x label 호버용 투명 마커 (description 표시)
+        desc_map = df_ov.drop_duplicates("exp").set_index("exp")["description"]
+        fig.add_trace(go.Scatter(
+            x=exps,
+            y=[0] * len(exps),
+            mode="markers",
+            marker=dict(opacity=0, size=16),
+            customdata=[desc_map.get(e, "") for e in exps],
+            hovertemplate="<b>%{x}</b><br><i>%{customdata}</i><extra></extra>",
+            showlegend=False,
+            name="",
+        ))
         fig.update_layout(
             title=title,
             height=300,
             margin=dict(t=40, b=20),
             xaxis=dict(categoryorder="array", categoryarray=exps),
             yaxis=dict(range=[0, 1]),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                itemclick="toggleothers", itemdoubleclick="toggle",
+            ),
         )
         st.plotly_chart(fig, use_container_width=True)
 
