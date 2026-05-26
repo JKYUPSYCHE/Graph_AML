@@ -1163,7 +1163,7 @@ with tab_ml:
                 rows = [list(_p.items())[i:i+n_cols] for i in range(0, len(_p), n_cols)]
                 for row in rows:
                     for col, (k, v) in zip(st.columns(n_cols), row):
-                        col.metric(k, v)
+                        col.metric(k, v if isinstance(v, (int, float, str)) else str(v))
 
         st.divider()
 
