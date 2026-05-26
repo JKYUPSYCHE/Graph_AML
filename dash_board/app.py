@@ -1313,6 +1313,7 @@ with tab_overview:
                 x=df_time["exp"],
                 y=df_time["time_sec"],
                 name="학습시간 (s)",
+                width=0.3,
                 marker_color="rgba(255,200,80,0.25)",
                 marker_line=dict(color="rgba(255,200,80,0.6)", width=1),
                 customdata=df_time["description"],
