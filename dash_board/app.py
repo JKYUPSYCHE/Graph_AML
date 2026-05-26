@@ -474,8 +474,8 @@ def _is_valid_rep(rep: dict) -> bool:
 
 
 def _exp_label(rep: dict) -> str:
-    note = rep.get("note", "")
-    return f"{_woe_iv_folder_name(rep['ml_folder'])}  {('— ' + note) if note else ''}".strip()
+    desc = rep.get("description", "")
+    return f"{_woe_iv_folder_name(rep['ml_folder'])}  {('— ' + desc) if desc else ''}".strip()
 
 
 # ── Data loaders ───────────────────────────────────────────────────────────
@@ -702,9 +702,9 @@ def _load_gnn_representatives(project_folder_id: str) -> list[dict]:
 
 
 def _gnn_exp_label(rep: dict) -> str:
-    note   = rep.get("note", "")
+    desc   = rep.get("description", "")
     folder = rep.get("folder", "")
-    return f"{folder}  {('— ' + note) if note else ''}".strip()
+    return f"{folder}  {('— ' + desc) if desc else ''}".strip()
 
 
 @st.cache_data(ttl=3600)
@@ -1174,6 +1174,9 @@ with tab_gnn:
             sel_gnn_label = st.selectbox("실험 선택", _gnn_labels, key="gnn_sel",
                                          label_visibility="collapsed")
             sel_gnn_rep   = gnn_reps[_gnn_labels.index(sel_gnn_label)]
+            _gnn_note = sel_gnn_rep.get("note", "")
+            if _gnn_note:
+                st.caption(f"**Note**: {_gnn_note}")
             _render_report("GNN Result", sel_gnn_rep["folder"])
             st.divider()
             with st.spinner("GNN 실험 로드 중..."):
@@ -1366,8 +1369,10 @@ with tab_ml:
     rep = d["rep"]
     ml  = d["ml"]
 
-    note = rep.get("note", "")
+    _note = rep.get("note", "")
     st.caption(f"**Status**: {rep.get('status', '—')}")
+    if _note:
+        st.caption(f"**Note**: {_note}")
 
     _render_report("ML Result", _woe_iv_folder_name(rep["ml_folder"]))
     st.divider()
