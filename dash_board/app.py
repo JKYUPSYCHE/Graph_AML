@@ -1242,6 +1242,7 @@ with tab_overview:
         if epochs:
             _ep_df = pd.DataFrame(epochs)
             _ep_df.index = _ep_df.index + 1
+            _ep_df.index.name = "epoch"
             _ep_df = _ep_df.reset_index()
             _log_best = parsed.get("best_epoch")
             if _log_best is not None:
