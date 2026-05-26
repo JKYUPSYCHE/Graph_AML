@@ -1182,7 +1182,7 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 with tab_overview:
     st.markdown("#### 실험 성능 요약")
 
-    _BAR_COLORS = {"F1": "#4f9cf9", "AUPRC": "#a78bfa", "Recall": "#34d399"}
+    _METRIC_COLORS = {"F1": "#4f9cf9", "AUPRC": "#a78bfa", "Recall": "#34d399"}
 
     def _overview_bar(rows: list[dict], title: str) -> None:
         if not rows:
@@ -1190,7 +1190,7 @@ with tab_overview:
             return
         df_ov = pd.DataFrame(rows)
         fig = go.Figure()
-        for metric, color in _BAR_COLORS.items():
+        for metric, color in _METRIC_COLORS.items():
             sub = df_ov[df_ov["metric"] == metric]
             fig.add_trace(go.Bar(
                 x=sub["exp"],
@@ -1259,8 +1259,44 @@ with tab_overview:
                 if val is not None:
                     gnn_rows.append({"exp": exp, "metric": metric, "value": val, "description": desc})
 
+    def _overview_line(rows: list[dict], title: str) -> None:
+        if not rows:
+            return
+        df_ov  = pd.DataFrame(rows)
+        exps   = df_ov["exp"].unique().tolist()
+        fig = go.Figure()
+        for metric, color in _METRIC_COLORS.items():
+            sub = df_ov[df_ov["metric"] == metric]
+            fig.add_trace(go.Scatter(
+                x=sub["exp"],
+                y=sub["value"],
+                mode="lines+markers",
+                name=metric,
+                line=dict(color=color, width=2),
+                marker=dict(size=8, color=color),
+                customdata=sub["description"],
+                hovertemplate=(
+                    "<b>%{x}</b><br>"
+                    f"{metric}: " + "%{y:.4f}<br>"
+                    "<i>%{customdata}</i><extra></extra>"
+                ),
+            ))
+        fig.update_layout(
+            title=title,
+            height=300,
+            margin=dict(t=40, b=20),
+            xaxis=dict(categoryorder="array", categoryarray=exps),
+            yaxis=dict(range=[0, 1]),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
     _overview_bar(ml_rows, "ML")
     _overview_bar(gnn_rows, "GNN")
+    st.divider()
+    st.markdown("#### 실험 추세")
+    _overview_line(ml_rows, "ML Trend")
+    _overview_line(gnn_rows, "GNN Trend")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
