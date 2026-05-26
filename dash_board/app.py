@@ -782,7 +782,7 @@ def _make_assoc_heatmap(
         height=max(400, n * 28),
         margin=dict(t=40, b=20),
         yaxis=dict(scaleanchor="x", tickfont_size=9),
-        xaxis=dict(showticklabels=False),
+        xaxis=dict(showticklabels=False, ticks=""),
     )
     return fig
 
