@@ -1071,26 +1071,29 @@ def _make_mw_heatmap(indiv_json: str, feat_names: tuple) -> go.Figure:
     }
     comparisons     = mw_df["comparison"].unique().tolist()
     comparisons_lbl = [_comp_labels.get(c, c) for c in comparisons]
-    r_mat, t_mat = [], []
+    r_mat, t_mat, p_mat = [], [], []
     for f in feat_names:
-        r_row, t_row = [], []
+        r_row, t_row, p_row = [], [], []
         for c in comparisons:
             sub = mw_df[(mw_df["feature"] == f) & (mw_df["comparison"] == c)]
             if sub.empty:
-                r_row.append(None); t_row.append("")
+                r_row.append(None); t_row.append(""); p_row.append(None)
             else:
                 rv = sub.iloc[0]["r"]
                 r_row.append(rv)
                 t_row.append(f"{rv:+.2f}{sub.iloc[0]['sig']}")
+                p_row.append(sub.iloc[0]["p_adj"])
         r_mat.append(r_row)
         t_mat.append(t_row)
+        p_mat.append(p_row)
 
     fig = go.Figure(go.Heatmap(
         z=r_mat, x=comparisons_lbl, y=list(feat_names),
         text=t_mat, texttemplate="%{text}",
+        customdata=p_mat,
         colorscale="RdBu_r", zmid=0, zmin=-1, zmax=1,
         showscale=False,
-        hovertemplate="<b>%{y}</b><br>%{x}<br>r = %{z:.3f}<extra></extra>",
+        hovertemplate="<b>%{y}</b><br>%{x}<br>r = %{z:.3f}<br>p (FDR) = %{customdata:.4f}<extra></extra>",
     ))
     fig.update_layout(
         height=max(260, 42 * len(feat_names) + 110),
