@@ -1195,7 +1195,7 @@ with tab_overview:
         if _lf1 is not None:
             _bullet_rows.append({
                 "label": f"ML  ({_woe_iv_folder_name(_ld['rep']['ml_folder']).upper()})",
-                "f1": _lf1, "color": "#f97316",
+                "f1": _lf1, "color": "#fbbf24",
             })
 
     _gnn_sorted = sorted(gnn_exp_data.items(),
@@ -1219,7 +1219,7 @@ with tab_overview:
             if _gf1 is not None:
                 _bullet_rows.append({
                     "label": f"GNN  ({_gd['rep']['folder']})",
-                    "f1": _gf1, "color": "#e879f9",
+                    "f1": _gf1, "color": "#f43f5e",
                 })
 
     if _bullet_rows:
@@ -1250,7 +1250,7 @@ with tab_overview:
                 tickvals=[0, 0.25, 0.5, 0.75, 1.0],
                 gridcolor="rgba(255,255,255,0.08)",
             ),
-            yaxis=dict(showgrid=False),
+            yaxis=dict(showgrid=False, autorange="reversed"),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
