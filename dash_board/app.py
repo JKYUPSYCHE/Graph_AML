@@ -1135,10 +1135,6 @@ _default_idx = 0
 
 # GNN 실험 목록 로드
 gnn_reps = _load_gnn_representatives(PROJECT_FOLDER_ID)
-if not gnn_reps:
-    _gnn_fallback_names = _list_gnn_experiments(PROJECT_FOLDER_ID)
-else:
-    _gnn_fallback_names = []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1166,30 +1162,22 @@ with tab_overview:
 # 탭 1: GNN 결과
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_gnn:
-    if not gnn_reps and not _gnn_fallback_names:
-        st.info("Drive의 gnn 폴더에서 실험을 찾을 수 없습니다.")
+    if not gnn_reps:
+        st.info("gnn_leaderboard_representatives.json에서 실험을 찾을 수 없습니다.")
     else:
-        if gnn_reps:
-            _gnn_labels   = [_gnn_exp_label(r) for r in gnn_reps]
-            sel_gnn_label = st.selectbox("실험 선택", _gnn_labels, key="gnn_sel",
-                                         label_visibility="collapsed")
-            sel_gnn_rep   = gnn_reps[_gnn_labels.index(sel_gnn_label)]
-            _gnn_note = sel_gnn_rep.get("note", "")
-            if _gnn_note:
-                st.caption(f"**Note**: {_gnn_note}")
-            _render_report("GNN Result", sel_gnn_rep["folder"])
-            st.divider()
-            with st.spinner("GNN 실험 로드 중..."):
-                gnn_d = _load_gnn_experiment_rep(
-                    PROJECT_FOLDER_ID, sel_gnn_rep["folder"], sel_gnn_rep["run_id"]
-                )
-        else:
-            sel_gnn = st.selectbox("실험 선택", _gnn_fallback_names, key="gnn_sel",
-                                   label_visibility="collapsed")
-            _render_report("GNN Result", sel_gnn)
-            st.divider()
-            with st.spinner("GNN 실험 로드 중..."):
-                gnn_d = _load_gnn_experiment(PROJECT_FOLDER_ID, sel_gnn)
+        _gnn_labels   = [_gnn_exp_label(r) for r in gnn_reps]
+        sel_gnn_label = st.selectbox("실험 선택", _gnn_labels, key="gnn_sel",
+                                     label_visibility="collapsed")
+        sel_gnn_rep   = gnn_reps[_gnn_labels.index(sel_gnn_label)]
+        _gnn_note = sel_gnn_rep.get("note", "")
+        if _gnn_note:
+            st.caption(f"**Note**: {_gnn_note}")
+        _render_report("GNN Result", sel_gnn_rep["folder"])
+        st.divider()
+        with st.spinner("GNN 실험 로드 중..."):
+            gnn_d = _load_gnn_experiment_rep(
+                PROJECT_FOLDER_ID, sel_gnn_rep["folder"], sel_gnn_rep["run_id"]
+            )
 
         args   = gnn_d.get("args", {})
         parsed = gnn_d.get("parsed", {})
