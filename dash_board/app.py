@@ -688,6 +688,67 @@ def _load_gnn_experiment(project_folder_id: str, exp_name: str) -> dict:
     return out
 
 
+@st.cache_data(ttl=3600)
+def _load_gnn_representatives(project_folder_id: str) -> list[dict]:
+    gnn_id = _get_folder_id(project_folder_id, "gnn")
+    if not gnn_id:
+        return []
+    files = _drive_list(
+        f"'{gnn_id}' in parents"
+        " and name='gnn_leaderboard_representatives.json'"
+        " and trashed=false"
+    )
+    return _download_json(files[0]["id"]) if files else []
+
+
+def _gnn_exp_label(rep: dict) -> str:
+    note   = rep.get("note", "")
+    folder = rep.get("folder", "")
+    return f"{folder}  {('— ' + note) if note else ''}".strip()
+
+
+@st.cache_data(ttl=3600)
+def _load_gnn_experiment_rep(project_folder_id: str, folder: str, run_id: str) -> dict:
+    gnn_id = _get_folder_id(project_folder_id, "gnn")
+    if not gnn_id:
+        return {}
+    exp_id = _get_folder_id(gnn_id, folder)
+    if not exp_id:
+        return {}
+    run_folder_id = _get_folder_id(exp_id, run_id)
+    if not run_folder_id:
+        return {}
+    out: dict = {}
+
+    logs_id = _get_folder_id(run_folder_id, "logs")
+    if logs_id:
+        lf      = _list_files(logs_id)
+        log_fns = [n for n in lf if n.endswith(".log")]
+        if log_fns:
+            r = requests.get(
+                f"https://drive.google.com/uc?export=download&id={lf[log_fns[0]]}",
+                timeout=60,
+            )
+            if r.ok:
+                out["parsed"] = _parse_gnn_log(r.text)
+
+    models_id = _get_folder_id(run_folder_id, "models")
+    if models_id:
+        mf       = _list_files(models_id)
+        args_fns = [n for n in mf if n.endswith("_args.json")]
+        if args_fns:
+            out["args"] = _download_json(mf[args_fns[0]])
+
+    fi_id = _get_folder_id(run_folder_id, "feature_importance")
+    if fi_id:
+        fi_files = _list_files(fi_id)
+        fi_fns   = [n for n in fi_files if n.endswith("_feature_importance.csv")]
+        if fi_fns:
+            out["feature_importance"] = _download_csv(fi_files[fi_fns[0]])
+
+    return out
+
+
 # ── Figure cache helpers ───────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600)
@@ -1073,7 +1134,11 @@ exp_labels   = list(exp_data.keys())
 _default_idx = 0
 
 # GNN 실험 목록 로드
-gnn_exp_names = _list_gnn_experiments(PROJECT_FOLDER_ID)
+gnn_reps = _load_gnn_representatives(PROJECT_FOLDER_ID)
+if not gnn_reps:
+    _gnn_fallback_names = _list_gnn_experiments(PROJECT_FOLDER_ID)
+else:
+    _gnn_fallback_names = []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1101,17 +1166,27 @@ with tab_overview:
 # 탭 1: GNN 결과
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_gnn:
-    if not gnn_exp_names:
-        st.info("Drive의 gnn/logs 폴더에서 실험을 찾을 수 없습니다.")
+    if not gnn_reps and not _gnn_fallback_names:
+        st.info("Drive의 gnn 폴더에서 실험을 찾을 수 없습니다.")
     else:
-        sel_gnn = st.selectbox("실험 선택", gnn_exp_names, key="gnn_sel",
-                               label_visibility="collapsed")
-
-        _render_report("GNN Result", sel_gnn)
-        st.divider()
-
-        with st.spinner("GNN 실험 로드 중..."):
-            gnn_d  = _load_gnn_experiment(PROJECT_FOLDER_ID, sel_gnn)
+        if gnn_reps:
+            _gnn_labels   = [_gnn_exp_label(r) for r in gnn_reps]
+            sel_gnn_label = st.selectbox("실험 선택", _gnn_labels, key="gnn_sel",
+                                         label_visibility="collapsed")
+            sel_gnn_rep   = gnn_reps[_gnn_labels.index(sel_gnn_label)]
+            _render_report("GNN Result", sel_gnn_rep["folder"])
+            st.divider()
+            with st.spinner("GNN 실험 로드 중..."):
+                gnn_d = _load_gnn_experiment_rep(
+                    PROJECT_FOLDER_ID, sel_gnn_rep["folder"], sel_gnn_rep["run_id"]
+                )
+        else:
+            sel_gnn = st.selectbox("실험 선택", _gnn_fallback_names, key="gnn_sel",
+                                   label_visibility="collapsed")
+            _render_report("GNN Result", sel_gnn)
+            st.divider()
+            with st.spinner("GNN 실험 로드 중..."):
+                gnn_d = _load_gnn_experiment(PROJECT_FOLDER_ID, sel_gnn)
 
         args   = gnn_d.get("args", {})
         parsed = gnn_d.get("parsed", {})
