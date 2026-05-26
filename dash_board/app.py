@@ -1228,10 +1228,13 @@ with tab_gnn:
                         hovertemplate="<b>%{x}</b><br>Mean: %{y:.4f}<br>Std: %{error_y.array:.4f}<extra></extra>",
                     ), row=r, col=c)
 
+                y_max = (fi_long["saliency"] + fi_long["std"]).max() * 1.15
+                y_min = max(0, (fi_long["saliency"] - fi_long["std"]).min() * 0.9)
                 fig_gnn_fi.update_layout(
                     height=660, margin=dict(t=60, b=60),
                 )
                 fig_gnn_fi.update_xaxes(tickangle=-40)
+                fig_gnn_fi.update_yaxes(range=[y_min, y_max])
                 fig_gnn_fi.update_yaxes(title_text="Mean Saliency", col=1)
                 st.plotly_chart(fig_gnn_fi, use_container_width=True)
             else:
