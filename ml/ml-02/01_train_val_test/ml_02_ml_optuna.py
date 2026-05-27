@@ -20,6 +20,17 @@ from ml_02_ml_val import ValidationConfig, ValidationResult, validate_xgb
 
 ALLOWED_SELECTION_METRICS = {"average_precision", "f1", "recall", "precision"}
 SMOKE_SAMPLE_ROWS = 100_000
+REQUIRED_XGB_PARAM_KEYS = {
+    "n_estimators",
+    "learning_rate",
+    "max_depth",
+    "min_child_weight",
+    "subsample",
+    "colsample_bytree",
+    "reg_lambda",
+    "reg_alpha",
+    "gamma",
+}
 
 
 class MissingOptionalDependencyError(RuntimeError):
@@ -38,6 +49,8 @@ class OptunaPipelineConfig:
     label_col: str = "label"
     sample_rows: Optional[int] = None
     allow_nan: bool = False
+    export_feature_assoc: bool = False
+    export_prediction_scores: bool = False
     model_file_name: str = "model.pkl"
     feature_columns_file_name: str = "feature_columns.json"
     train_summary_file_name: str = "train_summary.json"
@@ -124,6 +137,13 @@ def _metric_from_validation(result: ValidationResult, metric_name: str) -> float
     return float(metrics[metric_name])
 
 
+def _actual_trial_params(best_trial: Any, study_best_params: dict[str, Any]) -> dict[str, Any]:
+    trial_params = best_trial.user_attrs.get("params")
+    if trial_params is not None:
+        return dict(trial_params)
+    return dict(study_best_params)
+
+
 def _run_train_val_trial(
     config: OptunaPipelineConfig,
     *,
@@ -187,7 +207,7 @@ def _write_trials_summary(study: Any, output_dir: Path) -> tuple[Path, Path]:
             "trial_count": len(study.trials),
             "best_trial_number": int(study.best_trial.number),
             "best_value": float(study.best_value),
-            "best_params": dict(study.best_params),
+            "best_params": _actual_trial_params(study.best_trial, dict(study.best_params)),
         },
         study_summary_path,
     )
@@ -233,6 +253,7 @@ def _run_study(
             sample_rows=sample_rows,
         )
         metric_value = _metric_from_validation(val_result, config.selection_metric)
+        trial.set_user_attr("params", params)
         trial.set_user_attr("trial_dir", str(trial_dir))
         trial.set_user_attr("sample_rows", sample_rows)
         trial.set_user_attr("sampled", sample_rows is not None)
@@ -273,7 +294,7 @@ def _run_final_train_val(
             n_jobs=config.n_jobs,
             accelerator=config.accelerator,
             encoding_manifest_path=config.encoding_manifest_path,
-            export_feature_assoc=False,
+            export_feature_assoc=config.export_feature_assoc,
             **best_params,
         )
     )
@@ -293,11 +314,27 @@ def _run_final_train_val(
             allow_nan=config.allow_nan,
             overwrite=config.overwrite,
             encoding_manifest_path=config.encoding_manifest_path,
-            export_feature_assoc=False,
-            export_prediction_scores=False,
+            export_feature_assoc=config.export_feature_assoc,
+            export_prediction_scores=config.export_prediction_scores,
         )
     )
     return train_result, val_result
+
+
+def _resolve_best_params(best_trial: Any, study_best_params: dict[str, Any]) -> dict[str, Any]:
+    """Return actual trial params, including fixed search-space params."""
+
+    best_params = _actual_trial_params(best_trial, study_best_params)
+    best_params.setdefault("early_stopping_rounds", 40)
+    missing = sorted(REQUIRED_XGB_PARAM_KEYS - best_params.keys())
+    if missing:
+        raise ValueError(
+            "Missing required XGB best params. "
+            "This usually means the Optuna search space returned fixed params "
+            "without storing them on the best trial. "
+            f"missing={missing}, best_trial_number={best_trial.number}"
+        )
+    return best_params
 
 
 def run_ml02_optuna_pipeline(config: OptunaPipelineConfig) -> OptunaPipelineResult:
@@ -329,9 +366,8 @@ def run_ml02_optuna_pipeline(config: OptunaPipelineConfig) -> OptunaPipelineResu
         sample_rows=None,
     )
 
-    best_params = dict(full_study.best_params)
-    best_params["early_stopping_rounds"] = 50
     best_trial = full_study.best_trial
+    best_params = _resolve_best_params(best_trial, dict(full_study.best_params))
     full_dir = config.tuning_output_dir / "full"
     best_params_path = full_dir / "best_params.json"
     best_trial_summary_path = full_dir / "best_trial_summary.json"
