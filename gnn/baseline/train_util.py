@@ -82,11 +82,11 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
 
         if time_attr:
             ts_tr  = {'time_attr': time_attr, 'temporal_strategy': temporal_strategy,
-                      'edge_label_time': tr_data['node', 'to', 'node'].timestamps}
+                      'edge_label_time': tr_data['node', 'to', 'node'].timestamps.long()}
             ts_val = {'time_attr': time_attr, 'temporal_strategy': temporal_strategy,
-                      'edge_label_time': val_data['node', 'to', 'node'].timestamps[val_inds]}
+                      'edge_label_time': val_data['node', 'to', 'node'].timestamps[val_inds].long()}
             ts_te  = {'time_attr': time_attr, 'temporal_strategy': temporal_strategy,
-                      'edge_label_time': te_data['node', 'to', 'node'].timestamps[te_inds]}
+                      'edge_label_time': te_data['node', 'to', 'node'].timestamps[te_inds].long()}
         else:
             ts_tr = ts_val = ts_te = {}
 
@@ -124,11 +124,11 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
     else:
         if time_attr:
             ts_tr  = {'time_attr': time_attr, 'temporal_strategy': temporal_strategy,
-                      'edge_label_time': tr_data.timestamps}
+                      'edge_label_time': tr_data.timestamps.long()}
             ts_val = {'time_attr': time_attr, 'temporal_strategy': temporal_strategy,
-                      'edge_label_time': val_data.timestamps[val_inds]}
+                      'edge_label_time': val_data.timestamps[val_inds].long()}
             ts_te  = {'time_attr': time_attr, 'temporal_strategy': temporal_strategy,
-                      'edge_label_time': te_data.timestamps[te_inds]}
+                      'edge_label_time': te_data.timestamps[te_inds].long()}
         else:
             ts_tr = ts_val = ts_te = {}
 
