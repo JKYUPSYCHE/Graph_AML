@@ -76,6 +76,15 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
     temporal_strategy = getattr(args, 'temporal_strategy', None)
     time_attr = "timestamps" if temporal_strategy else None
 
+    if time_attr:
+        # PyG temporal sampler requires Long timestamps on the data objects themselves
+        for d in [tr_data, val_data, te_data]:
+            if isinstance(d, HeteroData):
+                d['node', 'to', 'node'].timestamps     = d['node', 'to', 'node'].timestamps.long()
+                d['node', 'rev_to', 'node'].timestamps = d['node', 'rev_to', 'node'].timestamps.long()
+            else:
+                d.timestamps = d.timestamps.long()
+
     if isinstance(tr_data, HeteroData):
         tr_edge_label_index = tr_data['node', 'to', 'node'].edge_index
         tr_edge_label = tr_data['node', 'to', 'node'].y
