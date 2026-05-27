@@ -1,9 +1,9 @@
 """
-gnn/baseline/xai.py
+gnn/clustergcn/xai.py
 
-TP / FP / FN / TN 그룹별 gradient saliency 기반 엣지 피처 중요도 분석
-  - 그룹당 최대 N_SAMPLES(50)개 샘플링
-  - k-hop 서브그래프 고정 후 gradient saliency 계산
+TP / FP / FN / TN 그룹별 gradient saliency 기반 엣지 피처 중요도 분석 (ClusterGCN 버전)
+  - baseline과 달리 ClusterLoader 배치 기준 → input_id 대신 te_inds mask 사용
+  - k-hop 서브그래프 고정 후 gradient saliency 계산 (te_data homo GraphData 기준)
   - 그룹별 평균·표준편차를 CSV로 저장
 """
 
@@ -16,6 +16,7 @@ import pandas as pd
 import torch
 from torch_geometric.data import HeteroData
 from torch_geometric.utils import k_hop_subgraph
+from train_util import homo_to_hetero
 
 _BASE_FEATURE_NAMES = [
     'amount__current__log1p',
@@ -39,44 +40,44 @@ def _feature_names(args):
     return names
 
 
-def _collect_predictions(loader, te_inds, model, device):
-    """loader 전체를 순회하며 (preds, gts, edge_inds) 수집."""
+def _collect_predictions(loader, te_inds, model, device, args):
+    """ClusterLoader 배치를 순회하며 test 엣지의 (preds, gts, edge_inds) 수집.
+
+    ClusterGCN에서는 input_id가 없으므로 te_inds mask로 test 엣지를 식별.
+    arange ID(edge_attr col 0) == te_data 내 엣지 인덱스이므로 einds로 바로 사용.
+    """
     model.eval()
     all_preds, all_gts, all_einds = [], [], []
 
     with torch.no_grad():
         for batch in tqdm.tqdm(loader, desc='[XAI] inference'):
-            inds_cpu  = te_inds.detach().cpu()
-            is_hetero = isinstance(batch, HeteroData)
+            # te_data 전체 엣지 중 test 엣지 식별 (arange ID == te_data 인덱스)
+            batch_arange = batch.edge_attr[:, 0].cpu()
+            mask         = torch.isin(batch_arange, te_inds.cpu())
 
-            if is_hetero:
-                input_id     = batch['node', 'to', 'node'].input_id.cpu()
-                batch_einds  = inds_cpu[input_id]
-                batch_eids   = loader.data['node', 'to', 'node'].edge_attr.cpu()[batch_einds, 0]
-                batch_arange = batch['node', 'to', 'node'].edge_attr[:, 0].cpu()
-                mask         = torch.isin(batch_arange, batch_eids)
-                batch['node', 'to', 'node'].edge_attr     = batch['node', 'to', 'node'].edge_attr[:, 1:]
-                batch['node', 'rev_to', 'node'].edge_attr = batch['node', 'rev_to', 'node'].edge_attr[:, 1:]
-                batch.to(device)
-                out = model(batch.x_dict, batch.edge_index_dict, batch.edge_attr_dict)
+            if mask.sum() == 0:
+                continue
+
+            if getattr(args, 'ego', False):
+                batch.x = torch.cat([batch.x, torch.ones(batch.x.shape[0], 1)], dim=1)
+
+            if getattr(args, 'reverse_mp', False):
+                hbatch = homo_to_hetero(batch, args)
+                hbatch['node', 'to', 'node'].edge_attr     = hbatch['node', 'to', 'node'].edge_attr[:, 1:]
+                hbatch['node', 'rev_to', 'node'].edge_attr = hbatch['node', 'rev_to', 'node'].edge_attr[:, 1:]
+                hbatch.to(device)
+                out = model(hbatch.x_dict, hbatch.edge_index_dict, hbatch.edge_attr_dict)
                 out = out[('node', 'to', 'node')][mask]
-                gts = batch['node', 'to', 'node'].y[mask].cpu()
+                gts = hbatch['node', 'to', 'node'].y[mask].cpu()
             else:
-                input_id     = batch.input_id.cpu()
-                batch_einds  = inds_cpu[input_id]
-                batch_eids   = loader.data.edge_attr.cpu()[batch_einds, 0]
-                batch_arange = batch.edge_attr[:, 0].cpu()
-                mask         = torch.isin(batch_arange, batch_eids)
                 batch.edge_attr = batch.edge_attr[:, 1:]
                 batch.to(device)
                 out = model(batch.x, batch.edge_index, batch.edge_attr)
                 out = out[mask]
                 gts = batch.y[mask].cpu()
 
-            # mask에 대응하는 te_data 엣지 인덱스 추출
-            masked_arange = batch_arange[mask]
-            id_map        = {eid.item(): idx.item() for eid, idx in zip(batch_eids, batch_einds)}
-            einds         = torch.tensor([id_map[x.item()] for x in masked_arange])
+            # arange ID가 곧 te_data 내 엣지 인덱스
+            einds = batch_arange[mask].long()
 
             all_preds.append(out.argmax(dim=-1).cpu())
             all_gts.append(gts)
@@ -222,7 +223,7 @@ def run_xai(te_loader, te_inds, model, te_data, device, args, out_dir,
 
     # Step 1: 예측 수집
     logging.info('[XAI] Step 1: 전체 test 예측 수집')
-    preds, gts, edge_inds = _collect_predictions(te_loader, te_inds, model, device)
+    preds, gts, edge_inds = _collect_predictions(te_loader, te_inds, model, device, args)
     logging.info(
         f'[XAI] TP={int(((preds==1)&(gts==1)).sum())} '
         f'FP={int(((preds==1)&(gts==0)).sum())} '
