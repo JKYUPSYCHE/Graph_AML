@@ -504,7 +504,7 @@ def _exp_label(rep: dict, is_rep: bool = False) -> str:
         return f"* {folder}{(' — ' + desc) if desc else ''}"
     run_id = rep.get("run_id", "")
     model_run_id = rep.get("model_run_id", "")
-    return f"   {folder} — {run_id}{model_run_id}"
+    return f"   {folder} — {run_id}{model_run_id}"
 
 
 # ── Data loaders ───────────────────────────────────────────────────────────
@@ -799,7 +799,7 @@ def _gnn_exp_label(rep: dict, is_rep: bool = False) -> str:
     if is_rep:
         desc = rep.get("description", "")
         return f"* {folder}{(' — ' + desc) if desc else ''}"
-    return f"  {folder} / {rep['run_id']}"
+    return f"   {folder} — {rep['run_id']}"
 
 
 
