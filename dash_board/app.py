@@ -1189,8 +1189,10 @@ def _compute_exp_data(rep: dict, ml_fid: str, woe_root_id: str) -> dict:
 
     ml_exp_fid  = _get_folder_id(ml_fid, rep["ml_folder"]) if ml_fid else ""
     run_fid     = _get_folder_id(ml_exp_fid, rep["run_id"]) if ml_exp_fid else ""
-    woe_iv_name = _woe_iv_folder_name(rep["ml_folder"])
-    woe_iv_fid  = _get_folder_id(woe_root_id, woe_iv_name) if woe_root_id else ""
+    woe_iv_name  = _woe_iv_folder_name(rep["ml_folder"])
+    _woe_base    = _get_folder_id(woe_root_id,  woe_iv_name)       if woe_root_id else ""
+    _woe_run     = _get_folder_id(_woe_base,    rep["run_id"])      if _woe_base   else ""
+    woe_iv_fid   = _get_folder_id(_woe_run,     rep["model_run_id"]) if _woe_run   else ""
     prefix      = _artifact_prefix(rep)
     cat_fn      = _catalog_filename(rep["ml_folder"])
 
