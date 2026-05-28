@@ -1088,6 +1088,30 @@ def _compute_mann_whitney(indiv_df: pd.DataFrame, feat_names: list[str]) -> pd.D
     return pd.DataFrame(rows)
 
 
+_MW_INTERP: dict[tuple, tuple[str, str]] = {
+    # (comparison, r>0) → (higher_group_label, interpretation)
+    ("TP vs TN", True):  ("TP >", "탐지된 이상거래에서 이 피처 saliency가 더 높음"),
+    ("TP vs TN", False): ("TN >", "모델이 정상 판별 시 이 피처를 더 강하게 사용"),
+    ("TP vs FP", True):  ("TP >", "이 피처가 정확한 이상탐지(TP)에 기여"),
+    ("TP vs FP", False): ("FP >", "오탐(FP)에서 이 피처가 더 강하게 활성화"),
+    ("TP vs FN", True):  ("TP >", "탐지 성공한 이상거래에서 이 피처 신호가 더 강함"),
+    ("TP vs FN", False): ("FN >", "미탐 케이스에서 이 피처 신호가 더 강함"),
+    ("FP vs TN", True):  ("FP >", "오탐(FP)이 정상보다 이 피처 더 활성화 (이례적)"),
+    ("FP vs TN", False): ("TN >", "정상(TN)이 오탐보다 이 피처 더 활성화\n→ 오탐은 이 피처 외 다른 요인으로 발생"),
+    ("FN vs TN", True):  ("FN >", "미탐(FN)이 정상보다 이 피처 더 활성화"),
+    ("FN vs TN", False): ("TN >", "정상(TN)이 미탐보다 이 피처 더 활성화\n→ 미탐은 이 피처 신호 부족으로 탐지 실패"),
+    ("FP vs FN", True):  ("FP >", "오탐(FP)이 미탐보다 이 피처 더 활성화"),
+    ("FP vs FN", False): ("FN >", "미탐(FN)이 오탐보다 이 피처 더 활성화"),
+}
+
+def _mw_effect_label(r: float) -> str:
+    a = abs(r)
+    if a >= 0.7: return "매우 강한 효과"
+    if a >= 0.5: return "강한 효과"
+    if a >= 0.3: return "중간 효과"
+    return "약한 효과"
+
+
 @st.cache_data(ttl=3600)
 def _make_mw_heatmap(indiv_json: str, feat_names: tuple) -> go.Figure:
     """Mann-Whitney effect size heatmap (rank-biserial r)."""
@@ -1107,29 +1131,38 @@ def _make_mw_heatmap(indiv_json: str, feat_names: tuple) -> go.Figure:
     }
     comparisons     = mw_df["comparison"].unique().tolist()
     comparisons_lbl = [_comp_labels.get(c, c) for c in comparisons]
-    r_mat, t_mat, p_mat = [], [], []
+    r_mat, t_mat, cd_mat = [], [], []
     for f in feat_names:
-        r_row, t_row, p_row = [], [], []
+        r_row, t_row, cd_row = [], [], []
         for c in comparisons:
             sub = mw_df[(mw_df["feature"] == f) & (mw_df["comparison"] == c)]
             if sub.empty:
-                r_row.append(None); t_row.append(""); p_row.append(None)
+                r_row.append(None); t_row.append(""); cd_row.append(["", "", ""])
             else:
-                rv = sub.iloc[0]["r"]
+                rv   = sub.iloc[0]["r"]
+                p    = sub.iloc[0]["p_adj"]
+                _, interp = _MW_INTERP.get((c, rv > 0), ("", ""))
                 r_row.append(rv)
                 t_row.append(f"{rv:+.2f}{sub.iloc[0]['sig']}")
-                p_row.append(sub.iloc[0]["p_adj"])
+                cd_row.append([f"{p:.4f}", interp, _mw_effect_label(rv)])
         r_mat.append(r_row)
         t_mat.append(t_row)
-        p_mat.append(p_row)
+        cd_mat.append(cd_row)
 
     fig = go.Figure(go.Heatmap(
         z=r_mat, x=comparisons_lbl, y=list(feat_names),
         text=t_mat, texttemplate="%{text}",
-        customdata=p_mat,
+        customdata=cd_mat,
         colorscale="RdBu_r", zmid=0, zmin=-1, zmax=1,
         showscale=False,
-        hovertemplate="<b>%{y}</b><br>%{x}<br>r = %{z:.3f}<br>p (FDR) = %{customdata:.4f}<extra></extra>",
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "%{x}<br>"
+            "<b>r = %{z:+.3f}</b>  <i>(%{customdata[2]})</i><br>"
+            "p (FDR) = %{customdata[0]}<br>"
+            "<br>%{customdata[1]}"
+            "<extra></extra>"
+        ),
     ))
     fig.update_layout(
         height=max(260, 42 * len(feat_names) + 110),
