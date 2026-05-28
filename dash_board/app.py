@@ -1081,7 +1081,7 @@ def _compute_mann_whitney(indiv_df: pd.DataFrame, feat_names: list[str]) -> pd.D
         p_adj = _fdr(p_arr, method="bh") if _fdr is not None else _np.minimum(p_arr * len(p_arr), 1.0)
         for f, u, pa in zip(feat_names, u_vals, p_adj):
             n1, n2 = len(d1), len(d2)
-            r = 1 - (2 * u) / (n1 * n2)  # rank-biserial: 양수 = g1이 더 높음
+            r = (2 * u) / (n1 * n2) - 1   # rank-biserial = (U1-U2)/(n1*n2): 양수 = g1이 더 높음
             rows.append({"comparison": f"{g1} vs {g2}", "feature": f,
                          "r": round(r, 3), "p_adj": float(pa),
                          "sig": "*" if pa < 0.05 else ""})
@@ -1089,19 +1089,19 @@ def _compute_mann_whitney(indiv_df: pd.DataFrame, feat_names: list[str]) -> pd.D
 
 
 _MW_INTERP: dict[tuple, tuple[str, str]] = {
-    # (comparison, r>0) → (higher_group_label, interpretation)
-    ("TP vs TN", True):  ("TP >", "탐지된 이상거래에서 이 피처 saliency가 더 높음"),
-    ("TP vs TN", False): ("TN >", "모델이 정상 판별 시 이 피처를 더 강하게 사용"),
-    ("TP vs FP", True):  ("TP >", "이 피처가 정확한 이상탐지(TP)에 기여"),
-    ("TP vs FP", False): ("FP >", "오탐(FP)에서 이 피처가 더 강하게 활성화"),
-    ("TP vs FN", True):  ("TP >", "탐지 성공한 이상거래에서 이 피처 신호가 더 강함"),
-    ("TP vs FN", False): ("FN >", "미탐 케이스에서 이 피처 신호가 더 강함"),
-    ("FP vs TN", True):  ("FP >", "오탐(FP)이 정상보다 이 피처 더 활성화 (이례적)"),
-    ("FP vs TN", False): ("TN >", "정상(TN)이 오탐보다 이 피처 더 활성화\n→ 오탐은 이 피처 외 다른 요인으로 발생"),
-    ("FN vs TN", True):  ("FN >", "미탐(FN)이 정상보다 이 피처 더 활성화"),
-    ("FN vs TN", False): ("TN >", "정상(TN)이 미탐보다 이 피처 더 활성화\n→ 미탐은 이 피처 신호 부족으로 탐지 실패"),
-    ("FP vs FN", True):  ("FP >", "오탐(FP)이 미탐보다 이 피처 더 활성화"),
-    ("FP vs FN", False): ("FN >", "미탐(FN)이 오탐보다 이 피처 더 활성화"),
+    # (comparison, r>0) → (_, interpretation)  |  r>0 = 앞 그룹 saliency 높음
+    ("TP vs TN", True):  ("", "TP > TN: 이상 탐지 시 이 피처가 정상 판별보다 더 강하게 활성화"),
+    ("TP vs TN", False): ("", "TN > TP: 정상 판별 시 이 피처가 더 강하게 활성화"),
+    ("TP vs FP", True):  ("", "TP > FP: 정탐이 오탐보다 이 피처 saliency 높음"),
+    ("TP vs FP", False): ("", "FP > TP: 오탐(FP)에서 이 피처가 더 강하게 활성화 → 오탐 원인 후보"),
+    ("TP vs FN", True):  ("", "TP > FN: 탐지 성공한 이상거래에서 이 피처 신호가 더 강함"),
+    ("TP vs FN", False): ("", "FN > TP: 미탐 케이스에서 이 피처 saliency가 더 높음"),
+    ("FP vs TN", True):  ("", "FP > TN: 오탐(FP)이 정상보다 이 피처 강하게 활성화 → 이 피처들이 오탐 유발"),
+    ("FP vs TN", False): ("", "TN > FP: 정상(TN)이 오탐보다 이 피처 더 활성화"),
+    ("FN vs TN", True):  ("", "FN > TN: 미탐(FN)이 정상보다 이 피처 더 활성화 → 미탐 거래도 이 피처에서 이상 신호 존재"),
+    ("FN vs TN", False): ("", "TN > FN: 정상(TN)이 미탐보다 이 피처 더 활성화"),
+    ("FP vs FN", True):  ("", "FP > FN: 오탐이 미탐보다 이 피처 더 강하게 활성화"),
+    ("FP vs FN", False): ("", "FN > FP: 미탐이 오탐보다 이 피처 더 활성화"),
 }
 
 def _mw_effect_label(r: float) -> str:
