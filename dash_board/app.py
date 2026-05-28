@@ -456,6 +456,16 @@ def _list_files(folder_id: str) -> dict[str, str]:
     return {f["name"]: f["id"] for f in _drive_list(f"'{folder_id}' in parents and trashed=false")}
 
 
+@st.cache_data(ttl=3600)
+def _list_subfolders(folder_id: str) -> dict[str, str]:
+    """Returns {name: id} for direct subfolders only."""
+    return {f["name"]: f["id"] for f in _drive_list(
+        f"'{folder_id}' in parents"
+        " and mimeType='application/vnd.google-apps.folder'"
+        " and trashed=false"
+    )}
+
+
 # ── UI helpers ────────────────────────────────────────────────────────────
 
 def _metric(container, label: str, value: str, sub: str = "") -> None:
@@ -487,9 +497,12 @@ def _is_valid_rep(rep: dict) -> bool:
     return bool(re.match(r"ml-\d+", woe_folder)) and woe_folder != "ml-00"
 
 
-def _exp_label(rep: dict) -> str:
-    desc = rep.get("description", "")
-    return f"{_woe_iv_folder_name(rep['ml_folder']).upper()}  {('— ' + desc) if desc else ''}".strip()
+def _exp_label(rep: dict, is_rep: bool = False) -> str:
+    folder = _woe_iv_folder_name(rep["ml_folder"]).upper()
+    if is_rep:
+        desc = rep.get("description", "")
+        return f"★ {folder}{(' — ' + desc) if desc else ''}"
+    return f"  {folder} / {rep['run_id']}"
 
 
 # ── Data loaders ───────────────────────────────────────────────────────────
@@ -569,6 +582,71 @@ def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
     if not r.ok:
         return None
     return _read_catalog_bytes(r.content)
+
+
+# ── Experiment discovery ───────────────────────────────────────────────────
+
+def _discover_all_ml_runs(ml_folder_id: str) -> list[dict]:
+    """ml/ 하위의 모든 실험 run을 탐색. 폴더 목록만 조회하고 파일 다운로드는 없음."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    ml_exp_folders = _list_subfolders(ml_folder_id)
+    valid_ml = sorted(
+        [(name, fid) for name, fid in ml_exp_folders.items()
+         if re.match(r"ml-\d+", name) and name != "ml-00"]
+    )
+    if not valid_ml:
+        return []
+
+    def _runs_for_folder(name_fid: tuple) -> list[dict]:
+        folder_name, folder_id = name_fid
+        run_folders = _list_subfolders(folder_id)
+        runs: list[dict] = []
+        for run_name, run_fid in sorted(run_folders.items()):
+            files = _list_files(run_fid)
+            prefix = next(
+                (re.match(r"(.+)_metrics_val\.json$", fn).group(1)
+                 for fn in files if re.match(r"(.+)_metrics_val\.json$", fn)),
+                None,
+            )
+            if prefix:
+                runs.append({"ml_folder": folder_name, "run_id": run_name, "prefix": prefix})
+        return runs
+
+    all_runs: list[dict] = []
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for runs in ex.map(_runs_for_folder, valid_ml):
+            all_runs.extend(runs)
+    return sorted(all_runs, key=lambda x: (x["ml_folder"], x["run_id"]))
+
+
+def _discover_all_gnn_runs(project_folder_id: str) -> list[dict]:
+    """gnn/ 하위의 모든 실험 run을 탐색. 폴더 목록만 조회하고 파일 다운로드는 없음."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    gnn_id = _get_folder_id(project_folder_id, "gnn") if project_folder_id else ""
+    if not gnn_id:
+        return []
+    exp_folders = _list_subfolders(gnn_id)
+    valid_exps  = sorted(
+        [(name, fid) for name, fid in exp_folders.items() if not name.endswith(".json")]
+    )
+    if not valid_exps:
+        return []
+
+    def _runs_for_exp(name_fid: tuple) -> list[dict]:
+        folder_name, folder_id = name_fid
+        run_folders = _list_subfolders(folder_id)
+        return [
+            {"folder": folder_name, "run_id": run_name}
+            for run_name in sorted(run_folders.keys())
+        ]
+
+    all_runs: list[dict] = []
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for runs in ex.map(_runs_for_exp, valid_exps):
+            all_runs.extend(runs)
+    return sorted(all_runs, key=lambda x: (x["folder"], x["run_id"]))
 
 
 # ── GNN helpers ────────────────────────────────────────────────────────────
@@ -715,10 +793,12 @@ def _load_gnn_representatives(project_folder_id: str) -> list[dict]:
     return _download_json(files[0]["id"]) if files else []
 
 
-def _gnn_exp_label(rep: dict) -> str:
-    desc   = rep.get("description", "")
+def _gnn_exp_label(rep: dict, is_rep: bool = False) -> str:
     folder = rep.get("folder", "")
-    return f"{folder}  {('— ' + desc) if desc else ''}".strip()
+    if is_rep:
+        desc = rep.get("description", "")
+        return f"★ {folder}{(' — ' + desc) if desc else ''}"
+    return f"  {folder} / {rep['run_id']}"
 
 
 
@@ -1211,19 +1291,23 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
 
 def _load_exp_data(label: str) -> None:
     """Load one ML experiment and store in session_state (main thread only)."""
-    rep    = st.session_state["exp_data"][label]["rep"]
+    entry  = st.session_state["exp_data"][label]
+    is_rep = entry.get("is_rep", False)
     result = _compute_exp_data(
-        rep,
+        entry["rep"],
         st.session_state.get("_ml_folder_id", ""),
         st.session_state.get("_woe_iv_root_id", ""),
     )
+    result["is_rep"] = is_rep
     st.session_state["exp_data"][label] = result
 
 
 def _load_gnn_exp_data(label: str) -> None:
     """Load one GNN experiment and store in session_state (main thread only)."""
-    rep    = st.session_state["gnn_exp_data"][label]["rep"]
-    result = _compute_gnn_exp_data(rep, st.session_state.get("_project_folder_id", ""))
+    entry  = st.session_state["gnn_exp_data"][label]
+    is_rep = entry.get("is_rep", False)
+    result = _compute_gnn_exp_data(entry["rep"], st.session_state.get("_project_folder_id", ""))
+    result["is_rep"] = is_rep
     st.session_state["gnn_exp_data"][label] = result
 
 
@@ -1261,27 +1345,52 @@ if not woe_iv_root_id:
 
 reps       = _load_representatives(ml_folder_id)
 valid_reps = [r for r in reps if _is_valid_rep(r)]
-
-if not valid_reps:
-    st.warning("ml_leaderboard_representatives.json에 유효한 실험이 없습니다.")
-    st.stop()
+gnn_reps   = _load_gnn_representatives(PROJECT_FOLDER_ID)
 
 # ── 폴더 ID 세션 저장 (loader 함수에서 참조) ──────────────────────────────
 st.session_state["_ml_folder_id"]      = ml_folder_id
 st.session_state["_woe_iv_root_id"]    = woe_iv_root_id
 st.session_state["_project_folder_id"] = PROJECT_FOLDER_ID
 
+# ── 전체 실험 탐색 (폴더 목록만, 다운로드 없음) ────────────────────────────
+with st.spinner("실험 목록 탐색 중..."):
+    all_ml_runs  = _discover_all_ml_runs(ml_folder_id)
+    all_gnn_runs = _discover_all_gnn_runs(PROJECT_FOLDER_ID)
+
+if not all_ml_runs:
+    st.warning("탐색된 ML 실험이 없습니다. PROJECT_FOLDER_ID와 Drive 구조를 확인하세요.")
+    st.stop()
+
+# ── 대표 실험 맵 ───────────────────────────────────────────────────────────
+_rep_map     = {(_woe_iv_folder_name(r["ml_folder"]), r["run_id"]): r for r in valid_reps}
+_gnn_rep_map = {(r["folder"], r["run_id"]): r                          for r in gnn_reps}
+
 # ── ML 실험 메타데이터 초기화 (파일 다운로드 없음) ─────────────────────────
-_reps_fp = [(r["ml_folder"], _artifact_prefix(r), r.get("description", "")) for r in valid_reps]
-if st.session_state.get("_exp_data_fp") != _reps_fp:
-    st.session_state["exp_data"] = {
-        _exp_label(rep): {
-            "rep": rep, "ml": {}, "woe": {}, "catalog": None,
-            "stale_status": "unknown", "prefix": _artifact_prefix(rep), "_loaded": False,
+_ml_fp       = tuple((r["ml_folder"], r["run_id"], r["prefix"])    for r in all_ml_runs)
+_rp_fp       = tuple((r["ml_folder"], _artifact_prefix(r))         for r in valid_reps)
+_combined_fp = (_ml_fp, _rp_fp)
+if st.session_state.get("_exp_data_fp") != _combined_fp:
+    _exp_init: dict[str, dict] = {}
+    for _run in all_ml_runs:
+        _rep_e  = _rep_map.get((_woe_iv_folder_name(_run["ml_folder"]), _run["run_id"]))
+        _is_rep = _rep_e is not None
+        _parts  = _run["prefix"].split("__", 2)
+        _srep   = _rep_e or {
+            "ml_folder":     _run["ml_folder"],
+            "run_id":        _run["run_id"],
+            "experiment_id": _parts[0] if len(_parts) >= 1 else "",
+            "model_run_id":  _parts[2] if len(_parts) >= 3 else "",
+            "description":   "",
+            "note":          "",
         }
-        for rep in valid_reps
-    }
-    st.session_state["_exp_data_fp"] = _reps_fp
+        _lbl = _exp_label(_srep, _is_rep)
+        _exp_init[_lbl] = {
+            "rep": _srep, "is_rep": _is_rep,
+            "ml": {}, "woe": {}, "catalog": None,
+            "stale_status": "unknown", "prefix": _run["prefix"], "_loaded": False,
+        }
+    st.session_state["exp_data"]    = _exp_init
+    st.session_state["_exp_data_fp"] = _combined_fp
 
 exp_data: dict[str, dict] = st.session_state["exp_data"]
 
@@ -1294,16 +1403,21 @@ _default_idx = 0
 st.session_state["_exp_labels"] = exp_labels
 
 # ── GNN 실험 메타데이터 초기화 (파일 다운로드 없음) ───────────────────────
-gnn_reps = _load_gnn_representatives(PROJECT_FOLDER_ID)
 st.session_state["_gnn_reps"] = gnn_reps
 
-_gnn_reps_fp = [(r["folder"], r["run_id"], r.get("description", "")) for r in gnn_reps]
-if st.session_state.get("_gnn_exp_data_fp") != _gnn_reps_fp:
-    st.session_state["gnn_exp_data"] = {
-        _gnn_exp_label(rep): {"rep": rep, "d": {}, "_loaded": False}
-        for rep in gnn_reps
-    }
-    st.session_state["_gnn_exp_data_fp"] = _gnn_reps_fp
+_gnn_fp       = tuple((r["folder"], r["run_id"]) for r in all_gnn_runs)
+_grp_fp       = tuple((r["folder"], r["run_id"]) for r in gnn_reps)
+_combined_gfp = (_gnn_fp, _grp_fp)
+if st.session_state.get("_gnn_exp_data_fp") != _combined_gfp:
+    _gnn_init: dict[str, dict] = {}
+    for _run in all_gnn_runs:
+        _rep_e  = _gnn_rep_map.get((_run["folder"], _run["run_id"]))
+        _is_rep = _rep_e is not None
+        _srep   = _rep_e or {"folder": _run["folder"], "run_id": _run["run_id"], "description": "", "note": ""}
+        _lbl    = _gnn_exp_label(_srep, _is_rep)
+        _gnn_init[_lbl] = {"rep": _srep, "is_rep": _is_rep, "d": {}, "_loaded": False}
+    st.session_state["gnn_exp_data"]    = _gnn_init
+    st.session_state["_gnn_exp_data_fp"] = _combined_gfp
 
 gnn_exp_data: dict[str, dict] = st.session_state.get("gnn_exp_data", {})
 
@@ -1320,8 +1434,8 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_overview:
     # ── 미로드 실험 병렬 로드 ─────────────────────────────────────────────
-    _unloaded_ml  = [lbl for lbl in exp_data     if not exp_data[lbl].get("_loaded")]
-    _unloaded_gnn = [lbl for lbl in gnn_exp_data if not gnn_exp_data[lbl].get("_loaded")]
+    _unloaded_ml  = [lbl for lbl in exp_data     if not exp_data[lbl].get("_loaded")     and exp_data[lbl].get("is_rep")]
+    _unloaded_gnn = [lbl for lbl in gnn_exp_data if not gnn_exp_data[lbl].get("_loaded") and gnn_exp_data[lbl].get("is_rep")]
     if _unloaded_ml or _unloaded_gnn:
         from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
         _ml_fid      = st.session_state.get("_ml_folder_id", "")
@@ -1353,12 +1467,16 @@ with tab_overview:
         exp_data     = st.session_state["exp_data"]
         gnn_exp_data = st.session_state.get("gnn_exp_data", {})
 
+    # Overview는 대표 실험만 표시
+    _ov_exp = {lbl: d for lbl, d in exp_data.items()     if d.get("is_rep")}
+    _ov_gnn = {lbl: d for lbl, d in gnn_exp_data.items() if d.get("is_rep")}
+
     st.markdown("#### Project Summary")
 
     # ── 최신 실험 F1 불릿 차트 ───────────────────────────────────────────────
     _bullet_rows: list[dict] = []
 
-    _ml_sorted = sorted(exp_data.items(),
+    _ml_sorted = sorted(_ov_exp.items(),
                         key=lambda kv: _woe_iv_folder_name(kv[1]["rep"]["ml_folder"]))
     if _ml_sorted:
         _, _ld = _ml_sorted[-1]
@@ -1371,7 +1489,7 @@ with tab_overview:
                 "f1": _lf1, "color": "#fbbf24",
             })
 
-    _gnn_sorted = sorted(gnn_exp_data.items(),
+    _gnn_sorted = sorted(_ov_gnn.items(),
                          key=lambda kv: kv[1]["rep"]["folder"])
     if _gnn_sorted:
         _, _gd = _gnn_sorted[-1]
@@ -1433,7 +1551,7 @@ with tab_overview:
 
     # ── ML ────────────────────────────────────────────────────────────────────
     ml_rows: list[dict] = []
-    for label, d in sorted(exp_data.items(),
+    for label, d in sorted(_ov_exp.items(),
                             key=lambda kv: _woe_iv_folder_name(kv[1]["rep"]["ml_folder"])):
         rep  = d["rep"]
         m    = d["ml"].get("metrics", {})
@@ -1450,7 +1568,7 @@ with tab_overview:
     # ── GNN ───────────────────────────────────────────────────────────────────
     gnn_rows:      list[dict] = []
     gnn_time_rows: list[dict] = []
-    for label, d in sorted(gnn_exp_data.items(),
+    for label, d in sorted(_ov_gnn.items(),
                             key=lambda kv: kv[1]["rep"]["folder"]):
         rep    = d["rep"]
         parsed = d["d"].get("parsed", {})
