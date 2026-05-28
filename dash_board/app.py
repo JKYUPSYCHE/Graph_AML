@@ -1571,7 +1571,7 @@ with tab_overview:
     for _, _d in _gnn_sorted:
         _gp2 = _d["d"].get("parsed", {}); _ge2 = _gp2.get("epochs", [])
         if not _ge2: continue
-        _gdf2 = pd.DataFrame(_ge2); _gdf2.index = _gdf2.index + 1; _gdf2 = _gdf2.reset_index()
+        _gdf2 = pd.DataFrame(_ge2); _gdf2.index = _gdf2.index + 1; _gdf2.index.name = "epoch"; _gdf2 = _gdf2.reset_index()
         _glb2 = _gp2.get("best_epoch")
         _gm2  = _gdf2[_gdf2["epoch"] == _glb2].index if _glb2 is not None else pd.Index([])
         _gi2  = _gm2[0] if len(_gm2) else _gdf2["val_auprc"].idxmax()
