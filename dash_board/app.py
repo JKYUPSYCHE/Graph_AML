@@ -1758,8 +1758,10 @@ def _tab_gnn_render():
         st.info("탐색된 GNN 실험이 없습니다.")
     else:
         _gnn_labels   = list(gnn_exp_data.keys())
+        _gnn_rep_idx  = [i for i, l in enumerate(_gnn_labels) if gnn_exp_data[l].get("is_rep")]
+        _gnn_def_idx  = max(_gnn_rep_idx, key=lambda i: _gnn_folder_num(gnn_exp_data[_gnn_labels[i]]["rep"]["folder"]), default=0) if _gnn_rep_idx else 0
         sel_gnn_label = st.selectbox("실험 선택", _gnn_labels, key="gnn_sel",
-                                     label_visibility="collapsed")
+                                     index=_gnn_def_idx, label_visibility="collapsed")
         sel_gnn_rep   = gnn_exp_data[sel_gnn_label]["rep"]
         if not gnn_exp_data.get(sel_gnn_label, {}).get("_loaded"):
             with st.spinner("실험 데이터 로드 중..."):
@@ -1958,7 +1960,8 @@ with tab_gnn:
 def _tab_ml_render():
     exp_data   = st.session_state.get("exp_data", {})
     exp_labels = list(exp_data.keys())
-    _default_idx = 0
+    _ml_rep_idx  = [i for i, l in enumerate(exp_labels) if exp_data[l].get("is_rep")]
+    _default_idx = max(_ml_rep_idx, key=lambda i: _ml_folder_num(exp_data[exp_labels[i]]["rep"]["ml_folder"]), default=0) if _ml_rep_idx else 0
 
     sel = st.selectbox("실험 선택", exp_labels, key="ml_sel",
                        index=_default_idx, label_visibility="collapsed")
@@ -2237,7 +2240,8 @@ with tab_ml:
 def _tab_woe_render():
     exp_data   = st.session_state.get("exp_data", {})
     exp_labels = list(exp_data.keys())
-    _default_idx = 0
+    _woe_rep_idx = [i for i, l in enumerate(exp_labels) if exp_data[l].get("is_rep")]
+    _default_idx = max(_woe_rep_idx, key=lambda i: _ml_folder_num(exp_data[exp_labels[i]]["rep"]["ml_folder"]), default=0) if _woe_rep_idx else 0
 
     sel_woe = st.selectbox("실험 선택", exp_labels, key="woe_sel",
                            index=_default_idx, label_visibility="collapsed")
