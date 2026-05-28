@@ -1501,26 +1501,28 @@ with tab_overview:
 
     _ml_sorted = sorted([(lbl, d) for lbl, d in _ov_exp.items() if d.get("is_rep")],
                         key=lambda kv: _woe_iv_folder_name(kv[1]["rep"]["ml_folder"]))
-    _ml_all_f1s = []
+    _ml_all_f1s: list[tuple[float, str]] = []
     for _, _d in _ml_sorted:
         _m = _d["ml"].get("metrics", {}); _m = _m.get("metrics", _m)
         _v = _m.get("f1")
-        if _v is not None: _ml_all_f1s.append(_v)
+        if _v is not None:
+            _ml_all_f1s.append((_v, _woe_iv_folder_name(_d["rep"]["ml_folder"]).upper()))
     if _ml_sorted:
         _, _ld = _ml_sorted[-1]
         _lm = _ld["ml"].get("metrics", {})
         _lm = _lm.get("metrics", _lm)
         _lf1 = _lm.get("f1")
         if _lf1 is not None:
+            _ml_max_pair = max(_ml_all_f1s, key=lambda t: t[0]) if _ml_all_f1s else (_lf1, "")
             _bullet_rows.append({
                 "label": f"ML  ({_woe_iv_folder_name(_ld['rep']['ml_folder']).upper()})",
-                "f1": _lf1, "max_f1": max(_ml_all_f1s) if _ml_all_f1s else _lf1,
+                "f1": _lf1, "max_f1": _ml_max_pair[0], "max_exp": _ml_max_pair[1],
                 "color": "#fbbf24",
             })
 
     _gnn_sorted = sorted([(lbl, d) for lbl, d in _ov_gnn.items() if d.get("is_rep")],
                          key=lambda kv: kv[1]["rep"]["folder"])
-    _gnn_all_f1s = []
+    _gnn_all_f1s: list[tuple[float, str]] = []
     for _, _d in _gnn_sorted:
         _gp2 = _d["d"].get("parsed", {}); _ge2 = _gp2.get("epochs", [])
         if not _ge2: continue
@@ -1529,7 +1531,7 @@ with tab_overview:
         _gm2  = _gdf2[_gdf2["epoch"] == _glb2].index if _glb2 is not None else pd.Index([])
         _gi2  = _gm2[0] if len(_gm2) else _gdf2["val_auprc"].idxmax()
         _gv2  = _gdf2.loc[_gi2].get("test_f1")
-        if _gv2 is not None: _gnn_all_f1s.append(_gv2)
+        if _gv2 is not None: _gnn_all_f1s.append((_gv2, _d["rep"]["folder"]))
     if _gnn_sorted:
         _, _gd = _gnn_sorted[-1]
         _gp = _gd["d"].get("parsed", {})
@@ -1547,17 +1549,19 @@ with tab_overview:
                 _gi = _gdf["val_auprc"].idxmax()
             _gf1 = _gdf.loc[_gi].get("test_f1")
             if _gf1 is not None:
+                _gnn_max_pair = max(_gnn_all_f1s, key=lambda t: t[0]) if _gnn_all_f1s else (_gf1, "")
                 _bullet_rows.append({
                     "label": f"GNN  ({_gd['rep']['folder']})",
-                    "f1": _gf1, "max_f1": max(_gnn_all_f1s) if _gnn_all_f1s else _gf1,
+                    "f1": _gf1, "max_f1": _gnn_max_pair[0], "max_exp": _gnn_max_pair[1],
                     "color": "#f43f5e",
                 })
 
     if _bullet_rows:
-        _labels   = [r["label"]   for r in _bullet_rows]
-        _f1s      = [r["f1"]      for r in _bullet_rows]
-        _max_f1s  = [r["max_f1"]  for r in _bullet_rows]
-        _colors   = [r["color"]   for r in _bullet_rows]
+        _labels   = [r["label"]    for r in _bullet_rows]
+        _f1s      = [r["f1"]       for r in _bullet_rows]
+        _max_f1s  = [r["max_f1"]   for r in _bullet_rows]
+        _max_exps = [r["max_exp"]  for r in _bullet_rows]
+        _colors   = [r["color"]    for r in _bullet_rows]
         _fig_b    = go.Figure()
         # 배경 바 (전체 범위)
         _fig_b.add_trace(go.Bar(
@@ -1570,7 +1574,8 @@ with tab_overview:
             y=_labels, x=_max_f1s, orientation="h",
             marker_color="rgba(180,180,180,0.30)", marker_line_width=0,
             showlegend=False,
-            hovertemplate="<b>%{y}</b><br>Max F1: %{x:.4f}<extra></extra>",
+            customdata=_max_exps,
+            hovertemplate="<b>%{y}</b><br>Max F1: %{x:.4f}  (%{customdata})<extra></extra>",
         ))
         # 현재(최신 대표) 값 컬러 바
         _fig_b.add_trace(go.Bar(
