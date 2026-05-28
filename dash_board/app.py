@@ -2021,8 +2021,8 @@ with tab_gnn:
 # ──────────────────────────────────────────────────────────────────────────────
 @st.fragment
 def _tab_ml_render():
-    exp_data     = st.session_state.get("exp_data", {})
-    exp_labels   = st.session_state.get("_exp_labels", [])
+    exp_data   = st.session_state.get("exp_data", {})
+    exp_labels = list(exp_data.keys())
     _default_idx = 0
 
     sel = st.selectbox("실험 선택", exp_labels, key="ml_sel",
@@ -2298,12 +2298,18 @@ with tab_ml:
 # ──────────────────────────────────────────────────────────────────────────────
 @st.fragment
 def _tab_woe_render():
-    exp_data     = st.session_state.get("exp_data", {})
-    exp_labels   = st.session_state.get("_exp_labels", [])
+    exp_data   = st.session_state.get("exp_data", {})
+    exp_labels = list(exp_data.keys())
     _default_idx = 0
 
-    sel_woe  = st.selectbox("실험 선택", exp_labels, key="woe_sel",
-                            index=_default_idx, label_visibility="collapsed")
+    sel_woe = st.selectbox("실험 선택", exp_labels, key="woe_sel",
+                           index=_default_idx, label_visibility="collapsed")
+
+    if not sel_woe or sel_woe not in exp_data:
+        sel_woe = next((lbl for lbl in exp_labels if lbl in exp_data), None)
+        if not sel_woe:
+            st.info("로드 가능한 실험이 없습니다.")
+            return
 
     # 실험 변경 시 이전 catalog 편집 상태 정리
     if st.session_state.get("_woe_prev_sel") != sel_woe:
