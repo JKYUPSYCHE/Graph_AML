@@ -502,7 +502,9 @@ def _exp_label(rep: dict, is_rep: bool = False) -> str:
     if is_rep:
         desc = rep.get("description", "")
         return f"* {folder}{(' — ' + desc) if desc else ''}"
-    return f"  {folder} / {rep['run_id']}"
+    run_id = rep.get("run_id", "")
+    model_run_id = rep.get("model_run_id", "")
+    return f"   {folder} — {run_id}{model_run_id}"
 
 
 # ── Data loaders ───────────────────────────────────────────────────────────
@@ -604,12 +606,11 @@ def _discover_all_ml_runs(ml_folder_id: str) -> list[dict]:
         runs: list[dict] = []
         for run_name, run_fid in sorted(run_folders.items()):
             files = _list_files(run_fid)
-            prefix = next(
-                (re.match(r"(.+)_metrics_val\.json$", fn).group(1)
-                 for fn in files if re.match(r"(.+)_metrics_val\.json$", fn)),
-                None,
+            prefixes = sorted(
+                re.match(r"(.+)_metrics_val\.json$", fn).group(1)
+                for fn in files if re.match(r"(.+)_metrics_val\.json$", fn)
             )
-            if prefix:
+            for prefix in prefixes:
                 runs.append({"ml_folder": folder_name, "run_id": run_name, "prefix": prefix})
         return runs
 
@@ -617,7 +618,7 @@ def _discover_all_ml_runs(ml_folder_id: str) -> list[dict]:
     with ThreadPoolExecutor(max_workers=5) as ex:
         for runs in ex.map(_runs_for_folder, valid_ml):
             all_runs.extend(runs)
-    return sorted(all_runs, key=lambda x: (x["ml_folder"], x["run_id"]))
+    return sorted(all_runs, key=lambda x: (x["ml_folder"], x["run_id"], x["prefix"]))
 
 
 def _discover_all_gnn_runs(project_folder_id: str) -> list[dict]:
@@ -1362,7 +1363,7 @@ if not all_ml_runs:
     st.stop()
 
 # ── 대표 실험 맵 ───────────────────────────────────────────────────────────
-_rep_map     = {(_woe_iv_folder_name(r["ml_folder"]), r["run_id"]): r for r in valid_reps}
+_rep_map     = {(_woe_iv_folder_name(r["ml_folder"]), r["run_id"], r["model_run_id"]): r for r in valid_reps}
 _gnn_rep_map = {(r["folder"], r["run_id"]): r                          for r in gnn_reps}
 
 # ── ML 실험 메타데이터 초기화 (파일 다운로드 없음) ─────────────────────────
@@ -1372,14 +1373,15 @@ _combined_fp = (_ml_fp, _rp_fp)
 if st.session_state.get("_exp_data_fp") != _combined_fp:
     _exp_init: dict[str, dict] = {}
     for _run in all_ml_runs:
-        _rep_e  = _rep_map.get((_woe_iv_folder_name(_run["ml_folder"]), _run["run_id"]))
-        _is_rep = _rep_e is not None
         _parts  = _run["prefix"].split("__", 2)
+        _model_run_id = _parts[2] if len(_parts) >= 3 else _run["prefix"]
+        _rep_e  = _rep_map.get((_woe_iv_folder_name(_run["ml_folder"]), _run["run_id"], _model_run_id))
+        _is_rep = _rep_e is not None
         _srep   = _rep_e or {
             "ml_folder":     _run["ml_folder"],
             "run_id":        _run["run_id"],
             "experiment_id": _parts[0] if len(_parts) >= 1 else "",
-            "model_run_id":  _parts[2] if len(_parts) >= 3 else "",
+            "model_run_id":  _model_run_id,
             "description":   "",
             "note":          "",
         }
