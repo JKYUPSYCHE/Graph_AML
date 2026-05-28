@@ -28,6 +28,7 @@ def load_ml_io_module(name: str) -> ModuleType:
     module_paths = {
         "ml-00": PROJECT_ROOT / "ml" / "ml-00_baseline-freeze" / "train_val_test" / "ml_00_ml_io.py",
         "ml-01": PROJECT_ROOT / "ml" / "ml-01" / "01_train_val_test" / "ml_01_ml_io.py",
+        "ml-03": PROJECT_ROOT / "ml" / "ml-03" / "01_train_val_test" / "ml_io.py",
     }
     module_path = module_paths[name]
     if not module_path.is_file():
@@ -38,6 +39,9 @@ def load_ml_io_module(name: str) -> ModuleType:
         raise ImportError(f"Unable to load ml_io module spec: {module_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
+    module_dir = str(module_path.parent)
+    if module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
     spec.loader.exec_module(module)
     return module
 
@@ -189,7 +193,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--io-module",
-        choices=("ml-00", "ml-01"),
+        choices=("ml-00", "ml-01", "ml-03"),
         default="ml-01",
         help="ml_io implementation to validate against.",
     )
