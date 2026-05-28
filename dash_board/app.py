@@ -1546,7 +1546,7 @@ with tab_overview:
     # ── 최신 실험 F1 불릿 차트 ───────────────────────────────────────────────
     _bullet_rows: list[dict] = []
 
-    _ml_sorted = sorted(_ov_exp.items(),
+    _ml_sorted = sorted([(lbl, d) for lbl, d in _ov_exp.items() if d.get("is_rep")],
                         key=lambda kv: _woe_iv_folder_name(kv[1]["rep"]["ml_folder"]))
     if _ml_sorted:
         _, _ld = _ml_sorted[-1]
@@ -1559,7 +1559,7 @@ with tab_overview:
                 "f1": _lf1, "color": "#fbbf24",
             })
 
-    _gnn_sorted = sorted(_ov_gnn.items(),
+    _gnn_sorted = sorted([(lbl, d) for lbl, d in _ov_gnn.items() if d.get("is_rep")],
                          key=lambda kv: kv[1]["rep"]["folder"])
     if _gnn_sorted:
         _, _gd = _gnn_sorted[-1]
