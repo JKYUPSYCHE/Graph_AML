@@ -1718,16 +1718,15 @@ with tab_overview:
 # ──────────────────────────────────────────────────────────────────────────────
 @st.fragment
 def _tab_gnn_render():
-    gnn_reps     = st.session_state.get("_gnn_reps", [])
     gnn_exp_data = st.session_state.get("gnn_exp_data", {})
 
-    if not gnn_reps:
-        st.info("gnn_leaderboard_representatives.json에서 실험을 찾을 수 없습니다.")
+    if not gnn_exp_data:
+        st.info("탐색된 GNN 실험이 없습니다.")
     else:
-        _gnn_labels   = [_gnn_exp_label(r) for r in gnn_reps]
+        _gnn_labels   = list(gnn_exp_data.keys())
         sel_gnn_label = st.selectbox("실험 선택", _gnn_labels, key="gnn_sel",
                                      label_visibility="collapsed")
-        sel_gnn_rep   = gnn_reps[_gnn_labels.index(sel_gnn_label)]
+        sel_gnn_rep   = gnn_exp_data[sel_gnn_label]["rep"]
         if not gnn_exp_data.get(sel_gnn_label, {}).get("_loaded"):
             with st.spinner("실험 데이터 로드 중..."):
                 _load_gnn_exp_data(sel_gnn_label)
