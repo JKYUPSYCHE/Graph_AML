@@ -225,13 +225,24 @@ def _sa_find_file(name: str, parent_id: str, token: str) -> str:
     return result
 
 
-def _load_report(folder_id: str) -> dict:
-    """실험 폴더의 report.json 로드. 없으면 빈 dict."""
+def _reports_file_id(token: str) -> str:
+    """dashboard/reports.json 파일 ID 반환 (없으면 빈 문자열)."""
+    dash_id = _get_folder_id(PROJECT_FOLDER_ID, "dashboard")
+    if not dash_id:
+        return ""
+    return _sa_find_file("reports.json", dash_id, token)
+
+
+def _get_reports_store() -> dict:
+    """dashboard/reports.json 전체를 session_state에 캐싱 후 반환."""
+    if "_reports_store" in st.session_state:
+        return st.session_state["_reports_store"]
     token = _get_sa_token()
-    if not token or not folder_id:
+    if not token:
         return {}
-    file_id = _sa_find_file("report.json", folder_id, token)
+    file_id = _reports_file_id(token)
     if not file_id:
+        st.session_state["_reports_store"] = {}
         return {}
     r = requests.get(
         f"https://www.googleapis.com/drive/v3/files/{file_id}",
@@ -240,28 +251,37 @@ def _load_report(folder_id: str) -> dict:
         timeout=15,
     )
     try:
-        return r.json() if r.ok else {}
+        store = r.json() if r.ok else {}
     except Exception:
-        return {}
+        store = {}
+    st.session_state["_reports_store"] = store
+    return store
 
 
-def _save_report(folder_id: str, content: str, author: str) -> bool:
-    """실험 폴더의 report.json 저장/덮어쓰기 (기존 파일 PATCH 전용)."""
+def _load_report(tab_name: str, exp_name: str) -> dict:
+    """reports.json 스토어에서 해당 실험 리포트 로드."""
+    store = _get_reports_store()
+    return store.get(f"{tab_name}__{exp_name}", {})
+
+
+def _save_report(tab_name: str, exp_name: str, content: str, author: str) -> bool:
+    """reports.json 스토어에 저장 (PATCH 전용 — Drive에 reports.json이 있어야 함)."""
     token = _get_sa_token()
-    if not token or not folder_id:
+    if not token:
         return False
-
-    payload = json.dumps(
-        {"content": content, "author": author,
-         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M")},
-        ensure_ascii=False, indent=2,
-    ).encode("utf-8")
-
-    file_id = _sa_find_file("report.json", folder_id, token)
+    file_id = _reports_file_id(token)
     if not file_id:
-        st.session_state["_sa_last_error"] = "report.json 파일이 실험 폴더에 없습니다 — Drive에서 빈 report.json을 먼저 생성해 주세요."
+        st.session_state["_sa_last_error"] = (
+            "reports.json 파일이 없습니다 — "
+            "Drive의 dashboard 폴더에 내용이 {} 인 reports.json 파일을 먼저 생성해 주세요."
+        )
         return False
-
+    store = _get_reports_store()
+    store[f"{tab_name}__{exp_name}"] = {
+        "content": content, "author": author,
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    payload = json.dumps(store, ensure_ascii=False, indent=2).encode("utf-8")
     r = requests.patch(
         f"https://www.googleapis.com/upload/drive/v3/files/{file_id}",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -269,15 +289,15 @@ def _save_report(folder_id: str, content: str, author: str) -> bool:
         data=payload,
         timeout=15,
     )
-    if not r.ok:
-        st.session_state["_sa_last_error"] = f"Drive API {r.status_code}: {r.text[:300]}"
+    if r.ok:
+        st.session_state["_reports_store"] = store
     else:
-        st.session_state.setdefault("_sa_file_cache", {}).pop(f"{folder_id}/report.json", None)
+        st.session_state["_sa_last_error"] = f"Drive API {r.status_code}: {r.text[:300]}"
     return r.ok
 
 
 @st.fragment
-def _render_report(tab_name: str, exp_name: str, folder_id: str) -> None:
+def _render_report(tab_name: str, exp_name: str) -> None:
     """실험 선택창 아래 리포트 섹션 렌더링."""
     from streamlit_ace import st_ace
 
@@ -294,7 +314,7 @@ def _render_report(tab_name: str, exp_name: str, folder_id: str) -> None:
 
     if cache_key not in st.session_state:
         with st.spinner("리포트 로드 중..."):
-            st.session_state[cache_key] = _load_report(folder_id)
+            st.session_state[cache_key] = _load_report(tab_name, exp_name)
     report     = st.session_state.get(cache_key, {})
     content    = report.get("content", "")
     written_by = report.get("author", "")
@@ -359,7 +379,7 @@ def _render_report(tab_name: str, exp_name: str, folder_id: str) -> None:
             col_save, col_cancel = st.columns(2)
             if col_save.button("저장", key=f"rpt_save_{tab_name}_{exp_name}", use_container_width=True):
                 with st.spinner("저장 중..."):
-                    ok = _save_report(folder_id, new_content, sess_author)
+                    ok = _save_report(tab_name, exp_name, new_content, sess_author)
                 if ok:
                     st.session_state.pop(cache_key, None)
                     st.session_state[edit_key] = False
@@ -1770,9 +1790,7 @@ def _tab_gnn_render():
         _gnn_note = sel_gnn_rep.get("note", "")
         if _gnn_note:
             st.caption(f"**Note**: {_gnn_note}")
-        _gnn_id       = _get_folder_id(PROJECT_FOLDER_ID, "gnn")
-        _gnn_exp_fid  = _get_folder_id(_gnn_id, sel_gnn_rep["folder"]) if _gnn_id else ""
-        _render_report("GNN Result", sel_gnn_rep["folder"], _gnn_exp_fid)
+        _render_report("GNN Result", sel_gnn_rep["folder"])
         st.divider()
         gnn_d  = gnn_exp_data.get(sel_gnn_label, {}).get("d", {})
 
@@ -1993,9 +2011,7 @@ def _tab_ml_render():
     if _note:
         st.caption(f"**Note**: {_note}")
 
-    _ml_fid     = st.session_state.get("_ml_folder_id", "")
-    _ml_exp_fid = _get_folder_id(_ml_fid, _woe_iv_folder_name(rep["ml_folder"])) if _ml_fid else ""
-    _render_report("ML Result", _woe_iv_folder_name(rep["ml_folder"]), _ml_exp_fid)
+    _render_report("ML Result", _woe_iv_folder_name(rep["ml_folder"]))
     st.divider()
 
     if not ml:
@@ -2264,10 +2280,7 @@ def _tab_woe_render():
             _load_exp_data(sel_woe)
         exp_data = st.session_state.get("exp_data", {})
 
-    _woe_root_fid = st.session_state.get("_woe_iv_root_id", "")
-    _woe_exp_name = _woe_iv_folder_name(exp_data[sel_woe]["rep"]["ml_folder"])
-    _woe_exp_fid  = _get_folder_id(_woe_root_fid, _woe_exp_name) if _woe_root_fid else ""
-    _render_report("Univariate Analysis", _woe_exp_name, _woe_exp_fid)
+    _render_report("Univariate Analysis", _woe_iv_folder_name(exp_data[sel_woe]["rep"]["ml_folder"]))
     st.divider()
 
     d_woe    = exp_data[sel_woe]
