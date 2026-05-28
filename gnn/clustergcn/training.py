@@ -291,7 +291,8 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
     )
 
     add_arange_ids([tr_data, val_data, te_data])
-    tr_loader, val_loader, te_loader = get_loaders(tr_data, val_data, te_data, args)
+    cache_dir = data_config.get("paths", {}).get("metis_cache", None)
+    tr_loader, val_loader, te_loader = get_loaders(tr_data, val_data, te_data, args, cache_dir=cache_dir)
 
     model = get_model(tr_data, config, args)
 

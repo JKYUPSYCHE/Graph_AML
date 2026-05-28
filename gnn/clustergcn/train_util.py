@@ -83,19 +83,30 @@ def load_model(model, device, args, config, data_config):
 
 
 # ── ClusterGCN DataLoaders ────────────────────────────────────────────────────
-def get_loaders(tr_data, val_data, te_data, args):
+def get_loaders(tr_data, val_data, te_data, args, cache_dir=None):
     """
-    tr_data  : train 엣지만 포함 (GraphData)
-    val_data : val 엣지만 포함 (GraphData)
-    te_data  : 전체 엣지 포함 (GraphData) — te_inds로 test 엣지 식별
+    tr_data   : train 엣지만 포함 (GraphData)
+    val_data  : val 엣지만 포함 (GraphData)
+    te_data   : 전체 엣지 포함 (GraphData) — te_inds로 test 엣지 식별
+    cache_dir : METIS 결과 캐시 경로 (지정 시 재실행 때 로드, None이면 캐시 없음)
     """
+    import os
     num_parts = getattr(args, 'num_parts', 300)
     cpb       = getattr(args, 'clusters_per_batch', 10)
 
+    if cache_dir:
+        tr_save  = os.path.join(cache_dir, 'tr')
+        val_save = os.path.join(cache_dir, 'val')
+        te_save  = os.path.join(cache_dir, 'te')
+        for d in [tr_save, val_save, te_save]:
+            os.makedirs(d, exist_ok=True)
+    else:
+        tr_save = val_save = te_save = None
+
     logging.info(f'[ClusterGCN] Partitioning into {num_parts} parts, {cpb} clusters/batch...')
-    tr_cluster  = ClusterData(tr_data,  num_parts=num_parts, recursive=False, log=False)
-    val_cluster = ClusterData(val_data, num_parts=num_parts, recursive=False, log=False)
-    te_cluster  = ClusterData(te_data,  num_parts=num_parts, recursive=False, log=False)
+    tr_cluster  = ClusterData(tr_data,  num_parts=num_parts, recursive=False, log=False, save_dir=tr_save)
+    val_cluster = ClusterData(val_data, num_parts=num_parts, recursive=False, log=False, save_dir=val_save)
+    te_cluster  = ClusterData(te_data,  num_parts=num_parts, recursive=False, log=False, save_dir=te_save)
     logging.info('[ClusterGCN] Partitioning done.')
 
     tr_loader  = ClusterLoader(tr_cluster,  batch_size=cpb, shuffle=True,  drop_last=True,  num_workers=0)
