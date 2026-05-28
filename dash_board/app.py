@@ -1929,6 +1929,12 @@ def _tab_ml_render():
     sel = st.selectbox("실험 선택", exp_labels, key="ml_sel",
                        index=_default_idx, label_visibility="collapsed")
 
+    if not sel or sel not in exp_data:
+        sel = next((lbl for lbl in exp_labels if lbl in exp_data), None)
+        if not sel:
+            st.info("로드 가능한 실험이 없습니다.")
+            return
+
     # 실험 변경 시 이전 fi_* 키 정리
     if st.session_state.get("_ml_prev_sel") != sel:
         prev = st.session_state.get("_ml_prev_sel")
