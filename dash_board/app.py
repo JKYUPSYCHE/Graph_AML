@@ -721,51 +721,6 @@ def _gnn_exp_label(rep: dict) -> str:
     return f"{folder}  {('— ' + desc) if desc else ''}".strip()
 
 
-@st.cache_data(ttl=3600)
-def _load_gnn_experiment_rep(project_folder_id: str, folder: str, run_id: str) -> dict:
-    gnn_id = _get_folder_id(project_folder_id, "gnn")
-    if not gnn_id:
-        return {}
-    exp_id = _get_folder_id(gnn_id, folder)
-    if not exp_id:
-        return {}
-    run_folder_id = _get_folder_id(exp_id, run_id)
-    if not run_folder_id:
-        return {}
-    out: dict = {}
-
-    logs_id = _get_folder_id(run_folder_id, "logs")
-    if logs_id:
-        lf      = _list_files(logs_id)
-        log_fns = [n for n in lf if n.endswith(".log")]
-        if log_fns:
-            r = requests.get(
-                f"https://drive.google.com/uc?export=download&id={lf[log_fns[0]]}",
-                timeout=60,
-            )
-            if r.ok:
-                out["parsed"] = _parse_gnn_log(r.text)
-
-    models_id = _get_folder_id(run_folder_id, "models")
-    if models_id:
-        mf       = _list_files(models_id)
-        args_fns = [n for n in mf if n.endswith("_args.json")]
-        if args_fns:
-            out["args"] = _download_json(mf[args_fns[0]])
-
-    fi_id = _get_folder_id(run_folder_id, "feature_importance")
-    if fi_id:
-        fi_files = _list_files(fi_id)
-        fi_fns   = [n for n in fi_files if n.endswith("_feature_importance.csv")
-                    and "individual" not in n]
-        if fi_fns:
-            out["feature_importance"] = _download_csv(fi_files[fi_fns[0]])
-        fi_indiv_fns = [n for n in fi_files if n.endswith("_feature_importance_individual.csv")]
-        if fi_indiv_fns:
-            out["feature_importance_individual"] = _download_csv(fi_files[fi_indiv_fns[0]])
-
-    return out
-
 
 # ── Figure cache helpers ───────────────────────────────────────────────────
 
@@ -1151,6 +1106,127 @@ def _woe_iv_bin_section(
                 st.plotly_chart(fig_woe, use_container_width=True)
 
 
+# ── On-demand experiment loaders ──────────────────────────────────────────
+
+def _compute_exp_data(rep: dict, ml_fid: str, woe_root_id: str) -> dict:
+    """Load one ML experiment's files in parallel. Pure — no Streamlit state access."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    ml_exp_fid  = _get_folder_id(ml_fid, rep["ml_folder"]) if ml_fid else ""
+    run_fid     = _get_folder_id(ml_exp_fid, rep["run_id"]) if ml_exp_fid else ""
+    woe_iv_name = _woe_iv_folder_name(rep["ml_folder"])
+    woe_iv_fid  = _get_folder_id(woe_root_id, woe_iv_name) if woe_root_id else ""
+    prefix      = _artifact_prefix(rep)
+    cat_fn      = _catalog_filename(rep["ml_folder"])
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_woe = ex.submit(_load_woe_results, woe_iv_fid)
+        f_cat = ex.submit(_load_catalog, ml_exp_fid, cat_fn)
+        f_ml  = ex.submit(_load_ml_results, run_fid, prefix) if run_fid else None
+        woe     = f_woe.result()
+        catalog = f_cat.result()
+        ml      = f_ml.result() if f_ml else {}
+
+    cached_pfx   = (woe.get("meta", {}) or {}).get("prefix") if woe else None
+    stale_status = ("no_woe" if not woe or "iv_df" not in woe
+                    else "stale" if cached_pfx != prefix
+                    else "fresh")
+    return {
+        "rep": rep, "ml": ml, "woe": woe, "catalog": catalog,
+        "stale_status": stale_status, "prefix": prefix, "_loaded": True,
+    }
+
+
+def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
+    """Load one GNN experiment's files in parallel. Pure — no Streamlit state access."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    gnn_id = _get_folder_id(project_folder_id, "gnn") if project_folder_id else ""
+    if not gnn_id:
+        return {"rep": rep, "d": {}, "_loaded": True}
+    exp_id = _get_folder_id(gnn_id, rep["folder"])
+    if not exp_id:
+        return {"rep": rep, "d": {}, "_loaded": True}
+    run_fid = _get_folder_id(exp_id, rep["run_id"])
+    if not run_fid:
+        return {"rep": rep, "d": {}, "_loaded": True}
+
+    # 하위 폴더 ID 병렬 조회
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_logs   = ex.submit(_get_folder_id, run_fid, "logs")
+        f_models = ex.submit(_get_folder_id, run_fid, "models")
+        f_fi_dir = ex.submit(_get_folder_id, run_fid, "feature_importance")
+        logs_id   = f_logs.result()
+        models_id = f_models.result()
+        fi_dir_id = f_fi_dir.result()
+
+    def _fetch_log():
+        if not logs_id:
+            return None
+        lf      = _list_files(logs_id)
+        log_fns = [n for n in lf if n.endswith(".log")]
+        if not log_fns:
+            return None
+        r = requests.get(
+            f"https://drive.google.com/uc?export=download&id={lf[log_fns[0]]}",
+            timeout=60,
+        )
+        return _parse_gnn_log(r.text) if r.ok else None
+
+    def _fetch_args():
+        if not models_id:
+            return None
+        mf       = _list_files(models_id)
+        args_fns = [n for n in mf if n.endswith("_args.json")]
+        return _download_json(mf[args_fns[0]]) if args_fns else None
+
+    def _fetch_fi():
+        if not fi_dir_id:
+            return None, None
+        fi_files     = _list_files(fi_dir_id)
+        fi_fns       = [n for n in fi_files
+                        if n.endswith("_feature_importance.csv") and "individual" not in n]
+        fi_indiv_fns = [n for n in fi_files
+                        if n.endswith("_feature_importance_individual.csv")]
+        fi       = _download_csv(fi_files[fi_fns[0]])       if fi_fns       else None
+        fi_indiv = _download_csv(fi_files[fi_indiv_fns[0]]) if fi_indiv_fns else None
+        return fi, fi_indiv
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_parsed = ex.submit(_fetch_log)
+        f_args   = ex.submit(_fetch_args)
+        f_fi_res = ex.submit(_fetch_fi)
+        parsed       = f_parsed.result()
+        args_data    = f_args.result()
+        fi, fi_indiv = f_fi_res.result()
+
+    out: dict = {}
+    if parsed   is not None: out["parsed"]                        = parsed
+    if args_data is not None: out["args"]                         = args_data
+    if fi        is not None: out["feature_importance"]           = fi
+    if fi_indiv  is not None: out["feature_importance_individual"] = fi_indiv
+
+    return {"rep": rep, "d": out, "_loaded": True}
+
+
+def _load_exp_data(label: str) -> None:
+    """Load one ML experiment and store in session_state (main thread only)."""
+    rep    = st.session_state["exp_data"][label]["rep"]
+    result = _compute_exp_data(
+        rep,
+        st.session_state.get("_ml_folder_id", ""),
+        st.session_state.get("_woe_iv_root_id", ""),
+    )
+    st.session_state["exp_data"][label] = result
+
+
+def _load_gnn_exp_data(label: str) -> None:
+    """Load one GNN experiment and store in session_state (main thread only)."""
+    rep    = st.session_state["gnn_exp_data"][label]["rep"]
+    result = _compute_gnn_exp_data(rep, st.session_state.get("_project_folder_id", ""))
+    st.session_state["gnn_exp_data"][label] = result
+
+
 # ── Page header ────────────────────────────────────────────────────────────
 
 col_title, col_btn = st.columns([8, 1])
@@ -1190,43 +1266,21 @@ if not valid_reps:
     st.warning("ml_leaderboard_representatives.json에 유효한 실험이 없습니다.")
     st.stop()
 
-# 실험별 데이터 로드 + stale 상태 계산
-# valid_reps 내용으로 fingerprint를 만들어, 실험 목록이 바뀐 경우에만 재빌드
+# ── 폴더 ID 세션 저장 (loader 함수에서 참조) ──────────────────────────────
+st.session_state["_ml_folder_id"]      = ml_folder_id
+st.session_state["_woe_iv_root_id"]    = woe_iv_root_id
+st.session_state["_project_folder_id"] = PROJECT_FOLDER_ID
+
+# ── ML 실험 메타데이터 초기화 (파일 다운로드 없음) ─────────────────────────
 _reps_fp = [(r["ml_folder"], _artifact_prefix(r), r.get("description", "")) for r in valid_reps]
 if st.session_state.get("_exp_data_fp") != _reps_fp:
-    _exp_data_build: dict[str, dict] = {}
-    bar = st.progress(0, text="실험 데이터 로드 중...")
-    for i, rep in enumerate(valid_reps):
-        ml_exp_folder_id = _get_folder_id(ml_folder_id, rep["ml_folder"])
-        run_folder_id    = _get_folder_id(ml_exp_folder_id, rep["run_id"]) if ml_exp_folder_id else ""
-        woe_iv_name      = _woe_iv_folder_name(rep["ml_folder"])
-        woe_iv_exp_id    = _get_folder_id(woe_iv_root_id, woe_iv_name) if woe_iv_root_id else ""
-        prefix           = _artifact_prefix(rep)
-        cat_fn           = _catalog_filename(rep["ml_folder"])
-        label            = _exp_label(rep)
-
-        woe     = _load_woe_results(woe_iv_exp_id)
-        catalog = _load_catalog(ml_exp_folder_id, cat_fn)
-        cached_prefix = woe.get("meta", {}).get("prefix") if woe else None
-
-        if not woe or "iv_df" not in woe:
-            stale_status = "no_woe"
-        elif cached_prefix != prefix:
-            stale_status = "stale"
-        else:
-            stale_status = "fresh"
-
-        _exp_data_build[label] = {
-            "rep":          rep,
-            "ml":           _load_ml_results(run_folder_id, prefix) if run_folder_id else {},
-            "woe":          woe,
-            "catalog":      catalog,
-            "stale_status": stale_status,
-            "prefix":       prefix,
+    st.session_state["exp_data"] = {
+        _exp_label(rep): {
+            "rep": rep, "ml": {}, "woe": {}, "catalog": None,
+            "stale_status": "unknown", "prefix": _artifact_prefix(rep), "_loaded": False,
         }
-        bar.progress((i + 1) / len(valid_reps), text=f"로드: {rep['ml_folder']}")
-    bar.empty()
-    st.session_state["exp_data"]    = _exp_data_build
+        for rep in valid_reps
+    }
     st.session_state["_exp_data_fp"] = _reps_fp
 
 exp_data: dict[str, dict] = st.session_state["exp_data"]
@@ -1239,24 +1293,16 @@ exp_labels   = list(exp_data.keys())
 _default_idx = 0
 st.session_state["_exp_labels"] = exp_labels
 
-# GNN 실험 목록 + 데이터 pre-load
+# ── GNN 실험 메타데이터 초기화 (파일 다운로드 없음) ───────────────────────
 gnn_reps = _load_gnn_representatives(PROJECT_FOLDER_ID)
 st.session_state["_gnn_reps"] = gnn_reps
 
 _gnn_reps_fp = [(r["folder"], r["run_id"], r.get("description", "")) for r in gnn_reps]
 if st.session_state.get("_gnn_exp_data_fp") != _gnn_reps_fp:
-    _gnn_exp_data_build: dict[str, dict] = {}
-    if gnn_reps:
-        bar = st.progress(0, text="GNN 실험 데이터 로드 중...")
-        for i, rep in enumerate(gnn_reps):
-            label = _gnn_exp_label(rep)
-            _gnn_exp_data_build[label] = {
-                "rep": rep,
-                "d":   _load_gnn_experiment_rep(PROJECT_FOLDER_ID, rep["folder"], rep["run_id"]),
-            }
-            bar.progress((i + 1) / len(gnn_reps), text=f"로드: {rep['folder']}")
-        bar.empty()
-    st.session_state["gnn_exp_data"]    = _gnn_exp_data_build
+    st.session_state["gnn_exp_data"] = {
+        _gnn_exp_label(rep): {"rep": rep, "d": {}, "_loaded": False}
+        for rep in gnn_reps
+    }
     st.session_state["_gnn_exp_data_fp"] = _gnn_reps_fp
 
 gnn_exp_data: dict[str, dict] = st.session_state.get("gnn_exp_data", {})
@@ -1273,6 +1319,40 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 # 탭 0: Overview
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_overview:
+    # ── 미로드 실험 병렬 로드 ─────────────────────────────────────────────
+    _unloaded_ml  = [lbl for lbl in exp_data     if not exp_data[lbl].get("_loaded")]
+    _unloaded_gnn = [lbl for lbl in gnn_exp_data if not gnn_exp_data[lbl].get("_loaded")]
+    if _unloaded_ml or _unloaded_gnn:
+        from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+        _ml_fid      = st.session_state.get("_ml_folder_id", "")
+        _woe_root_id = st.session_state.get("_woe_iv_root_id", "")
+        _pfid        = st.session_state.get("_project_folder_id", "")
+        _ml_args  = [(lbl, exp_data[lbl]["rep"])     for lbl in _unloaded_ml]
+        _gnn_args = [(lbl, gnn_exp_data[lbl]["rep"]) for lbl in _unloaded_gnn]
+        _total = len(_ml_args) + len(_gnn_args)
+        _bar   = st.progress(0, text=f"데이터 로드 중 (0/{_total})...")
+        with ThreadPoolExecutor(max_workers=6) as _ex:
+            _ml_futs  = {_ex.submit(_compute_exp_data,     rep, _ml_fid, _woe_root_id): lbl
+                         for lbl, rep in _ml_args}
+            _gnn_futs = {_ex.submit(_compute_gnn_exp_data, rep, _pfid):                 lbl
+                         for lbl, rep in _gnn_args}
+            _all_futs = {**_ml_futs, **_gnn_futs}
+            _unloaded_ml_set = set(_unloaded_ml)
+            for _n, _fut in enumerate(_as_completed(_all_futs), 1):
+                _lbl = _all_futs[_fut]
+                try:
+                    _result = _fut.result()
+                    if _lbl in _unloaded_ml_set:
+                        st.session_state["exp_data"][_lbl] = _result
+                    else:
+                        st.session_state["gnn_exp_data"][_lbl] = _result
+                except Exception as _e:
+                    st.warning(f"'{_lbl}' 로드 실패: {_e}")
+                _bar.progress(_n / _total, text=f"데이터 로드 중 ({_n}/{_total}): {_lbl}")
+        _bar.empty()
+        exp_data     = st.session_state["exp_data"]
+        gnn_exp_data = st.session_state.get("gnn_exp_data", {})
+
     st.markdown("#### Project Summary")
 
     # ── 최신 실험 F1 불릿 차트 ───────────────────────────────────────────────
@@ -1530,6 +1610,10 @@ def _tab_gnn_render():
         sel_gnn_label = st.selectbox("실험 선택", _gnn_labels, key="gnn_sel",
                                      label_visibility="collapsed")
         sel_gnn_rep   = gnn_reps[_gnn_labels.index(sel_gnn_label)]
+        if not gnn_exp_data.get(sel_gnn_label, {}).get("_loaded"):
+            with st.spinner("실험 데이터 로드 중..."):
+                _load_gnn_exp_data(sel_gnn_label)
+            gnn_exp_data = st.session_state.get("gnn_exp_data", {})
         _gnn_note = sel_gnn_rep.get("note", "")
         if _gnn_note:
             st.caption(f"**Note**: {_gnn_note}")
@@ -1733,6 +1817,11 @@ def _tab_ml_render():
             for k in [f"fi_sel_{prev}", f"fi_bar_ver_{prev}", f"fi_scat_ver_{prev}"]:
                 st.session_state.pop(k, None)
         st.session_state["_ml_prev_sel"] = sel
+
+    if not exp_data.get(sel, {}).get("_loaded"):
+        with st.spinner("실험 데이터 로드 중..."):
+            _load_exp_data(sel)
+        exp_data = st.session_state.get("exp_data", {})
 
     d   = exp_data[sel]
     rep = d["rep"]
@@ -1998,6 +2087,11 @@ def _tab_woe_render():
         if prev_woe:
             st.session_state.pop(f"catalog_{prev_woe}", None)
         st.session_state["_woe_prev_sel"] = sel_woe
+
+    if not exp_data.get(sel_woe, {}).get("_loaded"):
+        with st.spinner("실험 데이터 로드 중..."):
+            _load_exp_data(sel_woe)
+        exp_data = st.session_state.get("exp_data", {})
 
     _render_report("Univariate Analysis", _woe_iv_folder_name(exp_data[sel_woe]["rep"]["ml_folder"]))
     st.divider()
