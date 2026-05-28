@@ -501,7 +501,7 @@ def _exp_label(rep: dict, is_rep: bool = False) -> str:
     folder = _woe_iv_folder_name(rep["ml_folder"]).upper()
     if is_rep:
         desc = rep.get("description", "")
-        return f"★ {folder}{(' — ' + desc) if desc else ''}"
+        return f"* {folder}{(' — ' + desc) if desc else ''}"
     return f"  {folder} / {rep['run_id']}"
 
 
@@ -797,7 +797,7 @@ def _gnn_exp_label(rep: dict, is_rep: bool = False) -> str:
     folder = rep.get("folder", "")
     if is_rep:
         desc = rep.get("description", "")
-        return f"★ {folder}{(' — ' + desc) if desc else ''}"
+        return f"* {folder}{(' — ' + desc) if desc else ''}"
     return f"  {folder} / {rep['run_id']}"
 
 
@@ -1457,8 +1457,10 @@ with tab_overview:
                 try:
                     _result = _fut.result()
                     if _lbl in _unloaded_ml_set:
+                        _result["is_rep"] = exp_data.get(_lbl, {}).get("is_rep", False)
                         st.session_state["exp_data"][_lbl] = _result
                     else:
+                        _result["is_rep"] = gnn_exp_data.get(_lbl, {}).get("is_rep", False)
                         st.session_state["gnn_exp_data"][_lbl] = _result
                 except Exception as _e:
                     st.warning(f"'{_lbl}' 로드 실패: {_e}")
