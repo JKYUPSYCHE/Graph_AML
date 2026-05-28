@@ -488,6 +488,14 @@ def _woe_iv_folder_name(ml_folder: str) -> str:
     m = re.match(r"(ml-\d+)", ml_folder)
     return m.group(1) if m else ml_folder
 
+def _ml_folder_num(ml_folder: str) -> int:
+    m = re.match(r"ml-(\d+)", ml_folder)
+    return int(m.group(1)) if m else -1
+
+def _gnn_folder_num(folder: str) -> int:
+    m = re.search(r"(\d+)", folder)
+    return int(m.group(1)) if m else -1
+
 
 def _catalog_filename(ml_folder: str) -> str:
     return _woe_iv_folder_name(ml_folder).replace("-", "") + "_feature_catalog.csv"
@@ -1325,23 +1333,27 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
 
 def _load_exp_data(label: str) -> None:
     """Load one ML experiment and store in session_state (main thread only)."""
-    entry  = st.session_state["exp_data"][label]
-    is_rep = entry.get("is_rep", False)
-    result = _compute_exp_data(
+    entry      = st.session_state["exp_data"][label]
+    is_rep     = entry.get("is_rep", False)
+    is_ongoing = entry.get("is_ongoing", False)
+    result     = _compute_exp_data(
         entry["rep"],
         st.session_state.get("_ml_folder_id", ""),
         st.session_state.get("_woe_iv_root_id", ""),
     )
-    result["is_rep"] = is_rep
+    result["is_rep"]     = is_rep
+    result["is_ongoing"] = is_ongoing
     st.session_state["exp_data"][label] = result
 
 
 def _load_gnn_exp_data(label: str) -> None:
     """Load one GNN experiment and store in session_state (main thread only)."""
-    entry  = st.session_state["gnn_exp_data"][label]
-    is_rep = entry.get("is_rep", False)
-    result = _compute_gnn_exp_data(entry["rep"], st.session_state.get("_project_folder_id", ""))
-    result["is_rep"] = is_rep
+    entry      = st.session_state["gnn_exp_data"][label]
+    is_rep     = entry.get("is_rep", False)
+    is_ongoing = entry.get("is_ongoing", False)
+    result     = _compute_gnn_exp_data(entry["rep"], st.session_state.get("_project_folder_id", ""))
+    result["is_rep"]     = is_rep
+    result["is_ongoing"] = is_ongoing
     st.session_state["gnn_exp_data"][label] = result
 
 
@@ -1456,6 +1468,25 @@ if st.session_state.get("_gnn_exp_data_fp") != _combined_gfp:
 
 gnn_exp_data: dict[str, dict] = st.session_state.get("gnn_exp_data", {})
 
+# ── Ongoing 실험 마킹 (대표보다 높은 넘버링의 최신 비대표 실험) ──────────────
+_max_rep_ml_n  = max((_ml_folder_num(d["rep"]["ml_folder"])  for d in exp_data.values()     if d.get("is_rep")), default=-1)
+_max_all_ml_n  = max((_ml_folder_num(d["rep"]["ml_folder"])  for d in exp_data.values()),     default=-1)
+_max_rep_gnn_n = max((_gnn_folder_num(d["rep"]["folder"])    for d in gnn_exp_data.values() if d.get("is_rep")), default=-1)
+_max_all_gnn_n = max((_gnn_folder_num(d["rep"]["folder"])    for d in gnn_exp_data.values()), default=-1)
+
+for _d in exp_data.values():
+    _d["is_ongoing"] = (
+        not _d.get("is_rep") and
+        _max_all_ml_n > _max_rep_ml_n and
+        _ml_folder_num(_d["rep"]["ml_folder"]) == _max_all_ml_n
+    )
+for _d in gnn_exp_data.values():
+    _d["is_ongoing"] = (
+        not _d.get("is_rep") and
+        _max_all_gnn_n > _max_rep_gnn_n and
+        _gnn_folder_num(_d["rep"]["folder"]) == _max_all_gnn_n
+    )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 탭
@@ -1469,8 +1500,8 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_overview:
     # ── 미로드 실험 병렬 로드 ─────────────────────────────────────────────
-    _unloaded_ml  = [lbl for lbl in exp_data     if not exp_data[lbl].get("_loaded")     and exp_data[lbl].get("is_rep")]
-    _unloaded_gnn = [lbl for lbl in gnn_exp_data if not gnn_exp_data[lbl].get("_loaded") and gnn_exp_data[lbl].get("is_rep")]
+    _unloaded_ml  = [lbl for lbl in exp_data     if not exp_data[lbl].get("_loaded")     and (exp_data[lbl].get("is_rep")     or exp_data[lbl].get("is_ongoing"))]
+    _unloaded_gnn = [lbl for lbl in gnn_exp_data if not gnn_exp_data[lbl].get("_loaded") and (gnn_exp_data[lbl].get("is_rep") or gnn_exp_data[lbl].get("is_ongoing"))]
     if _unloaded_ml or _unloaded_gnn:
         from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
         _ml_fid      = st.session_state.get("_ml_folder_id", "")
@@ -1492,10 +1523,12 @@ with tab_overview:
                 try:
                     _result = _fut.result()
                     if _lbl in _unloaded_ml_set:
-                        _result["is_rep"] = exp_data.get(_lbl, {}).get("is_rep", False)
+                        _result["is_rep"]     = exp_data.get(_lbl, {}).get("is_rep", False)
+                        _result["is_ongoing"] = exp_data.get(_lbl, {}).get("is_ongoing", False)
                         st.session_state["exp_data"][_lbl] = _result
                     else:
-                        _result["is_rep"] = gnn_exp_data.get(_lbl, {}).get("is_rep", False)
+                        _result["is_rep"]     = gnn_exp_data.get(_lbl, {}).get("is_rep", False)
+                        _result["is_ongoing"] = gnn_exp_data.get(_lbl, {}).get("is_ongoing", False)
                         st.session_state["gnn_exp_data"][_lbl] = _result
                 except Exception as _e:
                     st.warning(f"'{_lbl}' 로드 실패: {_e}")
@@ -1504,9 +1537,9 @@ with tab_overview:
         exp_data     = st.session_state["exp_data"]
         gnn_exp_data = st.session_state.get("gnn_exp_data", {})
 
-    # Overview는 대표 실험만 표시
-    _ov_exp = {lbl: d for lbl, d in exp_data.items()     if d.get("is_rep")}
-    _ov_gnn = {lbl: d for lbl, d in gnn_exp_data.items() if d.get("is_rep")}
+    # Overview: 대표 실험 + ongoing 실험 표시
+    _ov_exp = {lbl: d for lbl, d in exp_data.items()     if d.get("is_rep") or d.get("is_ongoing")}
+    _ov_gnn = {lbl: d for lbl, d in gnn_exp_data.items() if d.get("is_rep") or d.get("is_ongoing")}
 
     st.markdown("#### Project Summary")
 
@@ -1595,6 +1628,8 @@ with tab_overview:
         m    = m.get("metrics", m)
         desc = rep.get("description", "")
         exp  = _woe_iv_folder_name(rep["ml_folder"]).upper()
+        if d.get("is_ongoing"):
+            exp = f"{exp} (ongoing)"
         f1      = m.get("f1")
         auprc   = m.get("average_precision") or d["ml"].get("train_summary", {}).get("best_score")
         recall  = m.get("recall")
@@ -1612,6 +1647,8 @@ with tab_overview:
         epochs = parsed.get("epochs", [])
         desc   = rep.get("description", "")
         exp    = rep["folder"]
+        if d.get("is_ongoing"):
+            exp = f"{exp} (ongoing)"
         t_sec  = parsed.get("training_time_sec")
         if t_sec is not None:
             gnn_time_rows.append({"exp": exp, "time_sec": t_sec, "description": desc})
