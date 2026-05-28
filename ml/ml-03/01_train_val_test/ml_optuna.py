@@ -1,4 +1,4 @@
-"""ML-02 Optuna tuning pipeline for XGBoost.
+"""ML common Optuna tuning pipeline for XGBoost.
 
 The pipeline runs smoke tuning, full tuning, and final train/validation with the
 best full-study parameters. It intentionally never reads or evaluates test data.
@@ -13,10 +13,10 @@ from typing import Any, Optional, Union
 
 import pandas as pd
 
-from ml_02_ml_io import InputPaths, preflight_ml_inputs, resolve_project_path, save_json
-from ml_02_ml_optuna_spaces import suggest_xgb_params
-from ml_02_ml_train import XGBTrainConfig, XGBTrainResult, train_xgb
-from ml_02_ml_val import ValidationConfig, ValidationResult, validate_xgb
+from ml_io import InputPaths, preflight_ml_inputs, resolve_project_path, save_json
+from ml_optuna_spaces import suggest_xgb_params
+from ml_train import XGBTrainConfig, XGBTrainResult, train_xgb
+from ml_val import ValidationConfig, ValidationResult, validate_xgb
 
 ALLOWED_SELECTION_METRICS = {"average_precision", "f1", "recall", "precision"}
 SMOKE_SAMPLE_ROWS = 100_000
@@ -62,6 +62,7 @@ class OptunaPipelineConfig:
     smoke_trials: int = 3
     full_trials: int = 50
     selection_metric: str = "average_precision"
+    study_name_prefix: str = "ml"
     seed: int = 42
     n_jobs: int = -1
     accelerator: str = "auto"
@@ -94,6 +95,8 @@ class OptunaPipelineConfig:
                 "Unsupported selection_metric. "
                 f"selection_metric={self.selection_metric!r}, allowed={sorted(ALLOWED_SELECTION_METRICS)}"
             )
+        if not str(self.study_name_prefix).strip():
+            raise ValueError("study_name_prefix must be a non-empty string.")
 
 
 @dataclass(frozen=True)
@@ -116,7 +119,7 @@ def _require_optuna() -> Any:
         import optuna
     except ImportError as exc:
         raise MissingOptionalDependencyError(
-            "Optuna is required for ML-02 tuning. Install dependencies from requirements.txt."
+            "Optuna is required for ML common tuning. Install dependencies from requirements.txt."
         ) from exc
     return optuna
 
@@ -226,7 +229,8 @@ def _run_study(
     _prepare_tuning_dir(stage_dir, overwrite=config.overwrite)
 
     sampler = optuna.samplers.TPESampler(seed=config.seed)
-    study = optuna.create_study(direction="maximize", sampler=sampler, study_name=f"ml02_{stage_name}")
+    study_name = f"{config.study_name_prefix}_{stage_name}"
+    study = optuna.create_study(direction="maximize", sampler=sampler, study_name=study_name)
 
     def objective(trial: Any) -> float:
         params = suggest_xgb_params(trial)
@@ -294,7 +298,7 @@ def _run_final_train_val(
             n_jobs=config.n_jobs,
             accelerator=config.accelerator,
             encoding_manifest_path=config.encoding_manifest_path,
-            export_feature_assoc=config.export_feature_assoc,
+            export_feature_assoc=True,
             **best_params,
         )
     )
@@ -314,8 +318,8 @@ def _run_final_train_val(
             allow_nan=config.allow_nan,
             overwrite=config.overwrite,
             encoding_manifest_path=config.encoding_manifest_path,
-            export_feature_assoc=config.export_feature_assoc,
-            export_prediction_scores=config.export_prediction_scores,
+            export_feature_assoc=True,
+            export_prediction_scores=True,
         )
     )
     return train_result, val_result
@@ -337,8 +341,8 @@ def _resolve_best_params(best_trial: Any, study_best_params: dict[str, Any]) -> 
     return best_params
 
 
-def run_ml02_optuna_pipeline(config: OptunaPipelineConfig) -> OptunaPipelineResult:
-    """Run smoke tuning, full tuning, and final train/validation for ML-02."""
+def run_ml_optuna_pipeline(config: OptunaPipelineConfig) -> OptunaPipelineResult:
+    """Run smoke tuning, full tuning, and final train/validation for ML common."""
 
     preflight_ml_inputs(
         InputPaths(
