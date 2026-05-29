@@ -1199,13 +1199,8 @@ def _compute_exp_data(rep: dict, ml_fid: str, woe_root_id: str) -> dict:
     _woe_base    = _get_folder_id(woe_root_id,  woe_iv_name)        if woe_root_id else ""
     _woe_run     = _get_folder_id(_woe_base,    rep["run_id"])       if _woe_base   else ""
     woe_iv_fid   = _get_folder_id(_woe_run,     rep["model_run_id"]) if _woe_run    else ""
-    _woe_path_used = f"woe_iv/{woe_iv_name}/{rep['run_id']}/{rep['model_run_id']}"
-    # 구 경로 폴백: woe_iv/{ml_folder}/ 에 파일이 바로 있는 경우
-    if not woe_iv_fid and _woe_base:
-        woe_iv_fid = _woe_base
-        _woe_path_used = f"woe_iv/{woe_iv_name} (구 경로 폴백)"
-    if not _woe_base:
-        _woe_path_used = f"woe_iv/{woe_iv_name} ← 폴더 없음"
+    _woe_path_used = (f"woe_iv/{woe_iv_name}/{rep['run_id']}/{rep['model_run_id']}"
+                      if _woe_base else f"woe_iv/{woe_iv_name} ← 폴더 없음")
     prefix      = _artifact_prefix(rep)
     cat_fn      = _catalog_filename(rep["ml_folder"])
 
