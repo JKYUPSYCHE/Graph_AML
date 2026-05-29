@@ -93,6 +93,7 @@ def get_loaders(tr_data, val_data, te_data, args, cache_dir=None):
     import os
     num_parts = getattr(args, 'num_parts', 300)
     cpb       = getattr(args, 'clusters_per_batch', 10)
+    recursive = getattr(args, 'recursive', True)
 
     if cache_dir:
         tr_save  = os.path.join(cache_dir, 'tr')
@@ -103,10 +104,10 @@ def get_loaders(tr_data, val_data, te_data, args, cache_dir=None):
     else:
         tr_save = val_save = te_save = None
 
-    logging.info(f'[ClusterGCN] Partitioning into {num_parts} parts, {cpb} clusters/batch...')
-    tr_cluster  = ClusterData(tr_data,  num_parts=num_parts, recursive=False, log=False, save_dir=tr_save)
-    val_cluster = ClusterData(val_data, num_parts=num_parts, recursive=False, log=False, save_dir=val_save)
-    te_cluster  = ClusterData(te_data,  num_parts=num_parts, recursive=False, log=False, save_dir=te_save)
+    logging.info(f'[ClusterGCN] Partitioning into {num_parts} parts, {cpb} clusters/batch, recursive={recursive}...')
+    tr_cluster  = ClusterData(tr_data,  num_parts=num_parts, recursive=recursive, log=False, save_dir=tr_save)
+    val_cluster = ClusterData(val_data, num_parts=num_parts, recursive=recursive, log=False, save_dir=val_save)
+    te_cluster  = ClusterData(te_data,  num_parts=num_parts, recursive=recursive, log=False, save_dir=te_save)
     logging.info('[ClusterGCN] Partitioning done.')
 
     tr_loader  = ClusterLoader(tr_cluster,  batch_size=cpb, shuffle=True,  drop_last=True,  num_workers=0)
