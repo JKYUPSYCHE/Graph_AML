@@ -259,9 +259,15 @@ def _get_reports_store() -> dict:
 
 
 def _load_report(tab_name: str, exp_name: str) -> dict:
-    """reports.json 스토어에서 해당 실험 리포트 로드."""
+    """reports.json 스토어에서 해당 실험 리포트 로드.
+    구 포맷(ml_folder만) 키도 폴백으로 조회."""
     store = _get_reports_store()
-    return store.get(f"{tab_name}__{exp_name}", {})
+    data  = store.get(f"{tab_name}__{exp_name}", {})
+    if not data:
+        # 구 포맷 호환: "ml-01__r02__d00-fixparam" → "ml-01"
+        old_key = f"{tab_name}__{exp_name.split('__')[0]}"
+        data = store.get(old_key, {})
+    return data
 
 
 def _save_report(tab_name: str, exp_name: str, content: str, author: str) -> bool:
@@ -1797,7 +1803,7 @@ def _tab_gnn_render():
         _gnn_note = sel_gnn_rep.get("note", "")
         if _gnn_note:
             st.caption(f"**Note**: {_gnn_note}")
-        _render_report("GNN Result", sel_gnn_rep["folder"])
+        _render_report("GNN Result", f"{sel_gnn_rep['folder']}__{sel_gnn_rep['run_id']}")
         st.divider()
         gnn_d  = gnn_exp_data.get(sel_gnn_label, {}).get("d", {})
 
@@ -2018,7 +2024,7 @@ def _tab_ml_render():
     if _note:
         st.caption(f"**Note**: {_note}")
 
-    _render_report("ML Result", _woe_iv_folder_name(rep["ml_folder"]))
+    _render_report("ML Result", f"{_woe_iv_folder_name(rep['ml_folder'])}__{rep['run_id']}__{rep['model_run_id']}")
     st.divider()
 
     if not ml:
@@ -2287,7 +2293,8 @@ def _tab_woe_render():
             _load_exp_data(sel_woe)
         exp_data = st.session_state.get("exp_data", {})
 
-    _render_report("Univariate Analysis", _woe_iv_folder_name(exp_data[sel_woe]["rep"]["ml_folder"]))
+    _rep_woe = exp_data[sel_woe]["rep"]
+    _render_report("Univariate Analysis", f"{_woe_iv_folder_name(_rep_woe['ml_folder'])}__{_rep_woe['run_id']}__{_rep_woe['model_run_id']}")
     st.divider()
 
     d_woe    = exp_data[sel_woe]
