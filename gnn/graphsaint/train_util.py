@@ -47,10 +47,29 @@ def load_model(model, device, args, config, data_config):
     return model, optimizer
 
 
+# ── homo → hetero 변환 (배치 내 on-the-fly) ──────────────────────────────────
+def homo_to_hetero(batch, args):
+    """GraphSAINT homo 배치를 reverse_mp용 HeteroData로 변환.
+    edge_attr 첫 번째 컬럼(arange ID)은 아직 제거하지 않은 상태로 호출해야 함."""
+    data = HeteroData()
+    data['node'].x = batch.x
+    data['node', 'to', 'node'].edge_index     = batch.edge_index
+    data['node', 'rev_to', 'node'].edge_index = batch.edge_index.flipud()
+    data['node', 'to', 'node'].edge_attr      = batch.edge_attr
+    data['node', 'rev_to', 'node'].edge_attr  = batch.edge_attr.clone()
+    if getattr(args, 'ports', False) and getattr(args, 'reverse_ports', True):
+        rev = data['node', 'rev_to', 'node'].edge_attr
+        rev[:, [-1, -2]] = rev[:, [-2, -1]].clone()
+    data['node', 'to', 'node'].y = batch.y
+    return data
+
+
 # ── GraphSAINT DataLoaders ────────────────────────────────────────────────────
 def get_loaders(tr_data, val_data, te_data, args):
     """
     GraphSAINTRandomWalkSampler 기반 로더 생성.
+    reverse_mp=True이더라도 샘플러는 항상 homo Data를 받음.
+    hetero 변환은 학습/평가 루프 내부에서 on-the-fly로 수행.
 
     args 필드:
         walk_length      : 랜덤워크 길이 (기본 2)
@@ -61,7 +80,6 @@ def get_loaders(tr_data, val_data, te_data, args):
     num_steps   = getattr(args, 'num_steps', 30)
     batch_size  = getattr(args, 'saint_batch_size', 200)
 
-    # TODO: GraphSAINT는 homo Data만 직접 지원 — reverse_mp=True이면 homo로 학습 후 hetero 변환
     tr_loader  = GraphSAINTRandomWalkSampler(
         tr_data,  batch_size=batch_size, walk_length=walk_length,
         num_steps=num_steps,  sample_coverage=0, num_workers=0)
@@ -75,13 +93,10 @@ def get_loaders(tr_data, val_data, te_data, args):
     return tr_loader, val_loader, te_loader
 
 
-# ── Evaluate ──────────────────────────────────────────────────────────────────
+# ── Evaluate (homo) ───────────────────────────────────────────────────────────
 @torch.no_grad()
 def evaluate_graphsaint(loader, model, device, args, te_inds=None):
-    """
-    te_inds=None : 배치 내 모든 엣지 평가 (val용)
-    te_inds 지정  : arange ID로 test 엣지만 필터링
-    """
+    """te_inds=None이면 배치 내 모든 엣지 평가 (val용), 지정 시 test 엣지만 평가."""
     model.eval()
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(device)
@@ -95,7 +110,7 @@ def evaluate_graphsaint(loader, model, device, args, te_inds=None):
         else:
             mask = torch.ones(batch.edge_attr.shape[0], dtype=torch.bool)
 
-        batch.edge_attr = batch.edge_attr[:, 1:]  # arange ID 제거
+        batch.edge_attr = batch.edge_attr[:, 1:]
 
         if mask.sum() == 0:
             continue
@@ -115,6 +130,52 @@ def evaluate_graphsaint(loader, model, device, args, te_inds=None):
                  else psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2)
     model.train()
 
+    return _compute_metrics(preds, pred_probas, ground_truths, memory_mb, t_end - t_start)
+
+
+# ── Evaluate (hetero) ─────────────────────────────────────────────────────────
+@torch.no_grad()
+def evaluate_graphsaint_hetero(loader, model, device, args, te_inds=None):
+    model.eval()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats(device)
+    t_start = time.perf_counter()
+
+    preds, pred_probas, ground_truths = [], [], []
+
+    for batch in tqdm.tqdm(loader, disable=not args.tqdm):
+        if te_inds is not None:
+            mask = torch.isin(batch.edge_attr[:, 0].cpu(), te_inds.cpu())
+        else:
+            mask = torch.ones(batch.edge_attr.shape[0], dtype=torch.bool)
+
+        if mask.sum() == 0:
+            continue
+
+        hbatch = homo_to_hetero(batch, args)
+        hbatch['node', 'to', 'node'].edge_attr     = hbatch['node', 'to', 'node'].edge_attr[:, 1:]
+        hbatch['node', 'rev_to', 'node'].edge_attr = hbatch['node', 'rev_to', 'node'].edge_attr[:, 1:]
+
+        hbatch.to(device)
+        out = model(hbatch.x_dict, hbatch.edge_index_dict, hbatch.edge_attr_dict)
+        out = out[('node', 'to', 'node')][mask.to(device)]
+        gts = hbatch['node', 'to', 'node'].y[mask.to(device)]
+
+        preds.append(out.argmax(dim=-1).cpu())
+        pred_probas.append(out.softmax(dim=-1)[:, 1].detach().cpu())
+        ground_truths.append(gts.cpu())
+
+    t_end = time.perf_counter()
+    memory_mb = (torch.cuda.max_memory_allocated(device) / 1024 ** 2
+                 if torch.cuda.is_available()
+                 else psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2)
+    model.train()
+
+    return _compute_metrics(preds, pred_probas, ground_truths, memory_mb, t_end - t_start)
+
+
+# ── 공통 메트릭 계산 ──────────────────────────────────────────────────────────
+def _compute_metrics(preds, pred_probas, ground_truths, memory_mb, time_s):
     pred         = torch.cat(preds).numpy()
     pred_proba   = torch.cat(pred_probas).numpy()
     ground_truth = torch.cat(ground_truths).numpy()
@@ -127,5 +188,5 @@ def evaluate_graphsaint(loader, model, device, args, te_inds=None):
         'auprc':     average_precision_score(ground_truth, pred_proba),
         'log_loss':  log_loss(ground_truth, pred_proba),
         'tn': int(tn), 'fp': int(fp), 'fn': int(fn), 'tp': int(tp),
-        'memory_mb': memory_mb, 'time_s': t_end - t_start,
+        'memory_mb': memory_mb, 'time_s': time_s,
     }
