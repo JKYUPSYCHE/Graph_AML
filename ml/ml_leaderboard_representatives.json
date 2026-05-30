@@ -6,24 +6,57 @@
     "model_run_id": "default_00",
     "status": "representative_final",
     "selected_at": "2026-05-21",
+    "description": "ML 베이스라인",
     "note": "ML-00, 파이프라인구축 및 코드 실행 준비용 기본 실험"
   },
   {
     "ml_folder": "ml-01",
     "experiment_id": "ml_01",
     "run_id": "r02",
-    "model_run_id": "d00-fixparam",
+    "model_run_id": "d00-fixparam-format-out",
     "status": "candidate_val_only",
-    "selected_at": "2026-05-25",
-    "note": "ML-01, 파라미터 고정, 고카디널리티 컬럼(bank code, bank pair code)을 제외한 정책으로 학습"
+    "selected_at": "2026-05-29",
+    "description": "일반 집계 피처 1단계",
+    "note": "ML-01, 파라미터 고정, 고카디널리티 컬럼(bank code, bank pair code),payment_format 을 제외한 정책으로 학습"
   },
   {
     "ml_folder": "ml-02",
     "experiment_id": "ml_02",
-    "run_id": "r01",
-    "model_run_id": "d00-optuna",
+    "run_id": "r02",
+    "model_run_id": "d00-optuna-out-format-rev2-t50",
     "status": "candidate_val_only",
-    "selected_at": "2026-05-25",
-    "note": "ML-02, ML-01과 동일 정책, optuna 하이퍼 파라미터 튜닝 적용함"
-  }
+    "selected_at": "2026-05-29",
+    "description": "일반 집계 피처 2단계",
+    "note": "ML-02, ML-01과 동일 정책, optuna 하이퍼 파라미터 튜닝 적용"
+  },
+  {
+    "ml_folder": "ml-03",
+    "experiment_id": "ml_03",
+    "run_id": "r00",
+    "model_run_id": "d00-fixparam",
+    "status": "candidate_val_only",
+    "selected_at": "2026-05-28",
+    "description": "그래프 피처 1단계 - Fan-in/Fan-out",
+    "note": "ML-03, ML-02와 동일 정책, 고정 파라미터 적용"
+  },
+  {
+  "ml_folder": "ml-04",
+  "experiment_id": "ml_04",
+  "run_id": "r01",
+  "model_run_id": "d00-fixparam",
+  "status": "candidate_val_only",
+  "selected_at": "2026-05-28",
+  "description": "그래프 피처 2단계 - sender-receiver pair",
+  "note": "ML-04, ML-03 피처 + sender-receiver pair 피처 추가, pair raw ratio 3개는 ML 입력에서 제외, 고정 파라미터 적용"
+ },
+{
+  "ml_folder": "ml-05",
+  "experiment_id": "ml_05",
+  "run_id": "r00",
+  "model_run_id": "d00-optuna_t25",
+  "status": "candidate_val_only",
+  "selected_at": "2026-05-29",
+  "description": "그래프 피처 3단계 - flow-balance, pass-through",
+  "note": "ML-05, ML-04 피처 + flow-balance/pass-through 피처 48개 추가, pair raw ratio 3개 입력 제외, Optuna 25 trial 튜닝 적용."
+}
 ]
