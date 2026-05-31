@@ -65,9 +65,11 @@ def add_arange_ids(data_list):
         else:
             data.edge_attr = torch.cat([torch.arange(data.edge_attr.shape[0]).view(-1, 1), data.edge_attr], dim=1)
 
-def _make_weighted_sampler(labels: torch.Tensor) -> WeightedRandomSampler:
+def _make_weighted_sampler(labels: torch.Tensor, wrs_ratio: float = 1.0) -> WeightedRandomSampler:
+    # wrs_ratio = normal:illicit ratio in each batch (1.0 → 1:1, 3.0 → 3:1)
     class_counts = torch.bincount(labels)
     class_weights = 1.0 / class_counts.float()
+    class_weights[0] *= wrs_ratio  # normal class 샘플링 빈도 조절
     sample_weights = class_weights[labels]
     return WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
 
@@ -100,7 +102,7 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
             ts_tr = ts_val = ts_te = {}
 
         if use_wrs:
-            sampler = _make_weighted_sampler(tr_edge_label)
+            sampler = _make_weighted_sampler(tr_edge_label, getattr(args, 'wrs_ratio', 1.0))
             tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
                                         edge_label_index=(('node', 'to', 'node'), tr_edge_label_index),
                                         edge_label=tr_edge_label, batch_size=args.batch_size,
@@ -142,7 +144,7 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
             ts_tr = ts_val = ts_te = {}
 
         if use_wrs:
-            sampler = _make_weighted_sampler(tr_data.y)
+            sampler = _make_weighted_sampler(tr_data.y, getattr(args, 'wrs_ratio', 1.0))
             tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
                                         batch_size=args.batch_size, sampler=sampler,
                                         drop_last=True, transform=transform,
