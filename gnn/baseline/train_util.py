@@ -73,10 +73,41 @@ def _make_weighted_sampler(labels: torch.Tensor, wrs_ratio: float = 1.0) -> Weig
     sample_weights = class_weights[labels]
     return WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
 
+
+class TemporalWindowSampler(torch.utils.data.Sampler):
+    """
+    Sliding window over time-sorted edges.
+    - window_size개의 시간순 엣지를 하나의 배치로 묶음
+    - stride씩 이동 (stride < window_size이면 배치 간 겹침 발생 → 최근 거래 더 자주 학습)
+    """
+    def __init__(self, timestamps: torch.Tensor, window_size: int, stride: int):
+        sorted_idx = timestamps.argsort()
+        n = len(sorted_idx)
+        self._indices = []
+        start = 0
+        while start < n:
+            end = min(start + window_size, n)
+            self._indices.extend(sorted_idx[start:end].tolist())
+            if end >= n:
+                break
+            start += stride
+
+    def __iter__(self):
+        return iter(self._indices)
+
+    def __len__(self):
+        return len(self._indices)
+
+
 def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transform, args):
     use_wrs = getattr(args, 'weighted_sampler', False)
     temporal_strategy = getattr(args, 'temporal_strategy', None)
-    time_attr = "timestamps" if temporal_strategy else None
+
+    # 'window': 커스텀 sliding window (배치 순서 제어)
+    # 'last'  : PyG 내장 temporal neighbor sampling (이웃 샘플링 시 과거만 참조)
+    use_window = temporal_strategy == 'window'
+    use_pyg_temporal = temporal_strategy in ('last',)
+    time_attr = "timestamps" if use_pyg_temporal else None
 
     if time_attr:
         # PyG temporal sampler requires Long timestamps on the data objects themselves
@@ -91,7 +122,7 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
         tr_edge_label_index = tr_data['node', 'to', 'node'].edge_index
         tr_edge_label = tr_data['node', 'to', 'node'].y
 
-        if time_attr:
+        if use_pyg_temporal:
             ts_tr  = {'time_attr': time_attr, 'temporal_strategy': temporal_strategy,
                       'edge_label_time': tr_data['node', 'to', 'node'].timestamps.long()}
             ts_val = {'time_attr': time_attr, 'temporal_strategy': temporal_strategy,
@@ -101,7 +132,17 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
         else:
             ts_tr = ts_val = ts_te = {}
 
-        if use_wrs:
+        if use_window:
+            stride = getattr(args, 'window_stride', args.batch_size // 2)
+            sampler = TemporalWindowSampler(
+                tr_data['node', 'to', 'node'].timestamps,
+                window_size=args.batch_size, stride=stride,
+            )
+            tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
+                                        edge_label_index=(('node', 'to', 'node'), tr_edge_label_index),
+                                        edge_label=tr_edge_label, batch_size=args.batch_size,
+                                        sampler=sampler, drop_last=True, transform=transform)
+        elif use_wrs:
             sampler = _make_weighted_sampler(tr_edge_label, getattr(args, 'wrs_ratio', 1.0))
             tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
                                         edge_label_index=(('node', 'to', 'node'), tr_edge_label_index),
@@ -133,7 +174,7 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
                                     shuffle=False, transform=transform,
                                     **ts_te)
     else:
-        if time_attr:
+        if use_pyg_temporal:
             ts_tr  = {'time_attr': time_attr, 'temporal_strategy': temporal_strategy,
                       'edge_label_time': tr_data.timestamps.long()}
             ts_val = {'time_attr': time_attr, 'temporal_strategy': temporal_strategy,
@@ -143,7 +184,16 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
         else:
             ts_tr = ts_val = ts_te = {}
 
-        if use_wrs:
+        if use_window:
+            stride = getattr(args, 'window_stride', args.batch_size // 2)
+            sampler = TemporalWindowSampler(
+                tr_data.timestamps,
+                window_size=args.batch_size, stride=stride,
+            )
+            tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
+                                        batch_size=args.batch_size, sampler=sampler,
+                                        drop_last=True, transform=transform)
+        elif use_wrs:
             sampler = _make_weighted_sampler(tr_data.y, getattr(args, 'wrs_ratio', 1.0))
             tr_loader = LinkNeighborLoader(tr_data, num_neighbors=args.num_neighs,
                                         batch_size=args.batch_size, sampler=sampler,
