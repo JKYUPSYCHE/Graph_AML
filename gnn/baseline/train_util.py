@@ -221,6 +221,7 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
 def evaluate_homo(loader, inds, model, data, device, args):
     '''Evaluates the model performance for homogenous graph data.'''
     model.eval()
+    threshold = getattr(args, 'threshold', 0.5)
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(device)
     t_start = time.perf_counter()
@@ -257,8 +258,8 @@ def evaluate_homo(loader, inds, model, data, device, args):
             batch.to(device)
             out = model(batch.x, batch.edge_index, batch.edge_attr)
             out = out[mask]
-            pred = out.argmax(dim=-1)
             pred_proba = out.softmax(dim=-1)[:, 1]
+            pred = (pred_proba >= threshold).long()
             preds.append(pred)
             pred_probas.append(pred_proba)
             ground_truths.append(batch.y[mask])
@@ -290,6 +291,7 @@ def evaluate_homo(loader, inds, model, data, device, args):
 def evaluate_hetero(loader, inds, model, data, device, args):
     '''Evaluates the model performance for heterogenous graph data.'''
     model.eval()
+    threshold = getattr(args, 'threshold', 0.5)
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(device)
     t_start = time.perf_counter()
@@ -328,8 +330,8 @@ def evaluate_hetero(loader, inds, model, data, device, args):
             out = model(batch.x_dict, batch.edge_index_dict, batch.edge_attr_dict)
             out = out[('node', 'to', 'node')]
             out = out[mask]
-            pred = out.argmax(dim=-1)
             pred_proba = out.softmax(dim=-1)[:, 1]
+            pred = (pred_proba >= threshold).long()
             preds.append(pred)
             pred_probas.append(pred_proba)
             ground_truths.append(batch['node', 'to', 'node'].y[mask])
