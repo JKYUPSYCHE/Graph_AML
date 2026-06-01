@@ -1380,6 +1380,7 @@ _ml_fp       = tuple((r["ml_folder"], r["run_id"], r["prefix"])    for r in all_
 _rp_fp       = tuple((r["ml_folder"], _artifact_prefix(r))         for r in valid_reps)
 _combined_fp = (_ml_fp, _rp_fp)
 if st.session_state.get("_exp_data_fp") != _combined_fp:
+    st.cache_data.clear()
     _exp_init: dict[str, dict] = {}
     for _run in all_ml_runs:
         _parts  = _run["prefix"].split("__", 2)
@@ -1420,6 +1421,8 @@ _gnn_fp       = tuple((r["folder"], r["run_id"]) for r in all_gnn_runs)
 _grp_fp       = tuple((r["folder"], r["run_id"]) for r in gnn_reps)
 _combined_gfp = (_gnn_fp, _grp_fp)
 if st.session_state.get("_gnn_exp_data_fp") != _combined_gfp:
+    # 새 실험 감지 시 파일 목록 캐시 초기화 (stale _list_files 방지)
+    st.cache_data.clear()
     _gnn_init: dict[str, dict] = {}
     for _run in all_gnn_runs:
         _rep_e  = _gnn_rep_map.get((_run["folder"], _run["run_id"]))
@@ -1465,10 +1468,7 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 with tab_overview:
     # ── 미로드 실험 병렬 로드 ─────────────────────────────────────────────
     _unloaded_ml  = [lbl for lbl in exp_data     if not exp_data[lbl].get("_loaded")     and (exp_data[lbl].get("is_rep")     or exp_data[lbl].get("is_ongoing"))]
-    _unloaded_gnn = [lbl for lbl in gnn_exp_data
-                     if (not gnn_exp_data[lbl].get("_loaded") or
-                         not gnn_exp_data[lbl].get("d", {}).get("parsed", {}).get("epochs"))
-                     and (gnn_exp_data[lbl].get("is_rep") or gnn_exp_data[lbl].get("is_ongoing"))]
+    _unloaded_gnn = [lbl for lbl in gnn_exp_data if not gnn_exp_data[lbl].get("_loaded") and (gnn_exp_data[lbl].get("is_rep") or gnn_exp_data[lbl].get("is_ongoing"))]
     if _unloaded_ml or _unloaded_gnn:
         from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
         _ml_fid      = st.session_state.get("_ml_folder_id", "")
