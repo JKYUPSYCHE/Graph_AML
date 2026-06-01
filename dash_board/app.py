@@ -1250,6 +1250,17 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
         fi_dir_id = f_fi_dir.result()
     _dbg["logs_id"] = bool(logs_id)
 
+    def _fetch_args():
+        if not models_id:
+            return None
+        mf       = _list_files(models_id)
+        args_fns = [n for n in mf if n.endswith("_args.json")]
+        return _download_json(mf[args_fns[0]]) if args_fns else None
+
+    # args를 먼저 로드해서 unique_name으로 정확한 로그 파일 특정
+    args_data = _fetch_args()
+    unique_name = (args_data or {}).get("unique_name", "") if args_data else ""
+
     def _fetch_log():
         if not logs_id:
             return None, "logs 폴더 없음"
@@ -1257,22 +1268,18 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
         log_fns = [n for n in lf if n.endswith(".log")]
         if not log_fns:
             return None, f"logs/ 안 파일 목록: {list(lf.keys())}"
+        # unique_name으로 특정 로그 파일 선택, 없으면 첫 번째
+        target = f"{unique_name}.log" if unique_name else ""
+        fn = target if target in lf else log_fns[0]
         r = requests.get(
-            f"https://drive.google.com/uc?export=download&id={lf[log_fns[0]]}",
+            f"https://drive.google.com/uc?export=download&id={lf[fn]}",
             timeout=60,
         )
         if not r.ok:
-            return None, f"다운로드 실패 {r.status_code}: {log_fns[0]}"
+            return None, f"다운로드 실패 {r.status_code}: {fn}"
         result = _parse_gnn_log(r.content.decode("utf-8", errors="replace"))
         epochs = result.get("epochs", []) if result else []
-        return result, f"OK — {log_fns[0]} ({len(epochs)} epochs)"
-
-    def _fetch_args():
-        if not models_id:
-            return None
-        mf       = _list_files(models_id)
-        args_fns = [n for n in mf if n.endswith("_args.json")]
-        return _download_json(mf[args_fns[0]]) if args_fns else None
+        return result, f"OK — {fn} ({len(epochs)} epochs)"
 
     def _fetch_fi():
         if not fi_dir_id:
@@ -1286,12 +1293,10 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
         fi_indiv = _download_csv(fi_files[fi_indiv_fns[0]]) if fi_indiv_fns else None
         return fi, fi_indiv
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    with ThreadPoolExecutor(max_workers=2) as ex:
         f_parsed = ex.submit(_fetch_log)
-        f_args   = ex.submit(_fetch_args)
         f_fi_res = ex.submit(_fetch_fi)
         parsed, _log_msg = f_parsed.result()
-        args_data        = f_args.result()
         fi, fi_indiv     = f_fi_res.result()
     _dbg["log_msg"] = _log_msg
 
