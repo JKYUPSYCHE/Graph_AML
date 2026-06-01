@@ -5,7 +5,7 @@ import torch
 import tqdm
 import psutil
 import logging
-from torch_geometric.data import HeteroData
+from torch_geometric.data import Data, HeteroData
 from torch_geometric.loader import GraphSAINTRandomWalkSampler
 from sklearn.metrics import (f1_score, recall_score, precision_score,
                               average_precision_score, log_loss, confusion_matrix)
@@ -65,6 +65,19 @@ def homo_to_hetero(batch, args):
 
 
 # ── GraphSAINT DataLoaders ────────────────────────────────────────────────────
+def _to_pyg_data(data):
+    """커스텀 GraphData → 표준 PyG Data 변환.
+    GraphSAINTRandomWalkSampler가 내부에서 data.__class__()로 빈 인스턴스를
+    생성하는데, GraphData는 x가 필수라 crash. 표준 Data는 빈 생성자 허용."""
+    return Data(
+        x=data.x,
+        edge_index=data.edge_index,
+        edge_attr=data.edge_attr,
+        y=data.y,
+        num_nodes=int(data.num_nodes),
+    )
+
+
 def get_loaders(tr_data, val_data, te_data, args):
     """
     GraphSAINTRandomWalkSampler 기반 로더 생성.
@@ -81,13 +94,13 @@ def get_loaders(tr_data, val_data, te_data, args):
     batch_size  = getattr(args, 'saint_batch_size', 200)
 
     tr_loader  = GraphSAINTRandomWalkSampler(
-        tr_data,  batch_size=batch_size, walk_length=walk_length,
+        _to_pyg_data(tr_data),  batch_size=batch_size, walk_length=walk_length,
         num_steps=num_steps,  sample_coverage=0, num_workers=0)
     val_loader = GraphSAINTRandomWalkSampler(
-        val_data, batch_size=batch_size, walk_length=walk_length,
+        _to_pyg_data(val_data), batch_size=batch_size, walk_length=walk_length,
         num_steps=num_steps,  sample_coverage=0, num_workers=0)
     te_loader  = GraphSAINTRandomWalkSampler(
-        te_data,  batch_size=batch_size, walk_length=walk_length,
+        _to_pyg_data(te_data),  batch_size=batch_size, walk_length=walk_length,
         num_steps=num_steps,  sample_coverage=0, num_workers=0)
 
     return tr_loader, val_loader, te_loader
