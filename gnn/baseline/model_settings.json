@@ -13,7 +13,7 @@
   "pna": {
     "params": {
       "lr": 0.0006116418195373612, "n_hidden": 20, "n_mlp_layers": 1, "n_gnn_layers": 2, "loss": "ce", "w_ce1": 1.0003967674742307,
-      "w_ce2": 7.077633468006714, "norm_method": "z_normalize", "dropout": 0.3, "final_dropout": 0.28812979737686323
+      "w_ce2": 7.077633468006714, "norm_method": "z_normalize", "dropout": 0.08340440094051481, "final_dropout": 0.28812979737686323
     },
     "bayes_opt_params": {
       "lr": [0.0001, 0.001], "n_hidden": [16, 64], "n_mlp_layers": [1, 1.001], "n_gnn_layers": [2.00, 2.01], "loss": [0.0, 0.1],

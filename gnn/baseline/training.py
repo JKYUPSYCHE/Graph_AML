@@ -313,7 +313,7 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
         model, optimizer = load_model(model, device, args, config, data_config)
     else:
         model.to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=1e-4)
+        optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
 
     sample_batch.to(device)
     sample_x = sample_batch.x if not isinstance(sample_batch, HeteroData) else sample_batch.x_dict
