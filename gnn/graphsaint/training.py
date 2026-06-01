@@ -66,7 +66,7 @@ def get_model(tr_data, config, args):
 
 
 # ── Train (homo) ──────────────────────────────────────────────────────────────
-def train_homo(tr_loader, val_loader, te_loader, te_inds,
+def train_homo(tr_loader, val_loader, te_loader,
                model, optimizer, loss_fn, args, config, device, data_config, writer):
     best_val_f1, best_val_result, best_te_result = 0, None, None
     best_epoch, best_model_state, patience_counter = 0, None, 0
@@ -114,7 +114,7 @@ def train_homo(tr_loader, val_loader, te_loader, te_inds,
         tr_result = _make_tr_result(preds, pred_probas, ground_truths)
 
         val_result = evaluate_graphsaint(val_loader, model, device, args, te_inds=None)
-        te_result  = evaluate_graphsaint(te_loader,  model, device, args, te_inds=te_inds)
+        te_result  = evaluate_graphsaint(te_loader,  model, device, args, te_inds=None)
         _log_val_te(val_result, te_result)
         _write_metrics(writer, tr_result, val_result, te_result, epoch)
 
@@ -129,7 +129,7 @@ def train_homo(tr_loader, val_loader, te_loader, te_inds,
 
 
 # ── Train (hetero) ────────────────────────────────────────────────────────────
-def train_hetero(tr_loader, val_loader, te_loader, te_inds,
+def train_hetero(tr_loader, val_loader, te_loader,
                  model, optimizer, loss_fn, args, config, device, data_config, writer):
     best_val_f1, best_val_result, best_te_result = 0, None, None
     best_epoch, best_model_state, patience_counter = 0, None, 0
@@ -180,7 +180,7 @@ def train_hetero(tr_loader, val_loader, te_loader, te_inds,
         tr_result = _make_tr_result(preds, pred_probas, ground_truths)
 
         val_result = evaluate_graphsaint_hetero(val_loader, model, device, args, te_inds=None)
-        te_result  = evaluate_graphsaint_hetero(te_loader,  model, device, args, te_inds=te_inds)
+        te_result  = evaluate_graphsaint_hetero(te_loader,  model, device, args, te_inds=None)
         _log_val_te(val_result, te_result)
         _write_metrics(writer, tr_result, val_result, te_result, epoch)
 
@@ -306,11 +306,11 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
 
     if args.reverse_mp:
         model, best_te_result = train_hetero(
-            tr_loader, val_loader, te_loader, te_inds,
+            tr_loader, val_loader, te_loader,
             model, optimizer, loss_fn, args, config, device, data_config, writer)
     else:
         model, best_te_result = train_homo(
-            tr_loader, val_loader, te_loader, te_inds,
+            tr_loader, val_loader, te_loader,
             model, optimizer, loss_fn, args, config, device, data_config, writer)
 
     writer.close()
