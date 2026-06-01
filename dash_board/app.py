@@ -1465,7 +1465,10 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 with tab_overview:
     # ── 미로드 실험 병렬 로드 ─────────────────────────────────────────────
     _unloaded_ml  = [lbl for lbl in exp_data     if not exp_data[lbl].get("_loaded")     and (exp_data[lbl].get("is_rep")     or exp_data[lbl].get("is_ongoing"))]
-    _unloaded_gnn = [lbl for lbl in gnn_exp_data if not gnn_exp_data[lbl].get("_loaded") and (gnn_exp_data[lbl].get("is_rep") or gnn_exp_data[lbl].get("is_ongoing"))]
+    _unloaded_gnn = [lbl for lbl in gnn_exp_data
+                     if (not gnn_exp_data[lbl].get("_loaded") or
+                         not gnn_exp_data[lbl].get("d", {}).get("parsed", {}).get("epochs"))
+                     and (gnn_exp_data[lbl].get("is_rep") or gnn_exp_data[lbl].get("is_ongoing"))]
     if _unloaded_ml or _unloaded_gnn:
         from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
         _ml_fid      = st.session_state.get("_ml_folder_id", "")
