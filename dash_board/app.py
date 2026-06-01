@@ -1478,28 +1478,36 @@ with tab_overview:
         _gnn_args = [(lbl, gnn_exp_data[lbl]["rep"]) for lbl in _unloaded_gnn]
         _total = len(_ml_args) + len(_gnn_args)
         _bar   = st.progress(0, text=f"데이터 로드 중 (0/{_total})...")
-        with ThreadPoolExecutor(max_workers=6) as _ex:
-            _ml_futs  = {_ex.submit(_compute_exp_data,     rep, _ml_fid, _woe_root_id): lbl
-                         for lbl, rep in _ml_args}
-            _gnn_futs = {_ex.submit(_compute_gnn_exp_data, rep, _pfid):                 lbl
-                         for lbl, rep in _gnn_args}
-            _all_futs = {**_ml_futs, **_gnn_futs}
-            _unloaded_ml_set = set(_unloaded_ml)
-            for _n, _fut in enumerate(_as_completed(_all_futs), 1):
-                _lbl = _all_futs[_fut]
-                try:
-                    _result = _fut.result()
-                    if _lbl in _unloaded_ml_set:
+        _n = 0
+
+        # ML: 병렬 로드
+        if _ml_args:
+            with ThreadPoolExecutor(max_workers=6) as _ex:
+                _ml_futs = {_ex.submit(_compute_exp_data, rep, _ml_fid, _woe_root_id): lbl
+                            for lbl, rep in _ml_args}
+                for _fut in _as_completed(_ml_futs):
+                    _lbl = _ml_futs[_fut]
+                    _n += 1
+                    try:
+                        _result = _fut.result()
                         _result["is_rep"]     = exp_data.get(_lbl, {}).get("is_rep", False)
                         _result["is_ongoing"] = exp_data.get(_lbl, {}).get("is_ongoing", False)
                         st.session_state["exp_data"][_lbl] = _result
-                    else:
-                        _result["is_rep"]     = gnn_exp_data.get(_lbl, {}).get("is_rep", False)
-                        _result["is_ongoing"] = gnn_exp_data.get(_lbl, {}).get("is_ongoing", False)
-                        st.session_state["gnn_exp_data"][_lbl] = _result
-                except Exception as _e:
-                    st.warning(f"'{_lbl}' 로드 실패: {_e}")
-                _bar.progress(_n / _total, text=f"데이터 로드 중 ({_n}/{_total}): {_lbl}")
+                    except Exception:
+                        pass
+                    _bar.progress(_n / _total, text=f"데이터 로드 중 ({_n}/{_total})...")
+
+        # GNN: 순차 로드 (내부 ThreadPoolExecutor와 이중 스레딩 방지)
+        for _lbl, _rep in _gnn_args:
+            _n += 1
+            try:
+                _result = _compute_gnn_exp_data(_rep, _pfid)
+                _result["is_rep"]     = gnn_exp_data.get(_lbl, {}).get("is_rep", False)
+                _result["is_ongoing"] = gnn_exp_data.get(_lbl, {}).get("is_ongoing", False)
+                st.session_state["gnn_exp_data"][_lbl] = _result
+            except Exception as _e:
+                st.warning(f"'{_lbl}' 로드 실패: {_e}")
+            _bar.progress(_n / _total, text=f"데이터 로드 중 ({_n}/{_total}): {_lbl}")
         _bar.empty()
         exp_data     = st.session_state["exp_data"]
         gnn_exp_data = st.session_state.get("gnn_exp_data", {})
