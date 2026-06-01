@@ -1257,7 +1257,7 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
             f"https://drive.google.com/uc?export=download&id={lf[log_fns[0]]}",
             timeout=60,
         )
-        return _parse_gnn_log(r.text) if r.ok else None
+        return _parse_gnn_log(r.content.decode("utf-8", errors="replace")) if r.ok else None
 
     def _fetch_args():
         if not models_id:
