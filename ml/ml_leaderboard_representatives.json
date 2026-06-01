@@ -58,5 +58,15 @@
   "selected_at": "2026-05-29",
   "description": "그래프 피처 3단계 - flow-balance, pass-through",
   "note": "ML-05, ML-04 피처 + flow-balance/pass-through 피처 48개 추가, pair raw ratio 3개 입력 제외, Optuna 25 trial 튜닝 적용."
+},
+{
+"ml_folder": "ml-06",
+"experiment_id": "ml_06",
+"run_id": "r00",
+"model_run_id": "d00-optuna-t25-clip_p9999",
+"status": "candidate_val_only",
+"selected_at": "2026-06-01",
+"description": "ML-06 ratio 안정화 full reference",
+"note": "ML-06, ML-05 236-feature 계열에서 ratio 계열 21개를 train 기준 p99.99 clip variant로 안정화, Optuna 25 trial 튜닝"
 }
 ]
