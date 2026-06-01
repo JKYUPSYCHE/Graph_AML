@@ -1228,14 +1228,17 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
     from concurrent.futures import ThreadPoolExecutor
 
     gnn_id = _get_folder_id(project_folder_id, "gnn") if project_folder_id else ""
+    _dbg = {"gnn_id": bool(gnn_id)}
     if not gnn_id:
-        return {"rep": rep, "d": {}, "_loaded": True}
+        return {"rep": rep, "d": {}, "_loaded": True, "_gnn_debug": _dbg}
     exp_id = _get_folder_id(gnn_id, rep["folder"])
+    _dbg["exp_id"] = bool(exp_id)
     if not exp_id:
-        return {"rep": rep, "d": {}, "_loaded": True}
+        return {"rep": rep, "d": {}, "_loaded": True, "_gnn_debug": _dbg}
     run_fid = _get_folder_id(exp_id, rep["run_id"])
+    _dbg["run_fid"] = bool(run_fid)
     if not run_fid:
-        return {"rep": rep, "d": {}, "_loaded": True}
+        return {"rep": rep, "d": {}, "_loaded": True, "_gnn_debug": _dbg}
 
     # 하위 폴더 ID 병렬 조회
     with ThreadPoolExecutor(max_workers=3) as ex:
@@ -1245,19 +1248,24 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
         logs_id   = f_logs.result()
         models_id = f_models.result()
         fi_dir_id = f_fi_dir.result()
+    _dbg["logs_id"] = bool(logs_id)
 
     def _fetch_log():
         if not logs_id:
-            return None
+            return None, "logs 폴더 없음"
         lf      = _list_files(logs_id)
         log_fns = [n for n in lf if n.endswith(".log")]
         if not log_fns:
-            return None
+            return None, f"logs/ 안 파일 목록: {list(lf.keys())}"
         r = requests.get(
             f"https://drive.google.com/uc?export=download&id={lf[log_fns[0]]}",
             timeout=60,
         )
-        return _parse_gnn_log(r.content.decode("utf-8", errors="replace")) if r.ok else None
+        if not r.ok:
+            return None, f"다운로드 실패 {r.status_code}: {log_fns[0]}"
+        result = _parse_gnn_log(r.content.decode("utf-8", errors="replace"))
+        epochs = result.get("epochs", []) if result else []
+        return result, f"OK — {log_fns[0]} ({len(epochs)} epochs)"
 
     def _fetch_args():
         if not models_id:
@@ -1282,9 +1290,10 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
         f_parsed = ex.submit(_fetch_log)
         f_args   = ex.submit(_fetch_args)
         f_fi_res = ex.submit(_fetch_fi)
-        parsed       = f_parsed.result()
-        args_data    = f_args.result()
-        fi, fi_indiv = f_fi_res.result()
+        parsed, _log_msg = f_parsed.result()
+        args_data        = f_args.result()
+        fi, fi_indiv     = f_fi_res.result()
+    _dbg["log_msg"] = _log_msg
 
     out: dict = {}
     if parsed   is not None: out["parsed"]                        = parsed
@@ -1292,7 +1301,7 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
     if fi        is not None: out["feature_importance"]           = fi
     if fi_indiv  is not None: out["feature_importance_individual"] = fi_indiv
 
-    return {"rep": rep, "d": out, "_loaded": True}
+    return {"rep": rep, "d": out, "_loaded": True, "_gnn_debug": _dbg}
 
 
 def _load_exp_data(label: str) -> None:
@@ -1818,7 +1827,16 @@ def _tab_gnn_render():
         epochs = parsed.get("epochs", [])
 
         if not epochs:
+            _dbg = gnn_exp_data.get(sel_gnn_label, {}).get("_gnn_debug", {})
             st.info("학습 로그를 파싱할 수 없습니다.")
+            if _dbg:
+                st.caption(
+                    f"🔍 gnn폴더: {'✅' if _dbg.get('gnn_id') else '❌'}  "
+                    f"실험폴더({sel_gnn_rep.get('folder','?')}): {'✅' if _dbg.get('exp_id') else '❌'}  "
+                    f"run폴더({sel_gnn_rep.get('run_id','?')}): {'✅' if _dbg.get('run_fid') else '❌'}  "
+                    f"logs폴더: {'✅' if _dbg.get('logs_id') else '❌'}  "
+                    f"로그: {_dbg.get('log_msg', '—')}"
+                )
         else:
             ep_df = pd.DataFrame(epochs)
             ep_df.index = ep_df.index + 1
