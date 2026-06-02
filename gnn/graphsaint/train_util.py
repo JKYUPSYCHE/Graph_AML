@@ -70,20 +70,28 @@ def _to_pyg_data(data):
     GraphSAINTRandomWalkSampler가 내부에서 data.__class__()로 빈 인스턴스를
     생성하는데, GraphData는 x가 필수라 crash. 표준 Data는 빈 생성자 허용.
 
-    num_nodes를 edge_index 최대값 기준으로 설정하고 x를 패딩.
-    (edge_index에 x.shape[0]보다 큰 노드 ID가 있으면 GraphSAINT adjacency
-    matrix가 out-of-bounds IndexError를 냄)"""
-    num_nodes = max(int(data.num_nodes), int(data.edge_index.max().item()) + 1)
-    x = data.x
-    if x is not None and x.shape[0] < num_nodes:
-        pad = torch.zeros(num_nodes - x.shape[0], x.shape[1], dtype=x.dtype)
-        x = torch.cat([x, pad], dim=0)
+    edge_index의 node ID를 contiguous [0, N)으로 remap.
+    (edge_index에 x.shape[0]보다 큰 node ID가 있으면 GraphSAINT가 3M 노드짜리
+    SparseTensor를 생성하려다 OOM/crash가 남 — remap으로 num_nodes를 작게 유지)"""
+    edge_index = data.edge_index
+    unique_nodes, new_flat = edge_index.flatten().unique(return_inverse=True)
+    new_edge_index = new_flat.view(2, -1)
+    num_nodes_new = unique_nodes.shape[0]
+
+    orig_n = data.x.shape[0] if data.x is not None else 0
+    if data.x is not None:
+        x_new = torch.zeros(num_nodes_new, data.x.shape[1], dtype=data.x.dtype)
+        has_feat = unique_nodes < orig_n
+        x_new[has_feat] = data.x[unique_nodes[has_feat]]
+    else:
+        x_new = None
+
     return Data(
-        x=x,
-        edge_index=data.edge_index,
+        x=x_new,
+        edge_index=new_edge_index,
         edge_attr=data.edge_attr,
         y=data.y,
-        num_nodes=num_nodes,
+        num_nodes=num_nodes_new,
     )
 
 
