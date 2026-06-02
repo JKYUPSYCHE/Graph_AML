@@ -68,13 +68,22 @@ def homo_to_hetero(batch, args):
 def _to_pyg_data(data):
     """커스텀 GraphData → 표준 PyG Data 변환.
     GraphSAINTRandomWalkSampler가 내부에서 data.__class__()로 빈 인스턴스를
-    생성하는데, GraphData는 x가 필수라 crash. 표준 Data는 빈 생성자 허용."""
+    생성하는데, GraphData는 x가 필수라 crash. 표준 Data는 빈 생성자 허용.
+
+    num_nodes를 edge_index 최대값 기준으로 설정하고 x를 패딩.
+    (edge_index에 x.shape[0]보다 큰 노드 ID가 있으면 GraphSAINT adjacency
+    matrix가 out-of-bounds IndexError를 냄)"""
+    num_nodes = max(int(data.num_nodes), int(data.edge_index.max().item()) + 1)
+    x = data.x
+    if x is not None and x.shape[0] < num_nodes:
+        pad = torch.zeros(num_nodes - x.shape[0], x.shape[1], dtype=x.dtype)
+        x = torch.cat([x, pad], dim=0)
     return Data(
-        x=data.x,
+        x=x,
         edge_index=data.edge_index,
         edge_attr=data.edge_attr,
         y=data.y,
-        num_nodes=int(data.num_nodes),
+        num_nodes=num_nodes,
     )
 
 
