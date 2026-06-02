@@ -64,8 +64,7 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
                 raise
             pred = out[mask]
             ground_truth = batch.y[mask]
-            threshold = getattr(args, 'threshold', 0.5)
-            preds.append((pred.softmax(dim=-1)[:, 1] >= threshold).long())
+            preds.append(pred.argmax(dim=-1))
             pred_probas.append(pred.softmax(dim=-1)[:, 1].detach().cpu())
             ground_truths.append(ground_truth)
             loss = loss_fn(pred, ground_truth)
@@ -170,8 +169,7 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
             out = out[('node', 'to', 'node')]
             pred = out[mask]
             ground_truth = batch['node', 'to', 'node'].y[mask]
-            threshold = getattr(args, 'threshold', 0.5)
-            preds.append((pred.softmax(dim=-1)[:, 1] >= threshold).long())
+            preds.append(pred.argmax(dim=-1))
             pred_probas.append(pred.softmax(dim=-1)[:, 1].detach().cpu())
             ground_truths.append(batch['node', 'to', 'node'].y[mask])
             loss = loss_fn(pred, ground_truth)
