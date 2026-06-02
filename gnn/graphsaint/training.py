@@ -6,6 +6,7 @@ import logging
 from types import SimpleNamespace
 from pathlib import Path
 from sklearn.metrics import f1_score, recall_score, precision_score, average_precision_score, log_loss
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.nn import to_hetero, summary
 from torch_geometric.utils import degree
@@ -67,7 +68,7 @@ def get_model(tr_data, config, args):
 
 # ── Train (homo) ──────────────────────────────────────────────────────────────
 def train_homo(tr_loader, val_loader, te_loader,
-               model, optimizer, loss_fn, args, config, device, data_config, writer):
+               model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer):
     best_val_f1, best_val_result, best_te_result = 0, None, None
     best_epoch, best_model_state, patience_counter = 0, None, 0
     memory_mb_list = []
@@ -118,6 +119,11 @@ def train_homo(tr_loader, val_loader, te_loader,
         _log_val_te(val_result, te_result)
         _write_metrics(writer, tr_result, val_result, te_result, epoch)
 
+        scheduler.step(val_result['f1'])
+        current_lr = optimizer.param_groups[0]['lr']
+        writer.add_scalar('LR', current_lr, epoch)
+        logging.info(f"LR: {current_lr:.2e}")
+
         best_val_f1, best_val_result, best_te_result, best_epoch, best_model_state, patience_counter, stop = \
             _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_result,
                          best_epoch, best_model_state, patience_counter, epoch, model, optimizer, args, data_config)
@@ -130,7 +136,7 @@ def train_homo(tr_loader, val_loader, te_loader,
 
 # ── Train (hetero) ────────────────────────────────────────────────────────────
 def train_hetero(tr_loader, val_loader, te_loader,
-                 model, optimizer, loss_fn, args, config, device, data_config, writer):
+                 model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer):
     best_val_f1, best_val_result, best_te_result = 0, None, None
     best_epoch, best_model_state, patience_counter = 0, None, 0
     memory_mb_list = []
@@ -183,6 +189,11 @@ def train_hetero(tr_loader, val_loader, te_loader,
         te_result  = evaluate_graphsaint_hetero(te_loader,  model, device, args, te_inds=None)
         _log_val_te(val_result, te_result)
         _write_metrics(writer, tr_result, val_result, te_result, epoch)
+
+        scheduler.step(val_result['f1'])
+        current_lr = optimizer.param_groups[0]['lr']
+        writer.add_scalar('LR', current_lr, epoch)
+        logging.info(f"LR: {current_lr:.2e}")
 
         best_val_f1, best_val_result, best_te_result, best_epoch, best_model_state, patience_counter, stop = \
             _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_result,
@@ -296,6 +307,13 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
         model.to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
 
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode='max',
+        factor=getattr(args, 'lr_factor', 0.5),
+        patience=getattr(args, 'lr_patience', 5),
+        min_lr=1e-6,
+    )
+
     loss_fn = torch.nn.CrossEntropyLoss(
         weight=torch.FloatTensor([config.w_ce1, config.w_ce2]).to(device))
 
@@ -307,11 +325,11 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
     if args.reverse_mp:
         model, best_te_result = train_hetero(
             tr_loader, val_loader, te_loader,
-            model, optimizer, loss_fn, args, config, device, data_config, writer)
+            model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer)
     else:
         model, best_te_result = train_homo(
             tr_loader, val_loader, te_loader,
-            model, optimizer, loss_fn, args, config, device, data_config, writer)
+            model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer)
 
     writer.close()
     return best_te_result, model
