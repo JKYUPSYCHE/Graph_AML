@@ -257,8 +257,9 @@ def evaluate_homo(loader, inds, model, data, device, args):
             batch.to(device)
             out = model(batch.x, batch.edge_index, batch.edge_attr)
             out = out[mask]
-            pred = out.argmax(dim=-1)
             pred_proba = out.softmax(dim=-1)[:, 1]
+            threshold = getattr(args, 'threshold', 0.5)
+            pred = (pred_proba >= threshold).long()
             preds.append(pred)
             pred_probas.append(pred_proba)
             ground_truths.append(batch.y[mask])
@@ -328,8 +329,9 @@ def evaluate_hetero(loader, inds, model, data, device, args):
             out = model(batch.x_dict, batch.edge_index_dict, batch.edge_attr_dict)
             out = out[('node', 'to', 'node')]
             out = out[mask]
-            pred = out.argmax(dim=-1)
             pred_proba = out.softmax(dim=-1)[:, 1]
+            threshold = getattr(args, 'threshold', 0.5)
+            pred = (pred_proba >= threshold).long()
             preds.append(pred)
             pred_probas.append(pred_proba)
             ground_truths.append(batch['node', 'to', 'node'].y[mask])
