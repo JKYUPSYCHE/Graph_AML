@@ -1455,18 +1455,26 @@ _max_all_ml_n  = max((_ml_folder_num(d["rep"]["ml_folder"])  for d in exp_data.v
 _max_rep_gnn_n = max((_gnn_folder_num(d["rep"]["folder"])    for d in gnn_exp_data.values() if d.get("is_rep")), default=-1)
 _max_all_gnn_n = max((_gnn_folder_num(d["rep"]["folder"])    for d in gnn_exp_data.values()), default=-1)
 
-for _d in exp_data.values():
-    _d["is_ongoing"] = (
-        not _d.get("is_rep") and
-        _max_all_ml_n > _max_rep_ml_n and
-        _ml_folder_num(_d["rep"]["ml_folder"]) == _max_all_ml_n
-    )
-for _d in gnn_exp_data.values():
-    _d["is_ongoing"] = (
-        not _d.get("is_rep") and
-        _max_all_gnn_n > _max_rep_gnn_n and
-        _gnn_folder_num(_d["rep"]["folder"]) == _max_all_gnn_n
-    )
+# ongoing 후보 수집 후 가장 마지막 run 하나만 ongoing으로 마킹
+_ml_ongoing_candidates = sorted(
+    [lbl for lbl, _d in exp_data.items()
+     if not _d.get("is_rep") and _max_all_ml_n > _max_rep_ml_n
+     and _ml_folder_num(_d["rep"]["ml_folder"]) == _max_all_ml_n],
+    key=lambda lbl: (exp_data[lbl]["rep"].get("run_id",""), exp_data[lbl]["rep"].get("model_run_id",""))
+)
+_ml_ongoing_latest = _ml_ongoing_candidates[-1] if _ml_ongoing_candidates else None
+for lbl, _d in exp_data.items():
+    _d["is_ongoing"] = (lbl == _ml_ongoing_latest)
+
+_gnn_ongoing_candidates = sorted(
+    [lbl for lbl, _d in gnn_exp_data.items()
+     if not _d.get("is_rep") and _max_all_gnn_n > _max_rep_gnn_n
+     and _gnn_folder_num(_d["rep"]["folder"]) == _max_all_gnn_n],
+    key=lambda lbl: gnn_exp_data[lbl]["rep"].get("run_id","")
+)
+_gnn_ongoing_latest = _gnn_ongoing_candidates[-1] if _gnn_ongoing_candidates else None
+for lbl, _d in gnn_exp_data.items():
+    _d["is_ongoing"] = (lbl == _gnn_ongoing_latest)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
