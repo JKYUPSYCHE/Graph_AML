@@ -468,7 +468,10 @@ def _exp_label(rep: dict, is_rep: bool = False) -> str:
     folder = _woe_iv_folder_name(rep["ml_folder"]).upper()
     if is_rep:
         desc = rep.get("description", "")
-        return f"* {folder}{(' (' + desc + ')') if desc else ''}"
+        run_id = rep.get("run_id", "")
+        model_run_id = rep.get("model_run_id", "")
+        suffix = f" — {run_id}{model_run_id}" if (run_id or model_run_id) else ""
+        return f"* {folder}{suffix}{(' (' + desc + ')') if desc else ''}"
     run_id = rep.get("run_id", "")
     model_run_id = rep.get("model_run_id", "")
     return f"   {folder} — {run_id}{model_run_id}"
@@ -765,7 +768,9 @@ def _gnn_exp_label(rep: dict, is_rep: bool = False) -> str:
     folder = rep.get("folder", "")
     if is_rep:
         desc = rep.get("description", "")
-        return f"* {folder}{(' (' + desc + ')') if desc else ''}"
+        run_id = rep.get("run_id", "")
+        suffix = f" — {run_id}" if run_id else ""
+        return f"* {folder}{suffix}{(' (' + desc + ')') if desc else ''}"
     return f"   {folder} — {rep['run_id']}"
 
 
