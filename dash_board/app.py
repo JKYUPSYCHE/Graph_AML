@@ -468,7 +468,7 @@ def _exp_label(rep: dict, is_rep: bool = False) -> str:
     folder = _woe_iv_folder_name(rep["ml_folder"]).upper()
     if is_rep:
         desc = rep.get("description", "")
-        return f"* {folder}{(' — ' + desc) if desc else ''}"
+        return f"* {folder}{(' (' + desc + ')') if desc else ''}"
     run_id = rep.get("run_id", "")
     model_run_id = rep.get("model_run_id", "")
     return f"   {folder} — {run_id}{model_run_id}"
@@ -765,7 +765,7 @@ def _gnn_exp_label(rep: dict, is_rep: bool = False) -> str:
     folder = rep.get("folder", "")
     if is_rep:
         desc = rep.get("description", "")
-        return f"* {folder}{(' — ' + desc) if desc else ''}"
+        return f"* {folder}{(' (' + desc + ')') if desc else ''}"
     return f"   {folder} — {rep['run_id']}"
 
 
@@ -1551,7 +1551,7 @@ with tab_overview:
         if _lf1 is not None:
             _ml_max_pair = max(_ml_all_f1s, key=lambda t: t[0]) if _ml_all_f1s else (_lf1, "")
             _bullet_rows.append({
-                "label": f"ML  ({_woe_iv_folder_name(_ld['rep']['ml_folder']).upper()}" + (f" — {_ld['rep'].get('description','')}" if _ld['rep'].get('description') else "") + ")",
+                "label": f"ML  ({_woe_iv_folder_name(_ld['rep']['ml_folder']).upper()})",
                 "f1": _lf1, "max_f1": _ml_max_pair[0], "max_exp": _ml_max_pair[1],
                 "color": "#fbbf24",
             })
@@ -1587,7 +1587,7 @@ with tab_overview:
             if _gf1 is not None:
                 _gnn_max_pair = max(_gnn_all_f1s, key=lambda t: t[0]) if _gnn_all_f1s else (_gf1, "")
                 _bullet_rows.append({
-                    "label": f"GNN  ({_gd['rep']['folder']}" + (f" — {_gd['rep'].get('description','')}" if _gd['rep'].get('description') else "") + ")",
+                    "label": f"GNN  ({_gd['rep']['folder']})",
                     "f1": _gf1, "max_f1": _gnn_max_pair[0], "max_exp": _gnn_max_pair[1],
                     "color": "#f43f5e",
                 })
@@ -1651,8 +1651,6 @@ with tab_overview:
         exp  = _woe_iv_folder_name(rep["ml_folder"]).upper()
         if d.get("is_ongoing"):
             exp = f"{exp} (ongoing)"
-        elif d.get("is_rep") and desc:
-            exp = f"{exp} ({desc})"
         f1      = m.get("f1")
         auprc   = m.get("average_precision") or d["ml"].get("train_summary", {}).get("best_score")
         recall  = m.get("recall")
@@ -1672,8 +1670,6 @@ with tab_overview:
         exp    = rep["folder"]
         if d.get("is_ongoing"):
             exp = f"{exp} (ongoing)"
-        elif d.get("is_rep") and desc:
-            exp = f"{exp} ({desc})"
         t_sec  = parsed.get("training_time_sec")
         if t_sec is not None:
             gnn_time_rows.append({"exp": exp, "time_sec": t_sec, "description": desc})
