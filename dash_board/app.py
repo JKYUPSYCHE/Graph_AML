@@ -1703,99 +1703,93 @@ with tab_overview:
                 if val is not None:
                     gnn_rows.append({"exp": exp, "metric": metric, "value": val, "description": desc})
 
-    def _overview_line(rows: list[dict], title: str) -> None:
+    # ── 지표 선택 버튼 (ML·GNN 공통) ─────────────────────────────────────────
+    _all_metrics = ["F1", "AUPRC", "Recall", "학습시간"]
+    _sel_metrics: list[str] = st.pills(
+        "지표 선택",
+        _all_metrics,
+        selection_mode="multi",
+        default=["F1", "AUPRC", "Recall"],
+        key="ov_metric_sel",
+        label_visibility="collapsed",
+    ) or ["F1", "AUPRC", "Recall"]
+    _perf_metrics = [m for m in _sel_metrics if m != "학습시간"]
+    _show_time    = "학습시간" in _sel_metrics
+
+    def _overview_line(rows: list[dict], title: str, show_metrics: list[str]) -> None:
         if not rows:
             st.caption(f"{title} — 데이터 없음")
             return
         df_ov = pd.DataFrame(rows)
-        exps  = df_ov["exp"].unique().tolist()
+        df_ov = df_ov[df_ov["metric"].isin(show_metrics)]
+        if df_ov.empty:
+            st.caption(f"{title} — 선택된 지표 없음")
+            return
+        exps  = pd.DataFrame(rows)["exp"].unique().tolist()
         fig   = go.Figure()
         for metric, color in _METRIC_COLORS.items():
+            if metric not in show_metrics: continue
             sub  = df_ov[df_ov["metric"] == metric]
             dash = "solid" if metric == "F1" else "dash"
             fig.add_trace(go.Scatter(
-                x=sub["exp"],
-                y=sub["value"],
-                mode="lines+markers",
-                name=metric,
+                x=sub["exp"], y=sub["value"],
+                mode="lines+markers", name=metric,
                 line=dict(color=color, width=2, dash=dash),
                 marker=dict(size=8, color=color),
                 customdata=sub["description"],
-                hovertemplate=(
-                    "<b>%{x}</b><br>"
-                    f"{metric}: " + "%{y:.4f}<br>"
-                    "<i>%{customdata}</i><extra></extra>"
-                ),
+                hovertemplate="<b>%{x}</b><br>" + f"{metric}: " + "%{y:.4f}<br><i>%{customdata}</i><extra></extra>",
             ))
-        # x label 호버용 투명 마커 (description 표시)
-        desc_map = df_ov.drop_duplicates("exp").set_index("exp")["description"]
+        desc_map = pd.DataFrame(rows).drop_duplicates("exp").set_index("exp")["description"]
         fig.add_trace(go.Scatter(
-            x=exps,
-            y=[0] * len(exps),
-            mode="markers",
+            x=exps, y=[0]*len(exps), mode="markers",
             marker=dict(opacity=0, size=16),
             customdata=[desc_map.get(e, "") for e in exps],
             hovertemplate="<b>%{x}</b><br><i>%{customdata}</i><extra></extra>",
-            showlegend=False,
-            name="",
+            showlegend=False, name="",
         ))
         fig.update_layout(
-            title=title,
-            height=300,
-            margin=dict(t=40, b=20),
+            title=title, height=300, margin=dict(t=40, b=20),
             xaxis=dict(categoryorder="array", categoryarray=exps),
             yaxis=dict(range=[0, 1]),
-            legend=dict(
-                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                itemclick="toggleothers", itemdoubleclick="toggle",
-            ),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    def _overview_line_gnn(rows: list[dict], time_rows: list[dict], title: str) -> None:
+    def _overview_line_gnn(rows: list[dict], time_rows: list[dict], title: str,
+                           show_metrics: list[str], show_time: bool) -> None:
         if not rows:
             st.caption(f"{title} — 데이터 없음")
             return
         from plotly.subplots import make_subplots as _make_subplots
         df_ov   = pd.DataFrame(rows)
-        df_time = pd.DataFrame(time_rows) if time_rows else pd.DataFrame(columns=["exp", "time_sec", "description"])
+        df_time = pd.DataFrame(time_rows) if time_rows else pd.DataFrame(columns=["exp","time_sec","description"])
         exps    = df_ov["exp"].unique().tolist()
-        fig = _make_subplots(specs=[[{"secondary_y": True}]])
+        use_secondary = show_time and not df_time.empty
+        fig = _make_subplots(specs=[[{"secondary_y": use_secondary}]])
         for metric, color in _METRIC_COLORS.items():
+            if metric not in show_metrics: continue
             sub  = df_ov[df_ov["metric"] == metric]
             dash = "solid" if metric == "F1" else "dash"
             fig.add_trace(go.Scatter(
-                x=sub["exp"],
-                y=sub["value"],
-                mode="lines+markers",
-                name=metric,
+                x=sub["exp"], y=sub["value"],
+                mode="lines+markers", name=metric,
                 line=dict(color=color, width=2, dash=dash),
                 marker=dict(size=8, color=color),
                 customdata=sub["description"],
-                hovertemplate=(
-                    "<b>%{x}</b><br>"
-                    f"{metric}: " + "%{y:.4f}<br>"
-                    "<i>%{customdata}</i><extra></extra>"
-                ),
+                hovertemplate="<b>%{x}</b><br>" + f"{metric}: " + "%{y:.4f}<br><i>%{customdata}</i><extra></extra>",
             ), secondary_y=False)
-        if not df_time.empty:
+        if use_secondary:
             fig.add_trace(go.Bar(
-                x=df_time["exp"],
-                y=df_time["time_sec"],
-                name="학습시간 (s)",
-                width=0.3,
+                x=df_time["exp"], y=df_time["time_sec"],
+                name="학습시간 (s)", width=0.3,
                 marker_color="rgba(255,200,80,0.25)",
                 marker_line=dict(color="rgba(255,200,80,0.6)", width=1),
                 customdata=df_time["description"],
-                hovertemplate=(
-                    "<b>%{x}</b><br>학습시간: %{y:.0f}s<br>"
-                    "<i>%{customdata}</i><extra></extra>"
-                ),
+                hovertemplate="<b>%{x}</b><br>학습시간: %{y:.0f}s<br><i>%{customdata}</i><extra></extra>",
             ), secondary_y=True)
-        # x label 호버용 투명 마커
         desc_map = df_ov.drop_duplicates("exp").set_index("exp")["description"]
         fig.add_trace(go.Scatter(
-            x=exps, y=[0] * len(exps), mode="markers",
+            x=exps, y=[0]*len(exps), mode="markers",
             marker=dict(opacity=0, size=16),
             customdata=[desc_map.get(e, "") for e in exps],
             hovertemplate="<b>%{x}</b><br><i>%{customdata}</i><extra></extra>",
@@ -1804,18 +1798,17 @@ with tab_overview:
         fig.update_layout(
             title=title, height=320, margin=dict(t=40, b=20),
             xaxis=dict(categoryorder="array", categoryarray=exps),
-            legend=dict(
-                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                itemclick="toggleothers", itemdoubleclick="toggle",
-            ),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             barmode="overlay",
         )
-        fig.update_yaxes(range=[0, 1], title_text="Metric", secondary_y=False)
-        fig.update_yaxes(title_text="학습시간 (s)", secondary_y=True, showgrid=False)
+        if show_metrics:
+            fig.update_yaxes(range=[0, 1], title_text="Metric", secondary_y=False)
+        if use_secondary:
+            fig.update_yaxes(title_text="학습시간 (s)", secondary_y=True, showgrid=False)
         st.plotly_chart(fig, use_container_width=True)
 
-    _overview_line(ml_rows, "ML")
-    _overview_line_gnn(gnn_rows, gnn_time_rows, "GNN")
+    _overview_line(ml_rows, "ML", _perf_metrics)
+    _overview_line_gnn(gnn_rows, gnn_time_rows, "GNN", _perf_metrics, _show_time)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
