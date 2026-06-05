@@ -99,7 +99,8 @@ def train_homo(tr_loader, val_loader, te_loader,
             if node_norm is not None:
                 node_norm = node_norm.to(device)
                 edge_norm = (node_norm[batch.edge_index[0]] + node_norm[batch.edge_index[1]]) / 2
-                loss = (F.cross_entropy(out, batch.y, weight=loss_fn.weight, reduction='none') * edge_norm).sum()
+                per_edge = F.cross_entropy(out, batch.y, weight=loss_fn.weight, reduction='none')
+                loss = (per_edge * edge_norm).sum() / edge_norm.sum()
             else:
                 loss = loss_fn(out, batch.y)
             loss.backward()
@@ -180,7 +181,8 @@ def train_hetero(tr_loader, val_loader, te_loader,
             if node_norm is not None:
                 node_norm = node_norm.to(device)
                 edge_norm = (node_norm[ei[0]] + node_norm[ei[1]]) / 2
-                loss = (F.cross_entropy(out, y, weight=loss_fn.weight, reduction='none') * edge_norm).sum()
+                per_edge = F.cross_entropy(out, y, weight=loss_fn.weight, reduction='none')
+                loss = (per_edge * edge_norm).sum() / edge_norm.sum()
             else:
                 loss = loss_fn(out, y)
             loss.backward()
