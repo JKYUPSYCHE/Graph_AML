@@ -1454,32 +1454,37 @@ if st.session_state.get("_gnn_exp_data_fp") != _combined_gfp:
 
 gnn_exp_data: dict[str, dict] = st.session_state.get("gnn_exp_data", {})
 
-# ── Ongoing 실험 마킹 (대표보다 높은 넘버링의 최신 비대표 실험) ──────────────
-_max_rep_ml_n  = max((_ml_folder_num(d["rep"]["ml_folder"])  for d in exp_data.values()     if d.get("is_rep")), default=-1)
-_max_all_ml_n  = max((_ml_folder_num(d["rep"]["ml_folder"])  for d in exp_data.values()),     default=-1)
-_max_rep_gnn_n = max((_gnn_folder_num(d["rep"]["folder"])    for d in gnn_exp_data.values() if d.get("is_rep")), default=-1)
-_max_all_gnn_n = max((_gnn_folder_num(d["rep"]["folder"])    for d in gnn_exp_data.values()), default=-1)
+# ── Ongoing 실험 마킹 (대표 미지정 실험 넘버별 최신 run) ──────────────────────
+# 대표 실험이 지정된 ml_folder 집합
+_rep_ml_folders  = {_woe_iv_folder_name(d["rep"]["ml_folder"]) for d in exp_data.values()     if d.get("is_rep")}
+_rep_gnn_folders = {d["rep"]["folder"]                          for d in gnn_exp_data.values() if d.get("is_rep")}
 
-# ongoing 후보 수집 후 가장 마지막 run 하나만 ongoing으로 마킹
-_ml_ongoing_candidates = sorted(
-    [lbl for lbl, _d in exp_data.items()
-     if not _d.get("is_rep") and _max_all_ml_n > _max_rep_ml_n
-     and _ml_folder_num(_d["rep"]["ml_folder"]) == _max_all_ml_n],
-    key=lambda lbl: (exp_data[lbl]["rep"].get("run_id",""), exp_data[lbl]["rep"].get("model_run_id",""))
-)
-_ml_ongoing_latest = _ml_ongoing_candidates[-1] if _ml_ongoing_candidates else None
+# 대표 미지정 폴더별로 가장 마지막 run을 ongoing으로 마킹
+_ml_ongoing_set: set[str] = set()
+_ml_by_folder: dict[str, list] = {}
 for lbl, _d in exp_data.items():
-    _d["is_ongoing"] = (lbl == _ml_ongoing_latest)
+    if not _d.get("is_rep"):
+        folder = _woe_iv_folder_name(_d["rep"]["ml_folder"])
+        if folder not in _rep_ml_folders:
+            _ml_by_folder.setdefault(folder, []).append(lbl)
+for folder, lbls in _ml_by_folder.items():
+    latest = sorted(lbls, key=lambda l: (exp_data[l]["rep"].get("run_id",""), exp_data[l]["rep"].get("model_run_id","")))[-1]
+    _ml_ongoing_set.add(latest)
+for lbl, _d in exp_data.items():
+    _d["is_ongoing"] = (lbl in _ml_ongoing_set)
 
-_gnn_ongoing_candidates = sorted(
-    [lbl for lbl, _d in gnn_exp_data.items()
-     if not _d.get("is_rep") and _max_all_gnn_n > _max_rep_gnn_n
-     and _gnn_folder_num(_d["rep"]["folder"]) == _max_all_gnn_n],
-    key=lambda lbl: gnn_exp_data[lbl]["rep"].get("run_id","")
-)
-_gnn_ongoing_latest = _gnn_ongoing_candidates[-1] if _gnn_ongoing_candidates else None
+_gnn_ongoing_set: set[str] = set()
+_gnn_by_folder: dict[str, list] = {}
 for lbl, _d in gnn_exp_data.items():
-    _d["is_ongoing"] = (lbl == _gnn_ongoing_latest)
+    if not _d.get("is_rep"):
+        folder = _d["rep"]["folder"]
+        if folder not in _rep_gnn_folders:
+            _gnn_by_folder.setdefault(folder, []).append(lbl)
+for folder, lbls in _gnn_by_folder.items():
+    latest = sorted(lbls, key=lambda l: gnn_exp_data[l]["rep"].get("run_id",""))[-1]
+    _gnn_ongoing_set.add(latest)
+for lbl, _d in gnn_exp_data.items():
+    _d["is_ongoing"] = (lbl in _gnn_ongoing_set)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
