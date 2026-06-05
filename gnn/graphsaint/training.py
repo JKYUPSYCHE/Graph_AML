@@ -1,6 +1,7 @@
 import copy
 import time
 import torch
+import torch.nn.functional as F
 import tqdm
 import logging
 from types import SimpleNamespace
@@ -83,6 +84,7 @@ def train_homo(tr_loader, val_loader, te_loader,
 
         for batch in tqdm.tqdm(tr_loader, disable=not args.tqdm):
             optimizer.zero_grad()
+            node_norm = batch.node_norm if hasattr(batch, 'node_norm') else None
             batch.edge_attr = batch.edge_attr[:, 1:]
             batch.to(device)
 
@@ -94,7 +96,12 @@ def train_homo(tr_loader, val_loader, te_loader,
                     continue
                 raise
 
-            loss = loss_fn(out, batch.y)
+            if node_norm is not None:
+                node_norm = node_norm.to(device)
+                edge_norm = (node_norm[batch.edge_index[0]] + node_norm[batch.edge_index[1]]) / 2
+                loss = (F.cross_entropy(out, batch.y, weight=loss_fn.weight, reduction='none') * edge_norm).sum()
+            else:
+                loss = loss_fn(out, batch.y)
             loss.backward()
             optimizer.step()
 
@@ -151,6 +158,7 @@ def train_hetero(tr_loader, val_loader, te_loader,
 
         for batch in tqdm.tqdm(tr_loader, disable=not args.tqdm):
             optimizer.zero_grad()
+            node_norm = batch.node_norm if hasattr(batch, 'node_norm') else None
 
             hbatch = homo_to_hetero(batch, args)
             hbatch['node', 'to', 'node'].edge_attr     = hbatch['node', 'to', 'node'].edge_attr[:, 1:]
@@ -166,7 +174,15 @@ def train_hetero(tr_loader, val_loader, te_loader,
                 raise
 
             out = out[('node', 'to', 'node')]
-            loss = loss_fn(out, hbatch['node', 'to', 'node'].y)
+            y  = hbatch['node', 'to', 'node'].y
+            ei = hbatch['node', 'to', 'node'].edge_index
+
+            if node_norm is not None:
+                node_norm = node_norm.to(device)
+                edge_norm = (node_norm[ei[0]] + node_norm[ei[1]]) / 2
+                loss = (F.cross_entropy(out, y, weight=loss_fn.weight, reduction='none') * edge_norm).sum()
+            else:
+                loss = loss_fn(out, y)
             loss.backward()
             optimizer.step()
 
