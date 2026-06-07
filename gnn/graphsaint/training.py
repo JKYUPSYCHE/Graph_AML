@@ -266,6 +266,8 @@ def _finalize(model, best_val_result, best_te_result, best_epoch, best_model_sta
 
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
+    if best_te_result is not None and best_val_result is not None:
+        best_te_result = {**best_te_result, 'val_f1': best_val_result['f1']}
     return model, best_te_result
 
 
@@ -273,6 +275,7 @@ def _finalize(model, best_val_result, best_te_result, best_epoch, best_model_sta
 def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data_config):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+    w_ce2 = getattr(args, 'hpo_w_ce2', None) or extract_param("w_ce2", args)
     config = SimpleNamespace(
         epochs=args.n_epochs,
         model=args.model,
@@ -282,7 +285,7 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
         n_gnn_layers=extract_param("n_gnn_layers", args),
         loss="ce",
         w_ce1=extract_param("w_ce1", args),
-        w_ce2=extract_param("w_ce2", args),
+        w_ce2=w_ce2,
         dropout=extract_param("dropout", args),
         final_dropout=extract_param("final_dropout", args),
         n_heads=extract_param("n_heads", args) if args.model == 'gat' else None,
