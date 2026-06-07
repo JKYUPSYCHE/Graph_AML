@@ -332,8 +332,13 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
         min_lr=1e-6,
     )
 
+    n_pos = int(tr_data.y.sum().item())
+    n_neg = int((tr_data.y == 0).sum().item())
+    auto_w_ce2 = n_neg / max(n_pos, 1)
+    logging.info(f"Train IR: {n_pos/(n_pos+n_neg)*100:.4f}% — auto w_ce2={auto_w_ce2:.1f} (config={config.w_ce2:.2f})")
+
     loss_fn = torch.nn.CrossEntropyLoss(
-        weight=torch.FloatTensor([config.w_ce1, config.w_ce2]).to(device))
+        weight=torch.FloatTensor([config.w_ce1, auto_w_ce2]).to(device))
 
     run_name   = args.unique_name
     tb_log_dir = data_config["paths"].get("tb_log_dir", "runs")
