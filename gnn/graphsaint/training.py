@@ -1,7 +1,6 @@
 import copy
 import time
 import torch
-import torch.nn.functional as F
 import tqdm
 import logging
 from types import SimpleNamespace
@@ -84,7 +83,6 @@ def train_homo(tr_loader, val_loader, te_loader,
 
         for batch in tqdm.tqdm(tr_loader, disable=not args.tqdm):
             optimizer.zero_grad()
-            node_norm = batch.node_norm if hasattr(batch, 'node_norm') else None
             batch.edge_attr = batch.edge_attr[:, 1:]
             batch.to(device)
 
@@ -96,13 +94,7 @@ def train_homo(tr_loader, val_loader, te_loader,
                     continue
                 raise
 
-            if node_norm is not None:
-                node_norm = node_norm.to(device)
-                edge_norm = (node_norm[batch.edge_index[0]] + node_norm[batch.edge_index[1]]) / 2
-                per_edge = F.cross_entropy(out, batch.y, weight=loss_fn.weight, reduction='none')
-                loss = (per_edge * edge_norm).sum() / edge_norm.sum()
-            else:
-                loss = loss_fn(out, batch.y)
+            loss = loss_fn(out, batch.y)
             loss.backward()
             optimizer.step()
 
@@ -159,8 +151,6 @@ def train_hetero(tr_loader, val_loader, te_loader,
 
         for batch in tqdm.tqdm(tr_loader, disable=not args.tqdm):
             optimizer.zero_grad()
-            node_norm = batch.node_norm if hasattr(batch, 'node_norm') else None
-
             hbatch = homo_to_hetero(batch, args)
             hbatch['node', 'to', 'node'].edge_attr     = hbatch['node', 'to', 'node'].edge_attr[:, 1:]
             hbatch['node', 'rev_to', 'node'].edge_attr = hbatch['node', 'rev_to', 'node'].edge_attr[:, 1:]
@@ -176,15 +166,8 @@ def train_hetero(tr_loader, val_loader, te_loader,
 
             out = out[('node', 'to', 'node')]
             y  = hbatch['node', 'to', 'node'].y
-            ei = hbatch['node', 'to', 'node'].edge_index
 
-            if node_norm is not None:
-                node_norm = node_norm.to(device)
-                edge_norm = (node_norm[ei[0]] + node_norm[ei[1]]) / 2
-                per_edge = F.cross_entropy(out, y, weight=loss_fn.weight, reduction='none')
-                loss = (per_edge * edge_norm).sum() / edge_norm.sum()
-            else:
-                loss = loss_fn(out, y)
+            loss = loss_fn(out, y)
             loss.backward()
             optimizer.step()
 
@@ -332,13 +315,8 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
         min_lr=1e-6,
     )
 
-    n_pos = int(tr_data.y.sum().item())
-    n_neg = int((tr_data.y == 0).sum().item())
-    auto_w_ce2 = 1.0  # ablation C: normalization only, no class weighting (1:1 CE)
-    logging.info(f"Train IR: {n_pos/(n_pos+n_neg)*100:.4f}% — w_ce=[1.0, {auto_w_ce2:.1f}] (normalization-only mode)")
-
     loss_fn = torch.nn.CrossEntropyLoss(
-        weight=torch.FloatTensor([config.w_ce1, auto_w_ce2]).to(device))
+        weight=torch.FloatTensor([config.w_ce1, config.w_ce2]).to(device))
 
     run_name   = args.unique_name
     tb_log_dir = data_config["paths"].get("tb_log_dir", "runs")
