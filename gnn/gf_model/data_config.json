@@ -1,8 +1,0 @@
-{
-    "paths": {
-      "aml_data": "../../data",
-      "node_features": "../../data",
-      "model_to_load": "../../experiments/gf_model/models",
-      "model_to_save": "../../experiments/gf_model/models"
-    }
-  }
