@@ -112,13 +112,13 @@ def get_loaders(tr_data, val_data, te_data, args):
 
     tr_loader  = GraphSAINTRandomWalkSampler(
         _to_pyg_data(tr_data),  batch_size=batch_size, walk_length=walk_length,
-        num_steps=num_steps,  sample_coverage=100, num_workers=0)
+        num_steps=num_steps,  sample_coverage=0, num_workers=0)
     val_loader = GraphSAINTRandomWalkSampler(
         _to_pyg_data(val_data), batch_size=batch_size, walk_length=walk_length,
-        num_steps=num_steps,  sample_coverage=100, num_workers=0)
+        num_steps=num_steps,  sample_coverage=0, num_workers=0)
     te_loader  = GraphSAINTRandomWalkSampler(
         _to_pyg_data(te_data),  batch_size=batch_size, walk_length=walk_length,
-        num_steps=num_steps,  sample_coverage=100, num_workers=0)
+        num_steps=num_steps,  sample_coverage=0, num_workers=0)
 
     return tr_loader, val_loader, te_loader
 
