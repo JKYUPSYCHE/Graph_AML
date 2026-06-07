@@ -10,3 +10,6 @@ __pycache__/
 
 # Logs
 logs/
+
+# Large data files (Google Drive에서 관리)
+*.parquet
