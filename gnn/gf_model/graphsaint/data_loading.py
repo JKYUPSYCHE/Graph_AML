@@ -42,7 +42,7 @@ def get_data(args, data_config):
         + ports (args.ports=True 시)
         + time_deltas (args.tds=True 시)
     """
-    transaction_file = f"{data_config['paths']['aml_data']}/{args.data}/formatted_transactions.csv"
+    transaction_file = f"{data_config['paths']['gnn_inputs']}/formatted_transactions.csv"
     gf_path = data_config['paths']['gf_parquet']
 
     df_edges = pd.read_csv(transaction_file)
