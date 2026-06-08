@@ -32,27 +32,26 @@ GF_FEATURES = [
 
 
 def get_data(args, data_config):
-    """
-    기존 formatted_transactions.csv 엣지 피처 + gf.parquet 22개 피처를 합쳐서 로딩.
+    '''gnn/baseline 코드 기반 + gf.parquet 22개 피처 추가.
 
-    엣지 피처 구성:
-        [Timestamp, Amount Received, Received Currency, Payment Format]  ← 기존 4개
+    엣지 피처:
+        [Timestamp, Amount Received, Received Currency, Payment Format]  ← base 4개
         + [GF_FEATURES 22개]                                              ← gf.parquet
         + ports (args.ports=True 시)
         + time_deltas (args.tds=True 시)
-    """
+    '''
     transaction_file = f"{data_config['paths']['gnn_inputs']}/formatted_transactions.csv"
     gf_path = data_config['paths']['gf_parquet']
 
     df_edges = pd.read_csv(transaction_file)
     logging.info(f'Available Edge Features: {df_edges.columns.tolist()}')
 
+    # gf.parquet join: formatted_transactions.csv의 EdgeID = gf.parquet의 tx_id
     gf = pd.read_parquet(gf_path, columns=['tx_id'] + GF_FEATURES)
     gf['tx_id'] = gf['tx_id'].astype(int)
     df_edges = df_edges.merge(gf, left_on='EdgeID', right_on='tx_id', how='left')
     df_edges[GF_FEATURES] = df_edges[GF_FEATURES].fillna(0.0)
-
-    logging.info(f'GF features joined: {GF_FEATURES}')
+    logging.info(f'GF features joined via EdgeID: {len(GF_FEATURES)} features')
 
     df_edges['Timestamp'] = df_edges['Timestamp'] - df_edges['Timestamp'].min()
 
@@ -62,15 +61,15 @@ def get_data(args, data_config):
     y = torch.LongTensor(df_edges['Is Laundering'].to_numpy())
 
     logging.info(f"Illicit ratio = {sum(y)} / {len(y)} = {sum(y) / len(y) * 100:.2f}%")
-    logging.info(f"Number of nodes = {df_nodes.shape[0]}")
+    logging.info(f"Number of nodes (holdings doing transactions) = {df_nodes.shape[0]}")
     logging.info(f"Number of transactions = {df_edges.shape[0]}")
 
     base_edge_features = ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
     edge_features = base_edge_features + GF_FEATURES
     node_features = ['Feature']
 
-    logging.info(f'Edge features being used: {len(edge_features)}개 ({base_edge_features} + GF 22개)')
-    logging.info(f'Node features: {node_features} (placeholder, all 1s)')
+    logging.info(f'Edge features being used: {len(edge_features)} ({len(base_edge_features)} base + {len(GF_FEATURES)} GF)')
+    logging.info(f'Node features being used: {node_features} ("Feature" is a placeholder feature of all 1s)')
 
     x = torch.tensor(df_nodes.loc[:, node_features].to_numpy()).float()
     edge_index = torch.LongTensor(df_edges.loc[:, ['from_id', 'to_id']].to_numpy().T)
@@ -78,6 +77,7 @@ def get_data(args, data_config):
 
     n_days = int(timestamps.max() / (3600 * 24) + 1)
     n_samples = y.shape[0]
+    logging.info(f'number of days and transactions in the data: {n_days} days, {n_samples} transactions')
 
     daily_irs, weighted_daily_irs, daily_inds, daily_trans = [], [], [], []
     for day in range(n_days):
@@ -103,18 +103,24 @@ def get_data(args, data_config):
             score = max(split_error)
             split_scores[(i, j)] = score
 
-    i, j = min(split_scores, key=split_scores.get)
-    split = [list(range(i)), list(range(i, j)), list(range(j, len(daily_totals)))]
-    logging.info(f'Calculate split: {split}')
-
-    split_inds = {k: [] for k in range(3)}
-    for i in range(3):
-        for day in split[i]:
-            split_inds[i].append(daily_inds[day])
-
-    tr_inds  = torch.cat(split_inds[0])
-    val_inds = torch.cat(split_inds[1])
-    te_inds  = torch.cat(split_inds[2])
+    if split_scores:
+        i, j = min(split_scores, key=split_scores.get)
+        split = [list(range(i)), list(range(i, j)), list(range(j, len(daily_totals)))]
+        logging.info(f'Calculate split: {split}')
+        split_inds = {k: [] for k in range(3)}
+        for i in range(3):
+            for day in split[i]:
+                split_inds[i].append(daily_inds[day])
+        tr_inds  = torch.cat(split_inds[0])
+        val_inds = torch.cat(split_inds[1])
+        te_inds  = torch.cat(split_inds[2])
+    else:
+        logging.warning("Only 1 day of data — falling back to index-based split")
+        n = n_samples
+        i2, j2 = int(n * 0.6), int(n * 0.8)
+        tr_inds  = torch.arange(i2)
+        val_inds = torch.arange(i2, j2)
+        te_inds  = torch.arange(j2, n)
 
     logging.info(f"Total train samples: {tr_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[tr_inds].float().mean() * 100:.2f}%")
     logging.info(f"Total val samples  : {val_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[val_inds].float().mean() * 100:.2f}%")
@@ -160,8 +166,8 @@ def get_data(args, data_config):
         val_data = create_hetero_obj(val_data.x, val_data.y, val_data.edge_index, val_data.edge_attr, val_data.timestamps, args)
         te_data  = create_hetero_obj(te_data.x,  te_data.y,  te_data.edge_index,  te_data.edge_attr,  te_data.timestamps,  args)
 
-    logging.info(f'train data: {tr_data}')
-    logging.info(f'val data  : {val_data}')
-    logging.info(f'test data : {te_data}')
+    logging.info(f'train data object: {tr_data}')
+    logging.info(f'validation data object: {val_data}')
+    logging.info(f'test data object: {te_data}')
 
     return tr_data, val_data, te_data, tr_inds, val_inds, te_inds
