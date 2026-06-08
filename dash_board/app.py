@@ -1681,8 +1681,8 @@ with tab_overview:
         if d.get("is_ongoing"):
             exp = f"{exp} (ongoing)"
         t_sec  = parsed.get("training_time_sec")
-        if t_sec is not None:
-            gnn_time_rows.append({"exp": exp, "time_sec": t_sec, "description": desc})
+        if t_sec is not None and epochs:
+            gnn_time_rows.append({"exp": exp, "time_sec": t_sec / len(epochs), "description": desc})
         if epochs:
             _ep_df = pd.DataFrame(epochs)
             _ep_df.index = _ep_df.index + 1
@@ -1781,11 +1781,11 @@ with tab_overview:
         if use_secondary:
             fig.add_trace(go.Bar(
                 x=df_time["exp"], y=df_time["time_sec"],
-                name="학습시간 (s)", width=0.3,
+                name="평균 에폭 학습시간 (s/ep)", width=0.3,
                 marker_color="rgba(255,200,80,0.25)",
                 marker_line=dict(color="rgba(255,200,80,0.6)", width=1),
                 customdata=df_time["description"],
-                hovertemplate="<b>%{x}</b><br>학습시간: %{y:.0f}s<br><i>%{customdata}</i><extra></extra>",
+                hovertemplate="<b>%{x}</b><br>에폭당 학습시간: %{y:.1f}s/ep<br><i>%{customdata}</i><extra></extra>",
             ), secondary_y=True)
         desc_map = df_ov.drop_duplicates("exp").set_index("exp")["description"]
         fig.add_trace(go.Scatter(
@@ -1804,7 +1804,7 @@ with tab_overview:
         if show_metrics:
             fig.update_yaxes(range=[0, 1], title_text="Metric", secondary_y=False)
         if use_secondary:
-            fig.update_yaxes(title_text="학습시간 (s)", secondary_y=True, showgrid=False)
+            fig.update_yaxes(title_text="평균 에폭 학습시간 (s/ep)", secondary_y=True, showgrid=False)
         st.plotly_chart(fig, use_container_width=True)
 
     _overview_line(ml_rows, "ML", _perf_metrics)
