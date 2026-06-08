@@ -91,13 +91,20 @@ def get_data(args, data_config):
 
     logging.info(f'Available Edge Features: {df_edges.columns.tolist()}')
 
-    # gf.parquet join on tx_id
+    # gf.parquet join:
+    # formatted_transactions_gf.csv에 tx_id가 없으므로 ml_exp00.parquet에서 tx_id를 가져와
+    # row 순서가 동일함을 가정하여 positional join 수행
+    parquet_path = Path(data_config['paths']['aml_data']) / args.data / 'ml_exp00.parquet'
+    ml_tx = pd.read_parquet(parquet_path, columns=['tx_id'])
+    assert len(ml_tx) == len(df_edges), (
+        f"Row count mismatch: ml_exp00={len(ml_tx)}, formatted_transactions_gf={len(df_edges)}"
+    )
     gf = pd.read_parquet(gf_path, columns=['tx_id'] + GF_FEATURES)
     gf['tx_id'] = gf['tx_id'].astype(int)
-    df_edges['tx_id'] = df_edges['tx_id'].astype(int)
-    df_edges = df_edges.merge(gf, on='tx_id', how='left')
-    df_edges[GF_FEATURES] = df_edges[GF_FEATURES].fillna(0.0)
-    logging.info(f'GF features joined: {len(GF_FEATURES)} features')
+    ml_tx['tx_id'] = ml_tx['tx_id'].astype(int)
+    gf = ml_tx.merge(gf, on='tx_id', how='left')
+    df_edges[GF_FEATURES] = gf[GF_FEATURES].fillna(0.0).to_numpy()
+    logging.info(f'GF features joined via ml_exp00 tx_id: {len(GF_FEATURES)} features')
 
     # timestamp → 경과 초 (ports/time-delta 내부 계산용, 모델 입력 아님)
     ts = pd.to_datetime(df_ts['timestamp'])
