@@ -65,10 +65,36 @@ def _feature_names(args):
     return names
 
 
+def _get_model_node_in(model):
+    """to_hetero 컴파일 모델에서 node embedding 입력 차원을 반환. 실패 시 None."""
+    try:
+        return model.node_emb.node.in_features
+    except AttributeError:
+        return None
+
+
+def _add_ego_to_batch(batch, n_model_node_in):
+    """batch['node'].x 차원이 n_model_node_in보다 작으면 ego 피처를 추가."""
+    x_node = batch['node'].x
+    diff = n_model_node_in - x_node.shape[1]
+    if diff <= 0:
+        return batch
+    ids = torch.zeros(x_node.shape[0], diff)
+    try:
+        nodes = torch.unique(batch['node', 'to', 'node'].edge_label_index.view(-1))
+        nodes = nodes[nodes < x_node.shape[0]]
+        ids[nodes] = 1.0
+    except (AttributeError, KeyError):
+        pass
+    batch['node'].x = torch.cat([x_node, ids], dim=1)
+    return batch
+
+
 def _collect_predictions(loader, te_inds, model, device):
     """loader 전체를 순회하며 (preds, gts, edge_inds) 수집."""
     model.eval()
     all_preds, all_gts, all_einds = [], [], []
+    model_node_in = _get_model_node_in(model)
 
     with torch.no_grad():
         for batch in tqdm.tqdm(loader, desc='[XAI] inference'):
@@ -83,6 +109,8 @@ def _collect_predictions(loader, te_inds, model, device):
                 mask         = torch.isin(batch_arange, batch_eids)
                 batch['node', 'to', 'node'].edge_attr     = batch['node', 'to', 'node'].edge_attr[:, 1:]
                 batch['node', 'rev_to', 'node'].edge_attr = batch['node', 'rev_to', 'node'].edge_attr[:, 1:]
+                if model_node_in is not None:
+                    batch = _add_ego_to_batch(batch, model_node_in)
                 batch.to(device)
                 out = model(batch.x_dict, batch.edge_index_dict, batch.edge_attr_dict)
                 out = out[('node', 'to', 'node')][mask]
@@ -176,7 +204,7 @@ def _get_subgraph(te_x, te_edge_index, te_edge_attr, te_y, te_num_nodes, edge_id
     }, local_idx
 
 
-def _gradient_saliency(model, sub, local_idx, args, device):
+def _gradient_saliency(model, sub, local_idx, args, device, model_node_in=None):
     """
     고정된 서브그래프에서 gradient saliency로 엣지 피처 중요도를 계산합니다.
     class 1 (자금세탁) 예측 확률에 대한 edge_attr 각 피처의 gradient 절댓값을 반환합니다.
@@ -184,7 +212,12 @@ def _gradient_saliency(model, sub, local_idx, args, device):
     """
     model.eval()
     edge_attr = sub['edge_attr'].detach().clone().to(device).requires_grad_(True)
-    x         = sub['x'].to(device)
+    x         = sub['x'].detach().clone()
+    # 모델이 기대하는 노드 피처 차원에 맞게 ego 피처 추가
+    if model_node_in is not None and x.shape[1] < model_node_in:
+        pad = torch.zeros(x.shape[0], model_node_in - x.shape[1])
+        x = torch.cat([x, pad], dim=1)
+    x = x.to(device)
     ei        = sub['edge_index'].to(device)
 
     if getattr(args, 'reverse_mp', False):
