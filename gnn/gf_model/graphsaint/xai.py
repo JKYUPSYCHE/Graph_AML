@@ -27,12 +27,38 @@ _BASE_FEATURE_NAMES = [
     'time__row__dayofweek',
     'time__row__is_weekend',
 ]
+
+_GF_FEATURE_NAMES = [
+    'recency__sender__out__seconds_since_last',
+    'recency__receiver__in__seconds_since_last',
+    'flag__sender__out__is_first_tx',
+    'flag__receiver__in__is_first_tx',
+    'timehist__sender__out__tx_count__count__w1h',
+    'timehist__sender__out__amount__sum__w1d',
+    'timehist__sender__out__amount__max__w1d',
+    'timehist__sender__out__amount__std__w7d',
+    'timehist__receiver__in__tx_count__count__w1h',
+    'timehist__receiver__in__amount__sum__w7d',
+    'timehist__sender__all__tx_count__cum__whist',
+    'timehist__receiver__all__tx_count__cum__whist',
+    'fanout__sender__out__counterparty__nunique__w1d',
+    'fanout__sender__out__counterparty__nunique__w7d',
+    'fanin__receiver__in__counterparty__nunique__w1d',
+    'fanout__sender__out__counterparty_amount__top1_share__w1d',
+    'fanin__receiver__in__counterparty_amount__top1_share__w1d',
+    'bankfan__sender__out__to_bank__nunique__w7d',
+    'pair__sender_receiver__forward__tx_count__count__w1h',
+    'pair__sender_receiver__forward__tx_count__count__w1d',
+    'accountstats__receiver__out__amount__sum__w1d',
+    'accountstats__sender__in__amount__sum__w1d',
+]
+
 N_HOPS    = 2
 N_SAMPLES = 500
 
 
 def _feature_names(args):
-    names = list(_BASE_FEATURE_NAMES)
+    names = list(_BASE_FEATURE_NAMES) + list(_GF_FEATURE_NAMES)
     if getattr(args, 'ports', False):
         names += ['port_in', 'port_out']
     if getattr(args, 'tds', False):
