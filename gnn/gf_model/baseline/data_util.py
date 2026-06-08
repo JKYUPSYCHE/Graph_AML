@@ -78,9 +78,8 @@ class GraphData(Data):
         else:
             self.timestamps = None
 
-    def add_ports(self):
+    def add_ports(self, reverse_ports=True):
         '''Adds port numberings to the edge features'''
-        reverse_ports = True
         adj_list_in, adj_list_out = to_adj_nodes_with_times(self)
         in_ports = ports(self.edge_index, adj_list_in)
         out_ports = [ports(self.edge_index.flipud(), adj_list_out)] if reverse_ports else []
@@ -146,9 +145,10 @@ def create_hetero_obj(x, y, edge_index, edge_attr, timestamps, args):
     data['node', 'rev_to', 'node'].edge_index = edge_index.flipud()
     data['node', 'to', 'node'].edge_attr = edge_attr
     data['node', 'rev_to', 'node'].edge_attr = edge_attr
-    if args.ports:
+    if args.ports and getattr(args, 'reverse_ports', True):
         data['node', 'rev_to', 'node'].edge_attr[:, [-1, -2]] = data['node', 'rev_to', 'node'].edge_attr[:, [-2, -1]]
     data['node', 'to', 'node'].y = y
     data['node', 'to', 'node'].timestamps = timestamps
+    data['node', 'rev_to', 'node'].timestamps = timestamps
 
     return data
