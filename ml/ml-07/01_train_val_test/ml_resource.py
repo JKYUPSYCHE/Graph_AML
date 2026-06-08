@@ -432,13 +432,22 @@ def make_posthoc_logloss_learning_curve(
     y_true: pd.Series | np.ndarray,
     *,
     split_name: str,
+    round_step: int = 1,
 ) -> dict[str, Any]:
     """학습 완료 모델로 split별 post-hoc logloss curve를 계산한다."""
 
+    round_step_value = int(round_step)
+    if round_step_value <= 0:
+        raise ValueError(f"round_step must be a positive integer. round_step={round_step!r}")
+
     booster = model.get_booster()
     round_count = int(booster.num_boosted_rounds())
+    if round_count <= 0:
+        raise ValueError(f"model must have at least one boosted round. round_count={round_count}")
+    round_points = sorted({1, round_count, *range(round_step_value, round_count + 1, round_step_value)})
+
     values: list[float] = []
-    for round_index in range(1, round_count + 1):
+    for round_index in round_points:
         probabilities = model.predict_proba(x_frame, iteration_range=(0, round_index))[:, 1]
         values.append(binary_logloss(y_true, probabilities))
 
@@ -446,6 +455,11 @@ def make_posthoc_logloss_learning_curve(
         "curve_source": "xgboost_posthoc_predict_proba",
         "loss_name": "logloss",
         "metrics": ["logloss"],
+        "rounds": round_points,
+        "round_step": round_step_value,
+        "computed_round_count": len(round_points),
+        "model_round_count": round_count,
+        "sparse": round_step_value > 1,
         "curves": {
             str(split_name): {
                 "logloss": values,

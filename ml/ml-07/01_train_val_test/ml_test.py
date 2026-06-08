@@ -81,6 +81,7 @@ class TestConfig:
     encoding_manifest_path: Path | str | None = None
     export_feature_assoc: bool = True  # Backward compatible; final test always exports this artifact.
     feature_assoc_test_sample_rows: int | None = None
+    test_learning_curve_round_step: int = 10
 
     def __post_init__(self) -> None:
         """dataclass 생성 직후 경로를 정규화하고 sample_rows 값을 검증"""
@@ -104,6 +105,14 @@ class TestConfig:
             raise ValueError("sample_rows must be a positive integer.")
         if self.feature_assoc_test_sample_rows is not None and self.feature_assoc_test_sample_rows <= 0:
             raise ValueError("feature_assoc_test_sample_rows must be a positive integer or None.")
+        test_learning_curve_round_step = int(self.test_learning_curve_round_step)
+        if test_learning_curve_round_step <= 0:
+            raise ValueError("test_learning_curve_round_step must be a positive integer.")
+        object.__setattr__(
+            self,
+            "test_learning_curve_round_step",
+            test_learning_curve_round_step,
+        )
 
 
 @dataclass(frozen=True)
@@ -415,6 +424,7 @@ def _run_test(
     x_test: pd.DataFrame,
     y_test: pd.Series,
     threshold: float,
+    test_learning_curve_round_step: int,
     runtime_tracker: RuntimeTracker,
 ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
     """Predict test scores, evaluate metrics, and build diagnostic learning curve."""
@@ -431,6 +441,7 @@ def _run_test(
             x_test,
             y_test,
             split_name="test",
+            round_step=test_learning_curve_round_step,
         )
     return probabilities, test_metrics, learning_curve
 
@@ -553,6 +564,7 @@ def test_xgb(config: TestConfig) -> TestResult:
             x_test=x_test,
             y_test=y_test,
             threshold=threshold,
+            test_learning_curve_round_step=config.test_learning_curve_round_step,
             runtime_tracker=runtime_tracker,
         )
 
