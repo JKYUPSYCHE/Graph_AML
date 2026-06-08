@@ -288,7 +288,7 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
         n_gnn_layers=extract_param("n_gnn_layers", args),
         loss="ce",
         w_ce1=extract_param("w_ce1", args),
-        w_ce2=extract_param("w_ce2", args),
+        w_ce2=getattr(args, 'hpo_w_ce2', None) or extract_param("w_ce2", args),
         dropout=extract_param("dropout", args),
         final_dropout=extract_param("final_dropout", args),
         n_heads=extract_param("n_heads", args) if args.model == 'gat' else None
