@@ -19,5 +19,6 @@ def logger_setup(log_dir=None, log_name='run'):
         handlers=[
             logging.FileHandler(log_dir / f"{log_name}.log"),
             logging.StreamHandler(sys.stdout)
-        ]
+        ],
+        force=True,  # Colab/Jupyter가 미리 등록한 handler를 덮어씀
     )
