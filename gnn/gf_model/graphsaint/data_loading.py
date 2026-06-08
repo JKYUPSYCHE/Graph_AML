@@ -94,7 +94,7 @@ def get_data(args, data_config):
     # gf.parquet join:
     # formatted_transactions_gf.csv에 tx_id가 없으므로 ml_exp00.parquet에서 tx_id를 가져와
     # row 순서가 동일함을 가정하여 positional join 수행
-    parquet_path = Path(data_config['paths']['aml_data']) / args.data / 'ml_exp00.parquet'
+    parquet_path = Path(data_config['paths']['aml_data']) / 'ml' / 'ml.parquet'
     ml_tx = pd.read_parquet(parquet_path, columns=['tx_id'])
     assert len(ml_tx) == len(df_edges), (
         f"Row count mismatch: ml_exp00={len(ml_tx)}, formatted_transactions_gf={len(df_edges)}"
