@@ -2,8 +2,7 @@ import pandas as pd
 import numpy as np
 import torch
 import logging
-from pathlib import Path
-from sklearn.preprocessing import LabelEncoder
+import itertools
 from data_util import GraphData, HeteroData, z_norm, create_hetero_obj
 
 GF_FEATURES = [
@@ -31,116 +30,107 @@ GF_FEATURES = [
     'accountstats__sender__in__amount__sum__w1d',
 ]
 
-NODE_FEATURE_COLS = [
-    'train_only_pagerank',
-    'train_only_in_degree',
-    'train_only_out_degree',
-    'train_only_in_amount_sum',
-    'train_only_out_amount_sum',
-]
-
-BASE_EDGE_FEATURES = ['log_amount', 'currency', 'payment_format']
-
-
-def _split_indices(split_col: pd.Series):
-    arr = split_col.to_numpy()
-    tr_inds  = torch.where(torch.tensor(arr == 'train'))[0]
-    val_inds = torch.where(torch.tensor(arr == 'val'))[0]
-    te_inds  = torch.where(torch.tensor(arr == 'test'))[0]
-    return tr_inds, val_inds, te_inds
-
-
-def _encode_categoricals(df_edges, tr_inds_np):
-    for col in ['currency', 'payment_format']:
-        if col not in df_edges.columns:
-            continue
-        le = LabelEncoder()
-        le.fit(df_edges.iloc[tr_inds_np][col].astype(str))
-        n_unknown = len(le.classes_)
-        arr = df_edges[col].astype(str).to_numpy()
-        known = np.isin(arr, le.classes_)
-        df_edges[col] = np.where(
-            known,
-            le.transform(np.where(known, arr, le.classes_[0])),
-            n_unknown,
-        )
-    return df_edges
-
 
 def get_data(args, data_config):
     """
-    formatted_transactions_gf.csv + gf.parquet 22개 피처를 합쳐 로딩.
+    기존 formatted_transactions.csv 엣지 피처 + gf.parquet 22개 피처를 합쳐서 로딩.
 
     엣지 피처 구성:
-        [log_amount, currency(encoded), payment_format(encoded)]  ← base 3개
-        + [GF_FEATURES 22개]                                       ← gf.parquet
+        [Timestamp, Amount Received, Received Currency, Payment Format]  ← 기존 4개
+        + [GF_FEATURES 22개]                                              ← gf.parquet
         + ports (args.ports=True 시)
         + time_deltas (args.tds=True 시)
-
-    분할 구조 (LinkNeighborLoader용):
-        tr_data  = train 엣지만
-        val_data = train + val 엣지 (val 평가 시 val_inds로 필터)
-        te_data  = 전체 엣지 (test 평가 시 te_inds로 필터)
-        반환 인덱스: 전체 df_edges 기준 절대 위치
     """
-    gnn_dir = Path(data_config['paths']['gnn_inputs'])
-    gf_path = Path(data_config['paths']['gf_parquet'])
+    transaction_file = f"{data_config['paths']['gnn_inputs']}/formatted_transactions.csv"
+    gf_path = data_config['paths']['gf_parquet']
 
-    df_edges = pd.read_csv(gnn_dir / 'formatted_transactions_gf.csv')
+    df_edges = pd.read_csv(transaction_file)
     logging.info(f'Available Edge Features: {df_edges.columns.tolist()}')
 
-    # gf.parquet join on tx_id
     gf = pd.read_parquet(gf_path, columns=['tx_id'] + GF_FEATURES)
-    df_edges['tx_id'] = df_edges['tx_id'].astype(int)
     gf['tx_id'] = gf['tx_id'].astype(int)
-    df_edges = df_edges.merge(gf, on='tx_id', how='left')
+    df_edges = df_edges.merge(gf, left_on='EdgeID', right_on='tx_id', how='left')
     df_edges[GF_FEATURES] = df_edges[GF_FEATURES].fillna(0.0)
-    logging.info(f'GF features joined: {len(GF_FEATURES)} features')
 
-    # timestamps: elapsed seconds since min (ports/time-delta 계산용)
-    ts_raw = pd.to_datetime(df_edges['timestamp'])
-    ts_elapsed = (ts_raw - ts_raw.min()).dt.total_seconds()
-    timestamps = torch.tensor(ts_elapsed.to_numpy()).float()
+    logging.info(f'GF features joined: {GF_FEATURES}')
 
-    y = torch.LongTensor(df_edges['label'].to_numpy())
-    logging.info(f"Illicit ratio = {sum(y)} / {len(y)} = {sum(y)/len(y)*100:.2f}%")
-    logging.info(f"Number of transactions = {len(df_edges)}")
+    df_edges['Timestamp'] = df_edges['Timestamp'] - df_edges['Timestamp'].min()
 
-    # split (split 컬럼: train / val / test)
-    tr_inds, val_inds, te_inds = _split_indices(df_edges['split'])
-    logging.info(f"Total train samples: {len(tr_inds)/len(y)*100:.2f}% || IR: {y[tr_inds].float().mean()*100:.2f}%")
-    logging.info(f"Total val samples  : {len(val_inds)/len(y)*100:.2f}% || IR: {y[val_inds].float().mean()*100:.2f}%")
-    logging.info(f"Total test samples : {len(te_inds)/len(y)*100:.2f}% || IR: {y[te_inds].float().mean()*100:.2f}%")
+    max_n_id = df_edges.loc[:, ['from_id', 'to_id']].to_numpy().max() + 1
+    df_nodes = pd.DataFrame({'NodeID': np.arange(max_n_id), 'Feature': np.ones(max_n_id)})
+    timestamps = torch.Tensor(df_edges['Timestamp'].to_numpy())
+    y = torch.LongTensor(df_edges['Is Laundering'].to_numpy())
 
-    # categorical encoding: train 기준 fit, 미등장 카테고리 → unknown token
-    df_edges = _encode_categoricals(df_edges, tr_inds.numpy())
+    logging.info(f"Illicit ratio = {sum(y)} / {len(y)} = {sum(y) / len(y) * 100:.2f}%")
+    logging.info(f"Number of nodes = {df_nodes.shape[0]}")
+    logging.info(f"Number of transactions = {df_edges.shape[0]}")
 
-    edge_features = BASE_EDGE_FEATURES + GF_FEATURES
-    logging.info(f'Edge features: {len(edge_features)} total ({len(BASE_EDGE_FEATURES)} base + {len(GF_FEATURES)} GF)')
+    base_edge_features = ['Timestamp', 'Amount Received', 'Received Currency', 'Payment Format']
+    edge_features = base_edge_features + GF_FEATURES
+    node_features = ['Feature']
 
-    # node features: account_node_features.csv (train-only PageRank/degree/amount)
-    df_nf = pd.read_csv(gnn_dir / 'account_node_features.csv')
-    n_nodes = len(df_nf)
-    df_nf[NODE_FEATURE_COLS] = df_nf[NODE_FEATURE_COLS].fillna(0.0)
-    # amount 컬럼은 스케일 차이가 커서 log1p 적용
-    df_nf['train_only_in_amount_sum']  = np.log1p(df_nf['train_only_in_amount_sum'].to_numpy())
-    df_nf['train_only_out_amount_sum'] = np.log1p(df_nf['train_only_out_amount_sum'].to_numpy())
-    logging.info(f'Node features: {NODE_FEATURE_COLS} (amount cols: log1p applied)')
-    logging.info(f"Number of nodes = {n_nodes}")
+    logging.info(f'Edge features being used: {len(edge_features)}개 ({base_edge_features} + GF 22개)')
+    logging.info(f'Node features: {node_features} (placeholder, all 1s)')
 
-    x          = torch.tensor(df_nf[NODE_FEATURE_COLS].to_numpy()).float()
-    edge_index = torch.LongTensor(df_edges[['from_idx', 'to_idx']].to_numpy().T)
-    edge_attr  = torch.tensor(df_edges[edge_features].to_numpy()).float()
+    x = torch.tensor(df_nodes.loc[:, node_features].to_numpy()).float()
+    edge_index = torch.LongTensor(df_edges.loc[:, ['from_id', 'to_id']].to_numpy().T)
+    edge_attr = torch.tensor(df_edges.loc[:, edge_features].to_numpy()).float()
 
-    # LinkNeighborLoader용 분할:
-    #   val_data = train + val (val 평가 시 val_inds로 마스킹)
-    #   te_data  = 전체 (test 평가 시 te_inds로 마스킹)
+    n_days = int(timestamps.max() / (3600 * 24) + 1)
+    n_samples = y.shape[0]
+
+    daily_irs, weighted_daily_irs, daily_inds, daily_trans = [], [], [], []
+    for day in range(n_days):
+        l = day * 24 * 3600
+        r = (day + 1) * 24 * 3600
+        day_inds = torch.where((timestamps >= l) & (timestamps < r))[0]
+        daily_irs.append(y[day_inds].float().mean())
+        weighted_daily_irs.append(y[day_inds].float().mean() * day_inds.shape[0] / n_samples)
+        daily_inds.append(day_inds)
+        daily_trans.append(day_inds.shape[0])
+
+    split_per = [0.6, 0.2, 0.2]
+    daily_totals = np.array(daily_trans)
+    d_ts = daily_totals
+    I = list(range(len(d_ts)))
+    split_scores = dict()
+    for i, j in itertools.combinations(I, 2):
+        if j >= i:
+            split_totals = [d_ts[:i].sum(), d_ts[i:j].sum(), d_ts[j:].sum()]
+            split_totals_sum = np.sum(split_totals)
+            split_props = [v / split_totals_sum for v in split_totals]
+            split_error = [abs(v - t) / t for v, t in zip(split_props, split_per)]
+            score = max(split_error)
+            split_scores[(i, j)] = score
+
+    i, j = min(split_scores, key=split_scores.get)
+    split = [list(range(i)), list(range(i, j)), list(range(j, len(daily_totals)))]
+    logging.info(f'Calculate split: {split}')
+
+    split_inds = {k: [] for k in range(3)}
+    for i in range(3):
+        for day in split[i]:
+            split_inds[i].append(daily_inds[day])
+
+    tr_inds  = torch.cat(split_inds[0])
+    val_inds = torch.cat(split_inds[1])
+    te_inds  = torch.cat(split_inds[2])
+
+    logging.info(f"Total train samples: {tr_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[tr_inds].float().mean() * 100:.2f}%")
+    logging.info(f"Total val samples  : {val_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[val_inds].float().mean() * 100:.2f}%")
+    logging.info(f"Total test samples : {te_inds.shape[0] / y.shape[0] * 100:.2f}% || IR: {y[te_inds].float().mean() * 100:.2f}%")
+
+    tr_x, val_x, te_x = x, x, x
     e_tr  = tr_inds.numpy()
-    e_val = np.concatenate([tr_inds.numpy(), val_inds.numpy()])
+    e_val = np.concatenate([tr_inds, val_inds])
 
-    tr_data  = GraphData(x=x, y=y[e_tr],  edge_index=edge_index[:, e_tr],  edge_attr=edge_attr[e_tr],  timestamps=timestamps[e_tr])
-    val_data = GraphData(x=x, y=y[e_val], edge_index=edge_index[:, e_val], edge_attr=edge_attr[e_val], timestamps=timestamps[e_val])
-    te_data  = GraphData(x=x, y=y,        edge_index=edge_index,            edge_attr=edge_attr,        timestamps=timestamps)
+    tr_edge_index,  tr_edge_attr,  tr_y,  tr_edge_times  = edge_index[:, e_tr],  edge_attr[e_tr],  y[e_tr],  timestamps[e_tr]
+    val_edge_index, val_edge_attr, val_y, val_edge_times = edge_index[:, e_val], edge_attr[e_val], y[e_val], timestamps[e_val]
+    te_edge_index,  te_edge_attr,  te_y,  te_edge_times  = edge_index,          edge_attr,        y,        timestamps
+
+    tr_data  = GraphData(x=tr_x,  y=tr_y,  edge_index=tr_edge_index,  edge_attr=tr_edge_attr,  timestamps=tr_edge_times)
+    val_data = GraphData(x=val_x, y=val_y, edge_index=val_edge_index, edge_attr=val_edge_attr, timestamps=val_edge_times)
+    te_data  = GraphData(x=te_x,  y=te_y,  edge_index=te_edge_index,  edge_attr=te_edge_attr,  timestamps=te_edge_times)
 
     if args.ports:
         logging.info("Start: adding ports")
@@ -174,5 +164,4 @@ def get_data(args, data_config):
     logging.info(f'val data  : {val_data}')
     logging.info(f'test data : {te_data}')
 
-    # 반환 인덱스: 전체 df_edges 기준 절대 위치 (평가 시 마스킹용)
     return tr_data, val_data, te_data, tr_inds, val_inds, te_inds
