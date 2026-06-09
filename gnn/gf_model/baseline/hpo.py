@@ -37,7 +37,7 @@ def objective(trial, tr_data, val_data, te_data, tr_inds, val_inds, te_inds, bas
 
 
 def run_hpo(tr_data, val_data, te_data, tr_inds, val_inds, te_inds,
-            base_args, data_config, n_trials=20):
+            base_args, data_config, n_trials=20, storage=None):
     """
     Optuna TPE로 baseline (LinkNeighborLoader) 하이퍼파라미터 탐색.
     목적 함수: best epoch val F1 최대화.
@@ -46,11 +46,18 @@ def run_hpo(tr_data, val_data, te_data, tr_inds, val_inds, te_inds,
         batch_size : 1024, 2048, 4096
         num_neighs : [k, k] where k in [10, 25, 50, 100]
         w_ce2      : 3.0 ~ 100.0 (log scale)
+
+    Args:
+        storage: Optuna storage URL (e.g. 'sqlite:///hpo.db').
+                 None이면 in-memory (세션 종료 시 소멸).
+                 Drive 경로 사용 예: 'sqlite:////content/drive/MyDrive/Graph_AML/gnn/hpo_baseline.db'
     """
     study = optuna.create_study(
         direction='maximize',
         sampler=optuna.samplers.TPESampler(seed=42),
         study_name='baseline_lnl_hpo',
+        storage=storage,
+        load_if_exists=True,  # storage 있으면 기존 study 이어서 진행
     )
     study.optimize(
         lambda trial: objective(
