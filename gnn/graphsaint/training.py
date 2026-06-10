@@ -68,7 +68,7 @@ def get_model(tr_data, config, args):
 
 # ── Train (homo) ──────────────────────────────────────────────────────────────
 def train_homo(tr_loader, val_loader, te_loader,
-               model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer):
+               model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer, te_inds=None):
     best_val_f1, best_val_result, best_te_result = 0, None, None
     best_epoch, best_model_state, patience_counter = 0, None, 0
     memory_mb_list = []
@@ -126,7 +126,8 @@ def train_homo(tr_loader, val_loader, te_loader,
 
         best_val_f1, best_val_result, best_te_result, best_epoch, best_model_state, patience_counter, stop = \
             _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_result,
-                         best_epoch, best_model_state, patience_counter, epoch, model, optimizer, args, data_config)
+                         best_epoch, best_model_state, patience_counter, epoch, model, optimizer, args, data_config,
+                         te_loader=te_loader, te_inds=te_inds)
         if stop:
             break
 
@@ -136,7 +137,7 @@ def train_homo(tr_loader, val_loader, te_loader,
 
 # ── Train (hetero) ────────────────────────────────────────────────────────────
 def train_hetero(tr_loader, val_loader, te_loader,
-                 model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer):
+                 model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer, te_inds=None):
     best_val_f1, best_val_result, best_te_result = 0, None, None
     best_epoch, best_model_state, patience_counter = 0, None, 0
     memory_mb_list = []
@@ -198,7 +199,8 @@ def train_hetero(tr_loader, val_loader, te_loader,
 
         best_val_f1, best_val_result, best_te_result, best_epoch, best_model_state, patience_counter, stop = \
             _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_result,
-                         best_epoch, best_model_state, patience_counter, epoch, model, optimizer, args, data_config)
+                         best_epoch, best_model_state, patience_counter, epoch, model, optimizer, args, data_config,
+                         te_loader=te_loader, te_inds=te_inds)
         if stop:
             break
 
@@ -232,8 +234,65 @@ def _log_val_te(val_result, te_result):
     logging.info(f"Test — F1: {te_result['f1']:.4f} | Recall: {te_result['recall']:.4f} | Precision: {te_result['precision']:.4f} | AUPRC: {te_result['auprc']:.4f} | Mem: {te_result['memory_mb']:.1f}MB | Time: {te_result['time_s']:.1f}s")
 
 
+def _save_pred_csv(te_loader, model, device, args, te_inds, data_config):
+    """Best epoch 시점 test 예측값 CSV 저장 (노트북 7-3 셀과 동일 포맷)."""
+    import numpy as np
+    import pandas as pd
+
+    run_dir   = Path(data_config['paths']['model_to_save']).parent
+    pred_path = run_dir / f'{args.unique_name}_predictions.csv'
+
+    edge_probs, edge_gts = {}, {}
+
+    model.eval()
+    with torch.no_grad():
+        for batch in te_loader:
+            arange_ids = batch.edge_attr[:, 0].long()
+
+            if args.reverse_mp:
+                hbatch = homo_to_hetero(batch, args)
+                hbatch['node', 'to', 'node'].edge_attr     = hbatch['node', 'to', 'node'].edge_attr[:, 1:]
+                hbatch['node', 'rev_to', 'node'].edge_attr = hbatch['node', 'rev_to', 'node'].edge_attr[:, 1:]
+                hbatch.to(device)
+                out   = model(hbatch.x_dict, hbatch.edge_index_dict, hbatch.edge_attr_dict)[('node', 'to', 'node')]
+                gts_b = hbatch['node', 'to', 'node'].y
+            else:
+                batch.edge_attr = batch.edge_attr[:, 1:]
+                batch.to(device)
+                out   = model(batch.x, batch.edge_index, batch.edge_attr)
+                gts_b = batch.y
+
+            probs_b = out.softmax(dim=-1)[:, 1].cpu()
+            for aid, prob, gt in zip(arange_ids.tolist(), probs_b.tolist(), gts_b.cpu().tolist()):
+                edge_probs[aid] = prob
+                edge_gts[aid]   = int(gt)
+    model.train()
+
+    te_inds_np = te_inds.numpy()
+    probs_arr  = np.array([edge_probs.get(int(i), float('nan')) for i in te_inds_np])
+    gts_arr    = np.array([edge_gts.get(int(i), -1)             for i in te_inds_np])
+    preds_arr  = (probs_arr >= 0.5).astype(int)
+
+    n_missing = int(np.isnan(probs_arr).sum())
+    if n_missing:
+        logging.warning(f'[pred_save] {n_missing}/{len(te_inds_np)} test edges not covered (NaN)')
+
+    gnn_inputs = Path(data_config['paths']['gnn_inputs'])
+    df_tx  = pd.read_csv(gnn_inputs / 'formatted_transactions.csv', usecols=['tx_id'])
+    tx_ids = df_tx['tx_id'].iloc[te_inds_np].reset_index(drop=True).values
+
+    pd.DataFrame({
+        'tx_id': tx_ids,
+        'pred':  preds_arr,
+        'prob':  probs_arr.round(6),
+        'gt':    gts_arr,
+    }).to_csv(pred_path, index=False)
+    logging.info(f'[pred_save] 예측 CSV 저장 완료: {pred_path}')
+
+
 def _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_result,
-                 best_epoch, best_model_state, patience_counter, epoch, model, optimizer, args, data_config):
+                 best_epoch, best_model_state, patience_counter, epoch, model, optimizer, args, data_config,
+                 te_loader=None, te_inds=None):
     stop = False
     if val_result['f1'] > best_val_f1:
         best_val_f1      = val_result['f1']
@@ -244,6 +303,8 @@ def _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_re
         patience_counter = 0
         if args.save_model:
             save_model(model, optimizer, epoch, args, data_config)
+        if te_loader is not None and te_inds is not None:
+            _save_pred_csv(te_loader, model, device, args, te_inds, data_config)
     else:
         patience_counter += 1
         if args.patience is not None and patience_counter >= args.patience:
@@ -329,11 +390,13 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
     if args.reverse_mp:
         model, best_te_result = train_hetero(
             tr_loader, val_loader, te_loader,
-            model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer)
+            model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer,
+            te_inds=te_inds)
     else:
         model, best_te_result = train_homo(
             tr_loader, val_loader, te_loader,
-            model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer)
+            model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer,
+            te_inds=te_inds)
 
     writer.close()
     return best_te_result, model
