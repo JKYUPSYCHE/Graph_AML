@@ -127,7 +127,7 @@ def train_homo(tr_loader, val_loader, te_loader,
         best_val_f1, best_val_result, best_te_result, best_epoch, best_model_state, patience_counter, stop = \
             _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_result,
                          best_epoch, best_model_state, patience_counter, epoch, model, optimizer, args, data_config,
-                         te_loader=te_loader, te_inds=te_inds)
+                         device=device, te_loader=te_loader, te_inds=te_inds)
         if stop:
             break
 
@@ -200,7 +200,7 @@ def train_hetero(tr_loader, val_loader, te_loader,
         best_val_f1, best_val_result, best_te_result, best_epoch, best_model_state, patience_counter, stop = \
             _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_result,
                          best_epoch, best_model_state, patience_counter, epoch, model, optimizer, args, data_config,
-                         te_loader=te_loader, te_inds=te_inds)
+                         device=device, te_loader=te_loader, te_inds=te_inds)
         if stop:
             break
 
@@ -340,7 +340,7 @@ def _save_pred_csv(te_loader, model, device, args, te_inds, data_config):
 
 def _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_result,
                  best_epoch, best_model_state, patience_counter, epoch, model, optimizer, args, data_config,
-                 te_loader=None, te_inds=None):
+                 device=None, te_loader=None, te_inds=None):
     stop = False
     if val_result['f1'] > best_val_f1:
         best_val_f1      = val_result['f1']
@@ -351,7 +351,7 @@ def _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_re
         patience_counter = 0
         if args.save_model:
             save_model(model, optimizer, epoch, args, data_config)
-        if te_loader is not None and te_inds is not None:
+        if te_loader is not None and te_inds is not None and device is not None:
             _save_pred_csv(te_loader, model, device, args, te_inds, data_config)
     else:
         patience_counter += 1
