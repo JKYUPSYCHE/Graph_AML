@@ -239,6 +239,12 @@ def _log_val_te(val_result, te_result):
 def _infer_all_te_inds(model, device, args, te_inds, te_data):
     """te_inds 전체 full coverage 추론. edge_probs, edge_gts dict 반환.
     1단계: 5000스텝 랜덤워크, 2단계: 미커버 서브그래프 직접 추론."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from utils import set_seed
+    set_seed(42)
+
     import numpy as np
     from train_util import _to_pyg_data
     from torch_geometric.loader import GraphSAINTRandomWalkSampler
