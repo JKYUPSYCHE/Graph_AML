@@ -313,6 +313,48 @@ def _save_pred_csv(te_loader, model, device, args, te_inds, data_config, te_data
 
             if not remaining:
                 break
+
+    # ── 2단계: 미커버 엣지 서브그래프 직접 추론 ──────────────────────────────
+    if remaining and te_pyg is not None:
+        logging.info(f'[pred_save] 2단계 직접 추론: {len(remaining):,}개 미커버 엣지')
+        from torch_geometric.data import Data as PyGData
+        rem_t       = torch.tensor(sorted(remaining), dtype=torch.long)
+        uncov_nodes = te_pyg.edge_index[:, rem_t].flatten().unique()
+        node_mask   = torch.zeros(te_pyg.num_nodes, dtype=torch.bool)
+        node_mask[uncov_nodes] = True
+        edge_mask   = node_mask[te_pyg.edge_index[0]] & node_mask[te_pyg.edge_index[1]]
+        sub_ei      = te_pyg.edge_index[:, edge_mask]
+        sub_ea      = te_pyg.edge_attr[edge_mask]
+        sub_y       = te_pyg.y[edge_mask]
+        id_map      = torch.zeros(te_pyg.num_nodes, dtype=torch.long)
+        id_map[uncov_nodes] = torch.arange(len(uncov_nodes))
+        sub_ei      = id_map[sub_ei]
+        sub_x       = te_pyg.x[uncov_nodes] if te_pyg.x is not None else None
+        sub_data    = PyGData(x=sub_x, edge_index=sub_ei, edge_attr=sub_ea,
+                              y=sub_y, num_nodes=len(uncov_nodes))
+        with torch.no_grad():
+            if args.reverse_mp:
+                hbatch = homo_to_hetero(sub_data, args)
+                hbatch['node', 'to', 'node'].edge_attr     = hbatch['node', 'to', 'node'].edge_attr[:, 1:]
+                hbatch['node', 'rev_to', 'node'].edge_attr = hbatch['node', 'rev_to', 'node'].edge_attr[:, 1:]
+                hbatch.to(device)
+                out   = model(hbatch.x_dict, hbatch.edge_index_dict, hbatch.edge_attr_dict)[('node', 'to', 'node')]
+                gts_b = hbatch['node', 'to', 'node'].y.cpu()
+            else:
+                sub_data.edge_attr = sub_data.edge_attr[:, 1:]
+                sub_data.to(device)
+                out   = model(sub_data.x, sub_data.edge_index, sub_data.edge_attr)
+                gts_b = sub_data.y.cpu()
+            probs_b  = out.softmax(dim=-1)[:, 1].cpu()
+            sub_aids = sub_ea[:, 0].long()
+            for aid, prob, gt in zip(sub_aids.tolist(), probs_b.tolist(), gts_b.tolist()):
+                if aid in remaining:
+                    edge_probs[aid] = prob
+                    edge_gts[aid]   = int(gt)
+                    remaining.discard(aid)
+        if remaining:
+            logging.warning(f'[pred_save] 2단계 후에도 미커버: {len(remaining):,}개 (NaN 처리)')
+
     model.train()
 
     te_inds_np = te_inds.numpy()
