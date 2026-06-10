@@ -316,15 +316,26 @@ def _save_pred_csv(te_loader, model, device, args, te_inds, data_config):
         if pred == 0 and gt == 1: return 'FN'
         return 'TN'
 
-    pd.DataFrame({
+    result_df = pd.DataFrame({
         'tx_id':      tx_ids,
         'pred':       preds_arr,
         'prob':       probs_arr.round(6),
         'gt':         gts_arr,
         'amount_usd': amount_usd,
         'group':      [_group(p, g) for p, g in zip(preds_arr, gts_arr)],
-    }).to_csv(pred_path, index=False)
+    })
+    result_df.to_csv(pred_path, index=False)
     logging.info(f'[pred_save] 예측 CSV 저장 완료: {pred_path}')
+
+    summary_path = run_dir / f'{args.unique_name}_amount_summary.csv'
+    summary_df = (
+        result_df.groupby('group', sort=False)['amount_usd']
+        .agg(count='count', amount_usd_sum='sum', amount_usd_mean='mean')
+        .reindex(['TP', 'FP', 'FN', 'TN'])
+        .round(2)
+    )
+    summary_df.to_csv(summary_path)
+    logging.info(f'[pred_save] 금액 요약 CSV 저장 완료: {summary_path}')
 
 
 def _update_best(val_result, te_result, best_val_f1, best_val_result, best_te_result,
