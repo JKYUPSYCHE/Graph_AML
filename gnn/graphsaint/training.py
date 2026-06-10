@@ -69,7 +69,7 @@ def get_model(tr_data, config, args):
 # ── Train (homo) ──────────────────────────────────────────────────────────────
 def train_homo(tr_loader, val_loader, te_loader,
                model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer,
-               te_inds=None, te_data=None, te_eval_loader=None):
+               te_inds=None, te_data=None):
     best_val_f1, best_val_result, best_te_result = 0, None, None
     best_epoch, best_model_state, patience_counter = 0, None, 0
     memory_mb_list = []
@@ -115,8 +115,8 @@ def train_homo(tr_loader, val_loader, te_loader,
         _log_train(preds, pred_probas, ground_truths)
         tr_result = _make_tr_result(preds, pred_probas, ground_truths)
 
-        val_result = evaluate_graphsaint(val_loader,                    model, device, args, te_inds=None)
-        te_result  = evaluate_graphsaint(te_eval_loader or te_loader,   model, device, args, te_inds=te_inds)
+        val_result = evaluate_graphsaint(val_loader, model, device, args, te_inds=None)
+        te_result  = _evaluate_full_te(model, device, args, te_inds, te_data)
         _log_val_te(val_result, te_result)
         _write_metrics(writer, tr_result, val_result, te_result, epoch)
 
@@ -139,7 +139,7 @@ def train_homo(tr_loader, val_loader, te_loader,
 # ── Train (hetero) ────────────────────────────────────────────────────────────
 def train_hetero(tr_loader, val_loader, te_loader,
                  model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer,
-                 te_inds=None, te_data=None, te_eval_loader=None):
+                 te_inds=None, te_data=None):
     best_val_f1, best_val_result, best_te_result = 0, None, None
     best_epoch, best_model_state, patience_counter = 0, None, 0
     memory_mb_list = []
@@ -189,8 +189,8 @@ def train_hetero(tr_loader, val_loader, te_loader,
 
         tr_result = _make_tr_result(preds, pred_probas, ground_truths)
 
-        val_result = evaluate_graphsaint_hetero(val_loader,                    model, device, args, te_inds=None)
-        te_result  = evaluate_graphsaint_hetero(te_eval_loader or te_loader,   model, device, args, te_inds=te_inds)
+        val_result = evaluate_graphsaint_hetero(val_loader, model, device, args, te_inds=None)
+        te_result  = _evaluate_full_te(model, device, args, te_inds, te_data)
         _log_val_te(val_result, te_result)
         _write_metrics(writer, tr_result, val_result, te_result, epoch)
 
@@ -236,62 +236,31 @@ def _log_val_te(val_result, te_result):
     logging.info(f"Test — F1: {te_result['f1']:.4f} | Recall: {te_result['recall']:.4f} | Precision: {te_result['precision']:.4f} | AUPRC: {te_result['auprc']:.4f} | Mem: {te_result['memory_mb']:.1f}MB | Time: {te_result['time_s']:.1f}s")
 
 
-def _save_pred_csv(te_loader, model, device, args, te_inds, data_config, te_data=None):
-    """Best epoch 시점 test 예측값 CSV 저장 (tx_id, pred, prob, gt, amount_usd, group)."""
+def _infer_all_te_inds(model, device, args, te_inds, te_data):
+    """te_inds 전체 full coverage 추론. edge_probs, edge_gts dict 반환.
+    1단계: 5000스텝 랜덤워크, 2단계: 미커버 서브그래프 직접 추론."""
     import numpy as np
-    import pandas as pd
-
-    # 환율 기준: 2026-06-08
-    # ECB 통화: usd_per_unit = 1.154(USD/EUR) / ECB_rate
-    _ECB = {'EUR':1.0,'USD':1.154,'AUD':1.6311,'BRL':5.9353,'CAD':1.6083,
-             'CHF':0.9187,'CNY':7.8263,'GBP':0.8636,'ILS':3.366,
-             'INR':110.4475,'JPY':184.6,'MXN':20.0945}
-    USD_PER_UNIT = {iso: 1.154 / rate for iso, rate in _ECB.items()}
-    USD_PER_UNIT['RUB'] = 1 / 73.4689          # 러시아 중앙은행 06-06
-    USD_PER_UNIT['SAR'] = 1 / 3.75             # 고정 페그
-    USD_PER_UNIT['BTC'] = 63254.57215050675    # CoinGecko
-
-    NAME_TO_ISO = {
-        'US Dollar':'USD','Swiss Franc':'CHF','Shekel':'ILS','Yuan':'CNY',
-        'Saudi Riyal':'SAR','Bitcoin':'BTC','Euro':'EUR','UK Pound':'GBP',
-        'Yen':'JPY','Rupee':'INR','Canadian Dollar':'CAD','Brazil Real':'BRL',
-        'Ruble':'RUB','Australian Dollar':'AUD','Mexican Peso':'MXN',
-    }
-
-    def to_usd(amount, currency_name):
-        iso   = NAME_TO_ISO.get(str(currency_name).strip())
-        scale = USD_PER_UNIT.get(iso) if iso else None
-        return round(float(amount) * scale, 4) if scale is not None else None
-
-    run_dir   = Path(data_config['paths']['model_to_save']).parent
-    pred_path = run_dir / f'{args.unique_name}_predictions.csv'
-
     from train_util import _to_pyg_data
     from torch_geometric.loader import GraphSAINTRandomWalkSampler
+    from torch_geometric.data import Data as PyGData
 
-    edge_probs, edge_gts = {}, {}
+    te_pyg    = _to_pyg_data(te_data)
     remaining = set(te_inds.numpy().tolist())
+    edge_probs, edge_gts = {}, {}
 
-    # te_data의 PyG Data 버전으로 커버리지 전용 로더 생성 (num_steps 크게)
-    te_pyg = _to_pyg_data(te_data) if te_data is not None and hasattr(te_data, 'edge_index') else None
-
-    if te_pyg is not None:
-        cover_loader = GraphSAINTRandomWalkSampler(
-            te_pyg,
-            batch_size      = getattr(args, 'saint_batch_size', 200),
-            walk_length     = getattr(args, 'walk_length', 2),
-            num_steps       = 5000,
-            sample_coverage = 0,
-            num_workers     = 0,
-        )
-    else:
-        cover_loader = te_loader
+    cover_loader = GraphSAINTRandomWalkSampler(
+        te_pyg,
+        batch_size      = getattr(args, 'saint_batch_size', 200),
+        walk_length     = getattr(args, 'walk_length', 2),
+        num_steps       = 5000,
+        sample_coverage = 0,
+        num_workers     = 0,
+    )
 
     model.eval()
     with torch.no_grad():
         for batch in cover_loader:
             arange_ids = batch.edge_attr[:, 0].long()
-
             if args.reverse_mp:
                 hbatch = homo_to_hetero(batch, args)
                 hbatch['node', 'to', 'node'].edge_attr     = hbatch['node', 'to', 'node'].edge_attr[:, 1:]
@@ -304,20 +273,15 @@ def _save_pred_csv(te_loader, model, device, args, te_inds, data_config, te_data
                 batch.to(device)
                 out   = model(batch.x, batch.edge_index, batch.edge_attr)
                 gts_b = batch.y
-
             probs_b = out.softmax(dim=-1)[:, 1].cpu()
             for aid, prob, gt in zip(arange_ids.tolist(), probs_b.tolist(), gts_b.cpu().tolist()):
                 edge_probs[aid] = prob
                 edge_gts[aid]   = int(gt)
                 remaining.discard(aid)
-
             if not remaining:
                 break
 
-    # ── 2단계: 미커버 엣지 서브그래프 직접 추론 ──────────────────────────────
-    if remaining and te_pyg is not None:
-        logging.info(f'[pred_save] 2단계 직접 추론: {len(remaining):,}개 미커버 엣지')
-        from torch_geometric.data import Data as PyGData
+    if remaining:
         rem_t       = torch.tensor(sorted(remaining), dtype=torch.long)
         uncov_nodes = te_pyg.edge_index[:, rem_t].flatten().unique()
         node_mask   = torch.zeros(te_pyg.num_nodes, dtype=torch.bool)
@@ -353,7 +317,81 @@ def _save_pred_csv(te_loader, model, device, args, te_inds, data_config, te_data
                     edge_gts[aid]   = int(gt)
                     remaining.discard(aid)
         if remaining:
-            logging.warning(f'[pred_save] 2단계 후에도 미커버: {len(remaining):,}개 (NaN 처리)')
+            logging.warning(f'[infer] 2단계 후에도 미커버: {len(remaining):,}개 (NaN 처리)')
+
+    model.train()
+    return edge_probs, edge_gts
+
+
+def _evaluate_full_te(model, device, args, te_inds, te_data):
+    """전체 te_inds 커버 추론 후 메트릭 dict 반환 (evaluate_graphsaint와 동일 포맷)."""
+    import numpy as np
+    import os, psutil, time
+    from sklearn.metrics import (f1_score, recall_score, precision_score,
+                                 average_precision_score, log_loss, confusion_matrix)
+
+    t_start = time.perf_counter()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats(device)
+
+    edge_probs, edge_gts = _infer_all_te_inds(model, device, args, te_inds, te_data)
+
+    te_inds_np   = te_inds.numpy()
+    probs_arr    = np.array([edge_probs.get(int(i), float('nan')) for i in te_inds_np])
+    gts_arr      = np.array([edge_gts.get(int(i),   -1)           for i in te_inds_np])
+    preds_arr    = (probs_arr >= 0.5).astype(int)
+
+    valid        = gts_arr >= 0
+    pred         = preds_arr[valid]
+    pred_proba   = probs_arr[valid]
+    ground_truth = gts_arr[valid]
+
+    t_end     = time.perf_counter()
+    memory_mb = (torch.cuda.max_memory_allocated(device) / 1024 ** 2
+                 if torch.cuda.is_available()
+                 else psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2)
+
+    tn, fp, fn, tp = confusion_matrix(ground_truth, pred, labels=[0, 1]).ravel()
+    return {
+        'f1':        float(f1_score(ground_truth, pred, zero_division=0)),
+        'recall':    float(recall_score(ground_truth, pred, zero_division=0)),
+        'precision': float(precision_score(ground_truth, pred, zero_division=0)),
+        'auprc':     float(average_precision_score(ground_truth, pred_proba)),
+        'log_loss':  float(log_loss(ground_truth, pred_proba)),
+        'tn': int(tn), 'fp': int(fp), 'fn': int(fn), 'tp': int(tp),
+        'memory_mb': memory_mb, 'time_s': t_end - t_start,
+    }
+
+
+def _save_pred_csv(te_loader, model, device, args, te_inds, data_config, te_data=None):
+    """Best epoch 시점 test 예측값 CSV 저장 (tx_id, pred, prob, gt, amount_usd, group)."""
+    import numpy as np
+    import pandas as pd
+
+    _ECB = {'EUR':1.0,'USD':1.154,'AUD':1.6311,'BRL':5.9353,'CAD':1.6083,
+             'CHF':0.9187,'CNY':7.8263,'GBP':0.8636,'ILS':3.366,
+             'INR':110.4475,'JPY':184.6,'MXN':20.0945}
+    USD_PER_UNIT = {iso: 1.154 / rate for iso, rate in _ECB.items()}
+    USD_PER_UNIT['RUB'] = 1 / 73.4689
+    USD_PER_UNIT['SAR'] = 1 / 3.75
+    USD_PER_UNIT['BTC'] = 63254.57215050675
+
+    NAME_TO_ISO = {
+        'US Dollar':'USD','Swiss Franc':'CHF','Shekel':'ILS','Yuan':'CNY',
+        'Saudi Riyal':'SAR','Bitcoin':'BTC','Euro':'EUR','UK Pound':'GBP',
+        'Yen':'JPY','Rupee':'INR','Canadian Dollar':'CAD','Brazil Real':'BRL',
+        'Ruble':'RUB','Australian Dollar':'AUD','Mexican Peso':'MXN',
+    }
+
+    def to_usd(amount, currency_name):
+        iso   = NAME_TO_ISO.get(str(currency_name).strip())
+        scale = USD_PER_UNIT.get(iso) if iso else None
+        return round(float(amount) * scale, 4) if scale is not None else None
+
+    run_dir   = Path(data_config['paths']['model_to_save']).parent
+    pred_path = run_dir / f'{args.unique_name}_predictions.csv'
+
+    edge_probs, edge_gts = _infer_all_te_inds(model, device, args, te_inds, te_data)
 
     model.train()
 
@@ -470,17 +508,6 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
     add_arange_ids([tr_data, val_data, te_data])
     tr_loader, val_loader, te_loader = get_loaders(tr_data, val_data, te_data, args)
 
-    from train_util import _to_pyg_data
-    from torch_geometric.loader import GraphSAINTRandomWalkSampler
-    te_eval_loader = GraphSAINTRandomWalkSampler(
-        _to_pyg_data(te_data),
-        batch_size      = getattr(args, 'saint_batch_size', 200),
-        walk_length     = getattr(args, 'walk_length', 2),
-        num_steps       = 500,
-        sample_coverage = 0,
-        num_workers     = 0,
-    )
-
     model = get_model(tr_data, config, args)
 
     if args.reverse_mp:
@@ -517,12 +544,12 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
         model, best_te_result = train_hetero(
             tr_loader, val_loader, te_loader,
             model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer,
-            te_inds=te_inds, te_data=te_data, te_eval_loader=te_eval_loader)
+            te_inds=te_inds, te_data=te_data)
     else:
         model, best_te_result = train_homo(
             tr_loader, val_loader, te_loader,
             model, optimizer, scheduler, loss_fn, args, config, device, data_config, writer,
-            te_inds=te_inds, te_data=te_data, te_eval_loader=te_eval_loader)
+            te_inds=te_inds, te_data=te_data)
 
     writer.close()
     return best_te_result, model
