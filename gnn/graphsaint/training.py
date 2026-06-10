@@ -235,9 +235,31 @@ def _log_val_te(val_result, te_result):
 
 
 def _save_pred_csv(te_loader, model, device, args, te_inds, data_config):
-    """Best epoch 시점 test 예측값 CSV 저장 (노트북 7-3 셀과 동일 포맷)."""
+    """Best epoch 시점 test 예측값 CSV 저장 (tx_id, pred, prob, gt, amount_usd, group)."""
     import numpy as np
     import pandas as pd
+
+    # 환율 기준: 2026-06-08
+    # ECB 통화: usd_per_unit = 1.154(USD/EUR) / ECB_rate
+    _ECB = {'EUR':1.0,'USD':1.154,'AUD':1.6311,'BRL':5.9353,'CAD':1.6083,
+             'CHF':0.9187,'CNY':7.8263,'GBP':0.8636,'ILS':3.366,
+             'INR':110.4475,'JPY':184.6,'MXN':20.0945}
+    USD_PER_UNIT = {iso: 1.154 / rate for iso, rate in _ECB.items()}
+    USD_PER_UNIT['RUB'] = 1 / 73.4689          # 러시아 중앙은행 06-06
+    USD_PER_UNIT['SAR'] = 1 / 3.75             # 고정 페그
+    USD_PER_UNIT['BTC'] = 63254.57215050675    # CoinGecko
+
+    NAME_TO_ISO = {
+        'US Dollar':'USD','Swiss Franc':'CHF','Shekel':'ILS','Yuan':'CNY',
+        'Saudi Riyal':'SAR','Bitcoin':'BTC','Euro':'EUR','UK Pound':'GBP',
+        'Yen':'JPY','Rupee':'INR','Canadian Dollar':'CAD','Brazil Real':'BRL',
+        'Ruble':'RUB','Australian Dollar':'AUD','Mexican Peso':'MXN',
+    }
+
+    def to_usd(amount, currency_name):
+        iso   = NAME_TO_ISO.get(str(currency_name).strip())
+        scale = USD_PER_UNIT.get(iso) if iso else None
+        return round(float(amount) * scale, 4) if scale is not None else None
 
     run_dir   = Path(data_config['paths']['model_to_save']).parent
     pred_path = run_dir / f'{args.unique_name}_predictions.csv'
@@ -278,14 +300,29 @@ def _save_pred_csv(te_loader, model, device, args, te_inds, data_config):
         logging.warning(f'[pred_save] {n_missing}/{len(te_inds_np)} test edges not covered (NaN)')
 
     gnn_inputs = Path(data_config['paths']['gnn_inputs'])
-    df_tx  = pd.read_csv(gnn_inputs / 'formatted_transactions.csv', usecols=['tx_id'])
-    tx_ids = df_tx['tx_id'].iloc[te_inds_np].reset_index(drop=True).values
+    df_tx   = pd.read_csv(gnn_inputs / 'formatted_transactions.csv', usecols=['tx_id', 'amount'])
+    df_curr = pd.read_csv(gnn_inputs / 'formatted_transactions_gf.csv', usecols=['cat__payment_currency__code'])
+
+    tx_ids   = df_tx['tx_id'].iloc[te_inds_np].reset_index(drop=True).values
+    amounts  = df_tx['amount'].iloc[te_inds_np].reset_index(drop=True).values
+    currency = df_curr['cat__payment_currency__code'].iloc[te_inds_np].reset_index(drop=True).values
+
+    amount_usd = [to_usd(a, c) for a, c in zip(amounts, currency)]
+
+    def _group(pred, gt):
+        if gt < 0:                return 'unknown'
+        if pred == 1 and gt == 1: return 'TP'
+        if pred == 1 and gt == 0: return 'FP'
+        if pred == 0 and gt == 1: return 'FN'
+        return 'TN'
 
     pd.DataFrame({
-        'tx_id': tx_ids,
-        'pred':  preds_arr,
-        'prob':  probs_arr.round(6),
-        'gt':    gts_arr,
+        'tx_id':      tx_ids,
+        'pred':       preds_arr,
+        'prob':       probs_arr.round(6),
+        'gt':         gts_arr,
+        'amount_usd': amount_usd,
+        'group':      [_group(p, g) for p, g in zip(preds_arr, gts_arr)],
     }).to_csv(pred_path, index=False)
     logging.info(f'[pred_save] 예측 CSV 저장 완료: {pred_path}')
 
