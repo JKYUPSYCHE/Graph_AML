@@ -484,3 +484,66 @@ def train_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
 
     writer.close()
     return best_te_result, model
+
+
+# ── Inference entry point ─────────────────────────────────────────────────────
+def infer_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data_config):
+    """저장된 체크포인트로 test set 전체 추론 후 predictions.csv / amount_summary.csv 저장."""
+    import json
+    import numpy as np
+    from sklearn.metrics import (f1_score, recall_score, precision_score,
+                                 average_precision_score, confusion_matrix)
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    config = SimpleNamespace(
+        lr            = extract_param("lr",            args),
+        n_hidden      = extract_param("n_hidden",      args),
+        n_gnn_layers  = extract_param("n_gnn_layers",  args),
+        w_ce1         = extract_param("w_ce1",         args),
+        w_ce2         = getattr(args, 'hpo_w_ce2', None) or extract_param("w_ce2", args),
+        dropout       = extract_param("dropout",       args),
+        final_dropout = extract_param("final_dropout", args),
+        n_heads       = extract_param("n_heads",       args) if args.model == 'gat' else None,
+    )
+
+    add_arange_ids([tr_data, val_data, te_data])
+
+    model = get_model(tr_data, config, args)
+
+    if args.reverse_mp:
+        _, _, te_loader_tmp = get_loaders(tr_data, val_data, te_data, args)
+        sample  = next(iter(te_loader_tmp))
+        hsample = homo_to_hetero(sample, args)
+        hsample['node', 'to', 'node'].edge_attr     = hsample['node', 'to', 'node'].edge_attr[:, 1:]
+        hsample['node', 'rev_to', 'node'].edge_attr = hsample['node', 'rev_to', 'node'].edge_attr[:, 1:]
+        model = to_hetero(model, hsample.metadata(), aggr='mean')
+
+    model, _ = load_model(model, device, args, config, data_config)
+    model.eval()
+
+    _, _, te_loader = get_loaders(tr_data, val_data, te_data, args)
+    _save_pred_csv(te_loader, model, device, args, te_inds, data_config, te_data=te_data)
+
+    # 저장된 CSV로 메트릭 출력
+    import pandas as pd
+    from pathlib import Path
+    pred_path = Path(data_config['paths']['model_to_save']).parent / f'{args.unique_name}_predictions.csv'
+    df = pd.read_csv(pred_path)
+    valid = df[df['gt'] >= 0]
+    gts, preds, probs = valid['gt'].values, valid['pred'].values, valid['prob'].values
+    tn, fp, fn, tp = confusion_matrix(gts, preds, labels=[0, 1]).ravel()
+    metrics = {
+        'f1':        float(f1_score(gts, preds, zero_division=0)),
+        'recall':    float(recall_score(gts, preds, zero_division=0)),
+        'precision': float(precision_score(gts, preds, zero_division=0)),
+        'auprc':     float(average_precision_score(gts, probs)),
+        'tn': int(tn), 'fp': int(fp), 'fn': int(fn), 'tp': int(tp),
+    }
+    total = tn + fp + fn + tp
+    logging.info("── Inference 결과 ──────────────────────────────────")
+    logging.info(f"  F1: {metrics['f1']:.4f} | Recall: {metrics['recall']:.4f} | Precision: {metrics['precision']:.4f} | AUPRC: {metrics['auprc']:.4f}")
+    logging.info(f"  TN: {tn:,} ({tn/total*100:.2f}%)  FP: {fp:,} ({fp/total*100:.2f}%)")
+    logging.info(f"  FN: {fn:,} ({fn/total*100:.2f}%)  TP: {tp:,} ({tp/total*100:.2f}%)")
+    logging.info(f"  저장: {pred_path}")
+    return metrics
