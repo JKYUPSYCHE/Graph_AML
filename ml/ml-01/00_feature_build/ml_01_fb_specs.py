@@ -2,10 +2,9 @@
 FeatureSpec 선언 모듈
 이 파일의 역할
 ----------------
-이 파일은 feature를 직접 계산하지 않는다.
-대신 "어떤 입력 컬럼으로 어떤 feature 컬럼을 만들지"를 선언한다.
+이 파일은 "어떤 입력 컬럼으로 어떤 feature 컬럼을 만들지"를 선언한다.
 실제 계산은 ml_01_fb_operations.py와 ml_01_fb_rolling.py에서 수행한다.
-따라서 이 파일은 feature build의 설정표에 가깝다.
+이 파일은 feature build의 설정표를 생성하는 기능을 한다. 
 
 주요 구성
 ----------------
@@ -50,7 +49,6 @@ feature 계산 함수와 feature 선택 로직을 섞으면, 실험마다 featur
 주의할 점
 ----------------
 1. operation 이름은 문자열이다.
-   - 예: "rolling_agg", "recency_seconds_since_last"
    - 오타가 나면 정적 분석으로는 잡기 어렵다.
    - 따라서 노트북에서는 FeatureSpec(...)을 직접 만들기보다 *_spec helper를 사용한다.
    - registry에 없는 operation은 실행 초기에 ValueError로 실패한다.
@@ -75,8 +73,6 @@ feature 계산 함수와 feature 선택 로직을 섞으면, 실험마다 featur
    - 실제 속도나 메모리 사용량을 보장하지 않는다.
    - 최종 판단은 feature build 실행 결과와 build_summary, feature_info를 기준으로 한다.
 8. used_in_ml 기본값은 True다.
-   - 실험용으로 catalog에만 남기고 모델 입력에서 제외하려면 used_in_ml=False를 명시한다.
-   - 학습 전 ml_feature_columns.csv를 확인해야 한다.
 
 운영 권장 방식
 ----------------
@@ -98,8 +94,7 @@ import pandas as pd
 # =============================================================================
 # 1. 공통 메타 컬럼
 # =============================================================================
-# 모든 feature frame은 학습 모듈 연결을 위해 tx_id, split, label을 함께 가진다.
-# 실제 모델 입력 feature는 이 3개를 제외한 FeatureSpec.output_col 목록이다.
+# 모든 feature frame은 학습 모듈 연결을 위해 tx_id, split, label을 포함해야 한다. 
 
 # 왜 상수로 박아두는가
 # --------------------
@@ -143,8 +138,8 @@ class FeatureSpec:
     # --- 실행 결정 필드 (operation/output/입력 매핑) ---
 
     # 어떤 operation을 실행할지 결정 예: "rolling_agg", "cur_vs_mean_ratio".
-    # 이 문자열이 ml_01_fb_operations.OPERATION_REGISTRY의 key와 정확히 매치돼야 한다.
-    # 등록되지 않은 이름이면 ml_01_fb_operations.run_operation()에서 즉시 에러.
+    # 이 문자열이 ml_01_fb_operations.OPERATION_REGISTRY의 key와 매치돼야 한다.
+    # 등록되지 않은 이름이면 ml_01_fb_operations.run_operation()에서 에러.
     operation: str
 
     # 최종 생성될 feature 컬럼명
@@ -163,10 +158,8 @@ class FeatureSpec:
     input_cols: Mapping[str, str]
 
     # operation별 선택 파라미터다. 예: {"window": "7D", "agg": "sum"}.
-    # 각 operation 함수가 _require_allowed_params()로 허용 키를 검사하므로,
-    # 잘못된 키를 넣으면 실행 시 즉시 거부된다.
+    # 각 operation 함수가 _require_allowed_params()로 허용 키를 검사하므로, 잘못된 키를 넣으면 실행 시 거부된다.
     # field(default_factory=dict): 가변 객체(dict)를 기본값으로 쓸 때의 dataclass 관용구.
-    #   default={} 를 쓰면 모든 인스턴스가 동일한 dict를 공유해 사고가 난다.
     params: Mapping[str, Any] = field(default_factory=dict)
 
     # --- 설명/관리용 메타데이터 (feature_catalog.csv로 저장) ---
@@ -191,8 +184,7 @@ class FeatureSpec:
         예: input_cols = {"entity_col": "sender_account_id", "timestamp_col": "timestamp", "value_col": "amount"}
             → ["sender_account_id", "timestamp", "amount"]
 
-        dict.fromkeys(...)는 입력 순서를 유지하면서 중복을 제거
-        (예: entity_col과 counterparty_col이 같은 컬럼을 가리키는 일은 거의 없지만, 혹시 그런 경우에도 한 번만 반환)
+        dict.fromkeys(...)는 입력 순서를 유지하면서 중복 제거
         """
         return list(dict.fromkeys(str(column) for column in self.input_cols.values()))
 
@@ -200,7 +192,7 @@ class FeatureSpec:
 @dataclass(frozen=True)
 class FeatureOpResult:
     """
-    operation 하나가 반환하는 표준 결과 객체
+    operation 하나가 반환하는 결과를 표준화 하는 객체 
     표준화 이유
     ---------------
     여러 operation(rolling_agg, recency, ratio 등)이 각자 다른 형태로 결과를 반환하면
@@ -226,20 +218,11 @@ def _clean_name(value: str, field_name: str) -> str:
     """
     빈 문자열을 조용히 허용하지 않기 위한 내부 검증 함수
 
-    왜 별도 함수로 빼는가
-    --------------------
-    validate_feature_specs()에서 operation 이름, output_col, input role,
-    input column 등 여러 위치에서 같은 검사를 반복한다. 한 곳에 모아 두면
-    "공백만 있는 이름을 어떻게 처리할지" 정책이 한 줄에서 결정된다.
-
     동작
     ----
     - str()로 변환 후 strip() → "  amount  " 같은 입력도 허용
     - 결과가 빈 문자열이면 어느 필드가 문제인지 명시한 ValueError로 중단
-    - 정상이면 clean된 이름을 반환 (호출자가 그대로 써도 안전한 값)
     """
-
-
     cleaned = str(value).strip()
     if not cleaned:
         raise ValueError(f"FeatureSpec {field_name} must not be empty.")
@@ -249,17 +232,13 @@ def _clean_name(value: str, field_name: str) -> str:
 def validate_feature_specs(feature_specs: Tuple[FeatureSpec, ...]) -> None:
     """
     FeatureSpec 목록을 실행 전에 검증한다.
-    이 함수의 목적
-    ---------------
-    feature build는 여러 FeatureSpec을 순서대로 실행해 feature frame을 만든다.
-    spec 목록에 기본 오류가 있으면 계산 중간이나 저장 단계에서 애매하게 실패할 수 있다.
-    그래서 실제 operation 실행 전에, spec 목록만 보고 확인 가능한 오류를 먼저 차단한다.
     여기서 막는 오류
     ---------------
     - FeatureSpec,output_col 목록이 비어 있음
     - output_col 중복
     - operation 이름이 비어 있음
     - input_cols, input role, input column 이 비어 있음
+
     여기서 막지 않는 오류
     --------------------
     - operation 이름이 registry에 실제 등록되어 있는지
@@ -275,9 +254,11 @@ def validate_feature_specs(feature_specs: Tuple[FeatureSpec, ...]) -> None:
     # spec 목록이 비어 있으면 중단한다.
     if not feature_specs:
         raise ValueError("feature_specs must not be empty. Add at least one FeatureSpec.")
+    
     # 모든 output_col을 먼저 정리/검증한다.
     # _clean_name()은 문자열 앞뒤 공백을 제거하고, 빈 문자열이면 ValueError를 발생시킨다.
     output_cols = [_clean_name(spec.output_col, "output_col") for spec in feature_specs]
+
     # 같은 output_col이 두 번 이상 나오면 최종 feature frame에서 컬럼 충돌이 발생한다.
     # set comprehension으로 중복 후보를 모으고 sorted()로 에러 메시지 순서를 안정화한다.
     duplicated = sorted({column for column in output_cols if output_cols.count(column) > 1})
@@ -287,51 +268,79 @@ def validate_feature_specs(feature_specs: Tuple[FeatureSpec, ...]) -> None:
             f"duplicated={duplicated}, fix=Use unique output_col values."
         )
     # 각 spec 내부의 필수 선언값을 확인한다.
-    # index를 에러 메시지에 넣으면 노트북에서 긴 spec 목록 중 어느 항목이 문제인지 찾기 쉽다.
     for index, spec in enumerate(feature_specs):
-        # operation은 OPERATION_REGISTRY와 연결되는 문자열 key다.
-        # 여기서는 빈 값만 막고, 실제 registry 존재 여부는 run_operation()에서 확인한다.
+        # operation은 OPERATION_REGISTRY와 연결되는 문자열 key다. 여기서는 빈 값만 막고, 실제 registry 존재 여부는 run_operation()에서 확인한다.
         _clean_name(spec.operation, f"operation at index {index}")
-        # input_cols가 없으면 operation이 어떤 입력 컬럼을 써야 하는지 알 수 없다.
-        # output_col을 같이 보여주면 문제가 난 feature를 빠르게 찾을 수 있다.
-        if not spec.input_cols:
+
+        if not spec.input_cols:                     # input_cols가 없으면 중단 
             raise ValueError(
                 "Feature build failed: FeatureSpec.input_cols must not be empty. "
                 f"index={index}, output_col={spec.output_col!r}"
             )
+        
         # input_cols는 role -> column 매핑이다.
         # role 예: "input_col", "entity_col", "timestamp_col"
         # column 예: "amount", "sender_account_id", "timestamp"
-        for role, column in spec.input_cols.items():
-            # role이 비어 있으면 operation 함수가 입력의 의미를 해석할 수 없다.
-            _clean_name(str(role), f"input role at index {index}")
-            # column이 비어 있으면 schema 매핑이나 DataFrame 컬럼 조회 단계에서 애매하게 실패한다.
-            # 따라서 여기서 어느 role의 column이 비었는지 명시하고 중단한다.
-            _clean_name(str(column), f"input column for role {role!r} at index {index}")
+        for role, column in spec.input_cols.items():            
+            _clean_name(str(role), f"input role at index {index}")                        # role이 비어 있으면 중단 
+            _clean_name(str(column), f"input column for role {role!r} at index {index}")  # column이 비어 있으면 중단 
 
 
 def required_input_columns(
     feature_specs: Tuple[FeatureSpec, ...],
     extra_columns: Optional[Iterable[str]] = None,
 ) -> list[str]:
-    """선택된 FeatureSpec 전체가 요구하는 입력 컬럼 목록을 중복 없이 반환한다."""
-
+    """
+    선택된 FeatureSpec들이 feature build에 필요로 하는 입력 컬럼 목록을 중복 없이 반환한다.
+    이 함수는 여러 FeatureSpec의 input_cols를 모두 모아서,
+    실제 parquet read 단계에서 필요한 컬럼 목록을 만든다.
+    extra_columns
+    -------------
+    FeatureSpec에는 없지만 항상 같이 읽어야 하는 컬럼을 추가로 넣을 때 사용한다.
+    중복 제거 방식
+    -------------
+    dict.fromkeys(required)를 사용해 입력 순서를 유지한 채 중복을 제거한다.
+    반환값
+    ------
+    source parquet에서 읽어야 하는 컬럼명 list.
+    """
+    # 먼저 FeatureSpec 목록 자체에 기본 오류가 없는지 확인한다.
     validate_feature_specs(feature_specs)
+
+    # 최종적으로 반환할 입력 컬럼 목록.
+    # 처음에는 비어 있고, extra_columns와 각 spec의 required_columns()를 차례로 붙인다.
     required: list[str] = []
+
+    # FeatureSpec에는 없지만 build 과정에서 함께 필요한 컬럼을 먼저 추가한다.
     if extra_columns is not None:
         required.extend(str(column) for column in extra_columns)
+
+    # 각 FeatureSpec이 요구하는 입력 컬럼을 모은다.
+    # spec.required_columns()는 input_cols의 value만 반환한다.
     for spec in feature_specs:
         required.extend(spec.required_columns())
+        
+    # 중복 제거 후 반환 
     return list(dict.fromkeys(required))
 
 
 def feature_columns(feature_specs: Tuple[FeatureSpec, ...]) -> list[str]:
-    """FeatureSpec 실행 순서대로 생성될 feature 컬럼명을 반환한다."""
-
+    """
+    선택된 FeatureSpec들이 실제로 생성할 output feature 컬럼명 목록을 반환한다.
+    반환 순서
+    --------
+    입력 feature_specs의 순서를 그대로 따른다.
+    이 순서는 이후 feature frame 컬럼 순서, catalog, manifest, 학습 feature list와 연결될 수 있으므로 중요하다.
+    """
+    # 실행 전에 FeatureSpec 목록의 기본 오류를 먼저 확인한다.
     validate_feature_specs(feature_specs)
+
+    # 각 FeatureSpec에서 최종 생성될 feature 컬럼명(output_col)만 뽑아 반환한다.
     return [spec.output_col for spec in feature_specs]
 
-
+# 아래 상수들은 Stage 0 feature 후보를 대량 생성할 때 쓰는 기본 조합값입니다.
+# Stage 0 rolling time-history feature에서 사용할 기본 과거 window 목록.
+# window가 5개이므로, aggregation 5개와 조합되어 5 x 5 = 25개 rolling feature가 만들어진다.
 DEFAULT_TIMEHIST_WINDOWS: Tuple[Tuple[str, str], ...] = (
     ("w1h", "1h"),
     ("w6h", "6h"),
@@ -339,52 +348,80 @@ DEFAULT_TIMEHIST_WINDOWS: Tuple[Tuple[str, str], ...] = (
     ("w3d", "3d"),
     ("w7d", "7d"),
 )
-
+# current-vs-past-mean ratio feature에서 사용할 기본 과거 window 목록.
+# sender 3개 + receiver 3개 = 총 6개 ratio feature가 만들어진다.
 DEFAULT_RATIO_WINDOWS: Tuple[Tuple[str, str], ...] = (
     ("w1d", "1d"),
     ("w3d", "3d"),
     ("w7d", "7d"),
 )
-
+# Stage 0 rolling time-history feature에서 사용할 기본 aggregation 목록.
+# count는 거래 건수 feature로 생성되고, sum/mean/std/max는 금액 기반 feature로 생성된다.
 DEFAULT_TIMEHIST_AGGS: Tuple[str, ...] = ("count", "sum", "mean", "std", "max")
 
 
 def rolling_agg_spec(
-    entity_col: str,
-    timestamp_col: str,
-    value_col: str,
-    output_col: str,
+    entity_col: str,    # rolling 집계를 묶을 기준 entity 컬럼. 예: sender_account_id, receiver_account_id
+    timestamp_col: str, # 거래 시간 컬럼.rolling window 계산 기준이 된다.        
+    value_col: str,     # 집계할 수치형 컬럼. 예: amount, amount_rece
+    output_col: str,    # feature build 후 생성될 최종 feature 컬럼명.
     *,
     window: str,
-    agg: str,
-    fill_value: float = 0.0,
+    agg: str,                # window 안에서 어떤 집계를 할지 지정한다. 예: "count", "sum", "mean", "std", "max"
+    fill_value: float = 0.0, # 과거 window에 거래가 없거나 계산 결과가 비어 있을 때 채울 값.
     family: str = "temporal_rolling",
     description: str = "Past-only rolling aggregation by entity.",
     aml_typology: str = "burst_or_structuring",
     used_in_ml: bool = True,
 ) -> FeatureSpec:
-    """entity별 과거 window rolling aggregation feature 선언을 만든다."""
+    """
+    entity별 과거 window rolling aggregation feature 선언을 만든다.
+    이 함수가 하는 일
+    ----------------
+    어떤 기준 entity로, 어떤 시간 window에서, 어떤 값 컬럼을, 어떤 집계 방식으로 계산할지 선언
 
-    return FeatureSpec(
-        operation="rolling_agg",
+    누수 방지
+    --------
+    params에 closed="left"를 고정한다. 이는 현재 거래 row를 rolling history에 포함하지 않는다는 뜻이다.
+
+    반환값
+    ------
+    FeatureSpec 1개 -> "feature 1개를 어떻게 만들지"에 대한 설계서
+    """
+    return FeatureSpec(       
+        operation="rolling_agg",   #  execute_feature_specs()는 이 문자열을 보고 OPERATION_REGISTRY에서 rolling_agg 구현을 찾는다.
         output_col=output_col,
-        input_cols={"entity_col": entity_col, "timestamp_col": timestamp_col, "value_col": value_col},
-        params={"window": window, "agg": agg, "closed": "left", "fill_value": fill_value},
+
+        # operation이 필요로 하는 입력 컬럼 역할 매핑.
+        input_cols={
+            "entity_col": entity_col,
+            "timestamp_col": timestamp_col,
+            "value_col": value_col,
+        },
+        # rolling_agg operation에 전달할 계산 옵션.
+        params={
+            "window": window,
+            "agg": agg,
+            "closed": "left",
+            "fill_value": fill_value,
+        },
+        # feature catalog에서 그룹핑/설명용으로 쓰는 메타데이터.
         family=family,
         description=description,
         aml_typology=aml_typology,
-        entity_scope="account",
-        direction="past_window",
+        
+        entity_scope="account",      # 이 feature는 계좌 단위의 과거 이력을 현재 거래 row에 붙이는 구조다.
+        direction="past_window",     # 현재 row 자체가 아니라 과거 window를 보는 feature라는 의미다.
         leakage_policy="past-only; rolling window uses closed=left",
-        computational_cost="medium",
+        computational_cost="medium", # 참고용 비용 라벨이다. 실제 실행 시간/메모리는 build 결과로 확인해야 한다.
         used_in_ml=used_in_ml,
     )
 
 
 def cur_vs_mean_ratio_spec(
-    entity_col: str,
-    timestamp_col: str,
-    value_col: str,
+    entity_col: str,    # 과거 평균을 계산할 기준 entity 컬럼. 예: sender_account_id, receiver_account_id
+    timestamp_col: str, # 거래 시간 컬럼. 과거 window 계산 기준이 된다.
+    value_col: str,     # 현재 값과 과거 평균 계산에 사용할 금액 컬럼. 예: amount, amount_received
     output_col: str,
     *,
     window: str,
@@ -394,19 +431,38 @@ def cur_vs_mean_ratio_spec(
     aml_typology: str = "amount_deviation",
     used_in_ml: bool = True,
 ) -> FeatureSpec:
-    """현재 금액 / 과거 window 평균 금액 ratio feature 선언을 만든다."""
-
-    return FeatureSpec(
-        operation="cur_vs_mean_ratio",
+    """
+    현재 거래 금액을 같은 entity의 과거 window 평균 금액으로 나눈 ratio feature 선언을 만든다.
+    """
+    return FeatureSpec(     
+        operation="cur_vs_mean_ratio", # execute_feature_specs()는 이 문자열을 보고 cur_vs_mean_ratio 구현을 찾는다.
         output_col=output_col,
-        input_cols={"entity_col": entity_col, "timestamp_col": timestamp_col, "value_col": value_col},
-        params={"window": window, "closed": "left", "fill_value": 0.0, "zero_division_value": zero_division_value},
+
+        # operation이 필요로 하는 입력 컬럼 역할 매핑.
+        # entity_col 기준으로 timestamp 이전의 value_col 평균을 계산하고,
+        # 현재 row의 value_col을 그 평균으로 나눈다.
+        input_cols={
+            "entity_col": entity_col,
+            "timestamp_col": timestamp_col,
+            "value_col": value_col,
+        },
+        # ratio 계산 옵션.
+        params={
+            "window": window,
+            "closed": "left",
+            "fill_value": 0.0,
+            "zero_division_value": zero_division_value,
+        },
+
         family=family,
         description=description,
         aml_typology=aml_typology,
         entity_scope="account",
         direction="past_window",
-        leakage_policy="past-only; denominator uses rolling mean with closed=left; zero denominator returns 0.0",
+        leakage_policy=(
+            "past-only; denominator uses rolling mean with closed=left; "
+            "zero denominator returns 0.0"
+        ),
         computational_cost="medium",
         used_in_ml=used_in_ml,
     )
@@ -507,28 +563,41 @@ def timehist_rolling_specs(
     used_in_ml: bool = True,
 ) -> Tuple[FeatureSpec, ...]:
     """
-    timehist 계열 rolling count/sum/mean feature 선언 묶음을 만든다.
+    time-history rolling feature 선언 묶음을 만든다.
 
-    반환되는 각 원소는 여전히 FeatureSpec 1개 = output column 1개 규칙을 따른다.
+    반환값
+    ------
+    Tuple[FeatureSpec, ...]  여러 rolling feature 설계서 묶음.
     """
-
+    # 이름/컬럼 인자를 문자열로 정리하고 빈 값이면 즉시 실패시킨다.
     entity_name = _clean_name(entity_name, "entity_name")
     direction = _clean_name(direction, "direction")
     entity_col = _clean_name(entity_col, "entity_col")
     timestamp_col = _clean_name(timestamp_col, "timestamp_col")
     value_col = _clean_name(value_col, "value_col")
+
+    # window 목록이 없으면 중단한다.
     if not windows:
         raise ValueError("timehist_rolling_specs windows must not be empty.")
+    
+    # aggregation 목록이 없으면  중단한다.
     if not aggs:
         raise ValueError("timehist_rolling_specs aggs must not be empty.")
-
+    
+    # rolling_agg_spec()이 반환한 FeatureSpec들을 보관할 리스트
     specs: list[FeatureSpec] = []
+
+    # output_col 이름의 공통 prefix.
     prefix = f"timehist__{entity_name}__{direction}"
+
+    # window 목록을 순회한다.
     for suffix, window in windows:
         suffix = _clean_name(suffix, "window suffix")
         window = _clean_name(window, "window")
+        # 각 window마다 count/sum/mean/std/max 같은 aggregation을 모두 만든다.
         for agg in aggs:
             agg = _clean_name(agg, "rolling agg").lower()
+            # count는 금액 집계가 아니라 거래 건수 집계로 이름을 다르게 만든다.
             if agg == "count":
                 specs.append(
                     rolling_agg_spec(
@@ -545,8 +614,12 @@ def timehist_rolling_specs(
                     )
                 )
                 continue
+            # count 외에는 amount 기반 집계만 허용한다.
+            # 허용하지 않은 agg가 들어오면 잘못된 FeatureSpec 생성을 막기 위해 즉시 실패한다.
             if agg not in {"sum", "mean", "std", "max"}:
                 raise ValueError(f"Unsupported timehist rolling agg: {agg!r}")
+            
+            # amount 기반 rolling feature를 만든다.
             specs.append(
                 rolling_agg_spec(
                     entity_col,
@@ -561,8 +634,9 @@ def timehist_rolling_specs(
                     used_in_ml=used_in_ml,
                 )
             )
-
+    # list를 tuple로 고정해서 반환한다.
     result = tuple(specs)
+    # 생성된 FeatureSpec 묶음에 기본 오류가 없는지 확인한다.
     validate_feature_specs(result)
     return result
 
@@ -577,7 +651,6 @@ def recency_feature_specs(
 ) -> Tuple[FeatureSpec, ...]:
     """
     recency seconds와 first-transaction flag feature 선언 묶음을 만든다.
-
     반환되는 각 원소는 여전히 FeatureSpec 1개 = output column 1개 규칙을 따른다.
     """
 
@@ -666,10 +739,29 @@ def cumulative_count_feature_specs(
 
 
 def ml01_stage0_feature_specs(*, used_in_ml: bool = True) -> Tuple[FeatureSpec, ...]:
-    """ML-01 Stage 0 time-history feature 선언을 반환한다.
+    """
+    ML-01 Stage 0 time-history feature 선언 전체를 반환한다.
+    Stage 0에서 만들 수 있는 FeatureSpec들을 여러 helper 함수로 생성한 뒤, 하나의 tuple로 합쳐 반환한다.
+    반환되는 각 원소는 FeatureSpec 1개이며,
+    FeatureSpec 1개는 나중에 생성될 output feature column 1개를 의미한다.
+    반환 순서
+    --------
+    반환 순서는 contract 작성, 검증, feature build lookup의 기준이 된다.
+    따라서 새 feature 묶음을 추가하거나 순서를 바꿀 때는
+    downstream feature list/hash, manifest, catalog 영향도 함께 확인해야 한다.
 
-    반환 순서는 contract 작성/검증과 feature build lookup의 기준이 된다.
-    새 feature를 추가할 때는 output_col 이름, operation registry 지원 여부, leakage_policy를 함께 확인한다.
+    반환 개수
+    --------
+    현재 기본 설정 기준 총 62개 FeatureSpec을 반환한다.
+    구성:
+        1. sender rolling time-history feature 25개
+        2. receiver rolling time-history feature 25개
+        3. sender recency/first flag feature 2개
+        4. receiver recency/first flag feature 2개
+        5. sender current-vs-past-mean ratio feature 3개
+        6. receiver current-vs-past-mean ratio feature 3개
+        7. sender cumulative count feature 1개
+        8. receiver cumulative count feature 1개
     """
 
     result = (

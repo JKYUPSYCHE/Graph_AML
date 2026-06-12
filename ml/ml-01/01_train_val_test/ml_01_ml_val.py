@@ -153,6 +153,7 @@ class ValidationConfig:
     metrics_file_name: str = "metrics_val.json"
     confusion_matrix_file_name: str = "confusion_matrix_val.csv"
     prediction_scores_file_name: str | None = None
+    export_prediction_scores: bool = True
 
     threshold_strategy: str = "max_f1"    # threshold 선택 정책
     manual_threshold: float | None = None # manual 전략일 때만 쓰는 고정 threshold.
@@ -232,7 +233,7 @@ class ValidationResult:
     threshold_path: Path             # test 평가에서 재사용해야 하는 threshold.json 경로.
     metrics_path: Path               # validation 성능, score profile, runtime, memory 정보가 저장된 JSON 경로.
     confusion_matrix_path: Path      # validation confusion matrix CSV 경로.
-    prediction_scores_path: Path     # validation row별 prediction score parquet 경로.
+    prediction_scores_path: Path | None  # validation row별 prediction score parquet 경로.
     feature_assoc_path: Path | None
     threshold_info: dict[str, Any]   # threshold.json에 저장한 payload를 메모리에서도 바로 확인하기 위한 값
     val_metrics: dict[str, Any]      # evaluate_at_threshold() 결과.
@@ -256,8 +257,9 @@ def prepare_validation_outputs(config: ValidationConfig) -> None:
         config.output_dir / config.threshold_file_name,
         config.output_dir / config.metrics_file_name,
         config.output_dir / config.confusion_matrix_file_name,
-        config.output_dir / str(config.prediction_scores_file_name),
     ]
+    if config.export_prediction_scores:
+        output_paths.append(config.output_dir / str(config.prediction_scores_file_name))
     if config.export_feature_assoc:
         output_paths.append(config.output_dir / derive_feature_assoc_file_name(config.metrics_file_name, "val"))
 
@@ -568,7 +570,11 @@ def validate_xgb(config: ValidationConfig) -> ValidationResult:
         threshold_path = config.output_dir / config.threshold_file_name
         metrics_path = config.output_dir / config.metrics_file_name
         confusion_matrix_path = config.output_dir / config.confusion_matrix_file_name
-        prediction_scores_path = config.output_dir / str(config.prediction_scores_file_name)
+        prediction_scores_path = (
+            config.output_dir / str(config.prediction_scores_file_name)
+            if config.export_prediction_scores
+            else None
+        )
         feature_assoc_path = config.output_dir / derive_feature_assoc_file_name(config.metrics_file_name, "val")
 
         # threshold.json에 저장할 내용
@@ -636,16 +642,20 @@ def validate_xgb(config: ValidationConfig) -> ValidationResult:
             "manual_threshold": config.manual_threshold,
         }
         with runtime_tracker.measure("save_outputs"):
-            # 나중에 threshold sweep을 재실행할 수 있도록 row별 validation score를 저장한다.
-            prediction_scores_info = save_validation_prediction_scores(
-                val_path=config.val_path,
-                output_path=prediction_scores_path,
-                y_val=y_val,
-                probabilities=probabilities,
-                run_id=train_run_id,
-                label_col=config.label_col,
-                sample_rows=config.sample_rows,
-            )
+            prediction_scores_info = None
+            if config.export_prediction_scores:
+                if prediction_scores_path is None:
+                    raise ValueError("prediction_scores_path is required when export_prediction_scores=True.")
+                # 나중에 threshold sweep을 재실행할 수 있도록 row별 validation score를 저장한다.
+                prediction_scores_info = save_validation_prediction_scores(
+                    val_path=config.val_path,
+                    output_path=prediction_scores_path,
+                    y_val=y_val,
+                    probabilities=probabilities,
+                    run_id=train_run_id,
+                    label_col=config.label_col,
+                    sample_rows=config.sample_rows,
+                )
 
             # threshold.json 저장.이 파일은 final test 평가에서 반드시 재사용해야 한다.
             save_json(threshold_payload, threshold_path)

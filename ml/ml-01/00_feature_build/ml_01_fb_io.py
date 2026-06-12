@@ -141,14 +141,13 @@ def load_parquet_columns(
     parquet 파일에서 필요한 컬럼만 읽는다.
     동작 방식
     - sample_rows=None이면 지정 컬럼 전체를 읽는다.
-    - sample_rows가 정수이면 parquet 앞쪽 첫 batch를 최대 sample_rows행만 읽는다.
-    - sample_rows는 랜덤 샘플이 아니라 파일 앞부분 sample이다.
+    - sample_rows가 정수이고 split 컬럼이 있으면 train/val/test가 모두 들어가도록 split별 sample을 읽는다.
+    - split 컬럼이 없으면 parquet 앞쪽 첫 batch를 최대 sample_rows행만 읽는다.
     왜 필요한가
     - feature build는 선택된 FeatureSpec이 요구하는 컬럼만 필요하므로 불필요한 컬럼을 읽지 않아 메모리를 절약한다.
     - sample smoke build에서는 full load를 피하기 위해 첫 batch만 읽는 옵션을 제공한다.
 
     주의
-    - sample_rows는 시간순/랜덤 split 샘플이 아니라 parquet 물리 순서 앞부분이다.
     - sample 결과는 smoke/debug 용도이며 feature 분포나 모델 성능 판단에 쓰면 안 된다.
     """
 
@@ -175,7 +174,10 @@ def load_parquet_columns(
     if sample_rows is None:
         return pd.read_parquet(path, columns=selected_columns)
 
-    # sample build: 대용량 parquet 전체를 로드하지 않고 첫 batch만 read
+    if "split" in selected_columns:
+        return _load_split_balanced_parquet_sample(path, selected_columns, sample_rows)
+
+    # sample build without split: 대용량 parquet 전체를 로드하지 않고 첫 batch만 read
     parquet_file = pq.ParquetFile(path)
     batches = parquet_file.iter_batches(batch_size=sample_rows, columns=selected_columns)
     try:
@@ -185,6 +187,49 @@ def load_parquet_columns(
         raise ValueError(f"parquet file has no rows: {path}") from exc
     # pyarrow RecordBatch를 pandas DataFrame으로 변환해 이후 pandas 기반 operation에서 사용한다.
     return first_batch.to_pandas()
+
+
+def _load_split_balanced_parquet_sample(path: Path, selected_columns: list[str], sample_rows: int) -> pd.DataFrame:
+    """train/val/test가 모두 포함되도록 parquet를 batch 단위로 읽어 smoke sample을 만든다."""
+
+    required_splits = ("train", "val", "test")
+    if sample_rows < len(required_splits):
+        raise ValueError("sample_rows must be at least 3 when split-balanced smoke sampling is used.")
+
+    per_split_limit = max(1, sample_rows // len(required_splits))
+    remaining = sample_rows - (per_split_limit * len(required_splits))
+    split_limits = {split: per_split_limit for split in required_splits}
+    for split in required_splits[:remaining]:
+        split_limits[split] += 1
+
+    collected: dict[str, list[pd.DataFrame]] = {split: [] for split in required_splits}
+    counts = {split: 0 for split in required_splits}
+    parquet_file = pq.ParquetFile(path)
+
+    for batch in parquet_file.iter_batches(batch_size=sample_rows, columns=selected_columns):
+        batch_df = batch.to_pandas()
+        split_values = batch_df["split"].astype("string").str.strip().str.lower()
+        for split in required_splits:
+            need = split_limits[split] - counts[split]
+            if need <= 0:
+                continue
+            split_part = batch_df.loc[split_values == split].head(need)
+            if split_part.empty:
+                continue
+            collected[split].append(split_part)
+            counts[split] += len(split_part)
+        if all(counts[split] >= split_limits[split] for split in required_splits):
+            break
+
+    missing = [split for split in required_splits if counts[split] == 0]
+    if missing:
+        raise ValueError(
+            "sample_rows smoke build could not collect all required split values. "
+            f"missing={missing}, observed_counts={counts}, path={path}"
+        )
+
+    sampled_parts = [part for split in required_splits for part in collected[split]]
+    return pd.concat(sampled_parts, ignore_index=True)
 
 
 # -----------------------------------------------------------------------------

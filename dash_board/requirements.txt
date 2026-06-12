@@ -4,3 +4,4 @@ pandas
 plotly
 google-auth
 streamlit-ace
+scipy>=1.11

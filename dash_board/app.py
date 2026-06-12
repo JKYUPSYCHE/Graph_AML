@@ -205,42 +205,6 @@ def _get_sa_token() -> str:
         return ""
 
 
-def _sa_find_folder(name: str, parent_id: str, token: str) -> str:
-    cache = st.session_state.setdefault("_sa_folder_cache", {})
-    key = f"{parent_id}/{name}"
-    if key in cache:
-        return cache[key]
-    q = (f"'{parent_id}' in parents and name='{name}'"
-         " and mimeType='application/vnd.google-apps.folder' and trashed=false")
-    r = requests.get(
-        "https://www.googleapis.com/drive/v3/files",
-        headers={"Authorization": f"Bearer {token}"},
-        params={"q": q, "fields": "files(id)", "pageSize": 1},
-        timeout=15,
-    )
-    files = r.json().get("files", []) if r.ok else []
-    result = files[0]["id"] if files else ""
-    if result:
-        cache[key] = result
-    return result
-
-
-def _sa_create_folder(name: str, parent_id: str, token: str) -> str:
-    r = requests.post(
-        "https://www.googleapis.com/drive/v3/files",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]},
-        timeout=15,
-    )
-    folder_id = r.json().get("id", "") if r.ok else ""
-    if folder_id:
-        st.session_state.setdefault("_sa_folder_cache", {})[f"{parent_id}/{name}"] = folder_id
-    return folder_id
-
-
-def _sa_get_or_create_folder(name: str, parent_id: str, token: str) -> str:
-    return _sa_find_folder(name, parent_id, token) or _sa_create_folder(name, parent_id, token)
-
 
 def _sa_find_file(name: str, parent_id: str, token: str) -> str:
     cache = st.session_state.setdefault("_sa_file_cache", {})
@@ -261,62 +225,69 @@ def _sa_find_file(name: str, parent_id: str, token: str) -> str:
     return result
 
 
-def _load_report(tab_name: str, exp_name: str) -> dict:
-    """Drive dashboard/{tab_name}/{exp_name}/report.json 로드. 없으면 빈 dict."""
+def _reports_file_id(token: str) -> str:
+    """dashboard/reports.json 파일 ID 반환 (없으면 빈 문자열)."""
+    dash_id = _get_folder_id(PROJECT_FOLDER_ID, "dashboard")
+    if not dash_id:
+        return ""
+    return _sa_find_file("reports.json", dash_id, token)
+
+
+def _get_reports_store() -> dict:
+    """dashboard/reports.json 전체를 session_state에 캐싱 후 반환."""
+    if "_reports_store" in st.session_state:
+        return st.session_state["_reports_store"]
     token = _get_sa_token()
     if not token:
         return {}
-    dash_id = _sa_find_folder("dashboard", PROJECT_FOLDER_ID, token)
-    if not dash_id:
-        return {}
-    tab_id = _sa_find_folder(tab_name, dash_id, token)
-    if not tab_id:
-        return {}
-    exp_id = _sa_find_folder(exp_name, tab_id, token)
-    if not exp_id:
-        return {}
-    file_id = _sa_find_file("report.json", exp_id, token)
+    file_id = _reports_file_id(token)
     if not file_id:
+        st.session_state["_reports_store"] = {}
         return {}
     r = requests.get(
-        f"https://drive.google.com/uc?export=download&id={file_id}",
+        f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"alt": "media"},
         timeout=15,
     )
     try:
-        return r.json() if r.ok else {}
+        store = r.json() if r.ok else {}
     except Exception:
-        return {}
+        store = {}
+    st.session_state["_reports_store"] = store
+    return store
+
+
+def _load_report(tab_name: str, exp_name: str) -> dict:
+    """reports.json 스토어에서 해당 실험 리포트 로드.
+    구 포맷(ml_folder만) 키도 폴백으로 조회."""
+    store = _get_reports_store()
+    data  = store.get(f"{tab_name}__{exp_name}", {})
+    if not data:
+        # 구 포맷 호환: "ml-01__r02__d00-fixparam" → "ml-01"
+        old_key = f"{tab_name}__{exp_name.split('__')[0]}"
+        data = store.get(old_key, {})
+    return data
 
 
 def _save_report(tab_name: str, exp_name: str, content: str, author: str) -> bool:
-    """Drive dashboard/{tab_name}/{exp_name}/report.json 저장/덮어쓰기."""
+    """reports.json 스토어에 저장 (PATCH 전용 — Drive에 reports.json이 있어야 함)."""
     token = _get_sa_token()
     if not token:
         return False
-    dash_id = _sa_get_or_create_folder("dashboard", PROJECT_FOLDER_ID, token)
-    tab_id  = _sa_get_or_create_folder(tab_name,    dash_id,            token)
-    exp_id  = _sa_get_or_create_folder(exp_name,    tab_id,             token)
-    if not exp_id:
-        st.session_state["_sa_last_error"] = "Drive 폴더 생성 실패 (403 권한 오류일 가능성 높음) — 서비스 계정을 PROJECT_FOLDER_ID 폴더에 Editor로 공유했는지 확인하세요."
-        return False
-
-    payload = json.dumps(
-        {"content": content, "author": author,
-         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M")},
-        ensure_ascii=False, indent=2,
-    ).encode("utf-8")
-
-    file_id = _sa_find_file("report.json", exp_id, token)
+    file_id = _reports_file_id(token)
     if not file_id:
-        # 서비스 계정은 개인 Drive에 파일을 새로 생성할 수 없음 (스토리지 쿼터 없음).
-        # report.json 플레이스홀더를 Drive에서 직접 만들어 두면 이후 PATCH로 저장 가능.
         st.session_state["_sa_last_error"] = (
-            f"report.json 파일이 없습니다. "
-            f"Drive에서 dashboard › {tab_name} › {exp_name} 폴더 안에 "
-            f"report.json 파일을 직접 만들어 주세요 (내용: {{}})."
+            "reports.json 파일이 없습니다 — "
+            "Drive의 dashboard 폴더에 내용이 {} 인 reports.json 파일을 먼저 생성해 주세요."
         )
         return False
-
+    store = _get_reports_store()
+    store[f"{tab_name}__{exp_name}"] = {
+        "content": content, "author": author,
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    payload = json.dumps(store, ensure_ascii=False, indent=2).encode("utf-8")
     r = requests.patch(
         f"https://www.googleapis.com/upload/drive/v3/files/{file_id}",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -324,7 +295,9 @@ def _save_report(tab_name: str, exp_name: str, content: str, author: str) -> boo
         data=payload,
         timeout=15,
     )
-    if not r.ok:
+    if r.ok:
+        st.session_state["_reports_store"] = store
+    else:
         st.session_state["_sa_last_error"] = f"Drive API {r.status_code}: {r.text[:300]}"
     return r.ok
 
@@ -360,7 +333,7 @@ def _render_report(tab_name: str, exp_name: str) -> None:
     if not is_editing:
         if col_btn.button("편집", key=f"rpt_edit_btn_{tab_name}_{exp_name}", use_container_width=True):
             st.session_state[edit_key] = True
-            st.rerun()
+            st.rerun(scope="fragment")
 
     # ── 읽기 모드 ──────────────────────────────────────────────────────────
     if not is_editing:
@@ -383,12 +356,12 @@ def _render_report(tab_name: str, exp_name: str) -> None:
             if col_ok.button("확인", key=f"rpt_auth_btn_{tab_name}_{exp_name}", use_container_width=True):
                 if name_in in VALID_AUTHORS:
                     st.session_state["report_author"] = name_in
-                    st.rerun()
+                    st.rerun(scope="fragment")
                 else:
                     st.error("비밀번호가 올바르지 않습니다.")
             if col_cancel.button("취소", key=f"rpt_cancel_auth_{tab_name}_{exp_name}", use_container_width=True):
                 st.session_state[edit_key] = False
-                st.rerun()
+                st.rerun(scope="fragment")
         else:
             # ace 에디터 + 실시간 미리보기
             st.caption(f"편집 중: {sess_author}")
@@ -416,14 +389,14 @@ def _render_report(tab_name: str, exp_name: str) -> None:
                 if ok:
                     st.session_state.pop(cache_key, None)
                     st.session_state[edit_key] = False
-                    st.rerun()
+                    st.rerun(scope="fragment")
                 else:
                     err = st.session_state.pop("_sa_last_error", "서비스 계정 설정을 확인하세요.")
                     st.error(f"저장 실패 — {err}")
             if col_cancel.button("취소", key=f"rpt_cancel_{tab_name}_{exp_name}", use_container_width=True):
                 st.session_state[edit_key] = False
                 st.session_state.pop("report_author", None)
-                st.rerun()
+                st.rerun(scope="fragment")
 
 
 @st.cache_data(ttl=3600)
@@ -440,6 +413,16 @@ def _get_folder_id(parent_id: str, name: str) -> str:
 @st.cache_data(ttl=3600)
 def _list_files(folder_id: str) -> dict[str, str]:
     return {f["name"]: f["id"] for f in _drive_list(f"'{folder_id}' in parents and trashed=false")}
+
+
+@st.cache_data(ttl=3600)
+def _list_subfolders(folder_id: str) -> dict[str, str]:
+    """Returns {name: id} for direct subfolders only."""
+    return {f["name"]: f["id"] for f in _drive_list(
+        f"'{folder_id}' in parents"
+        " and mimeType='application/vnd.google-apps.folder'"
+        " and trashed=false"
+    )}
 
 
 # ── UI helpers ────────────────────────────────────────────────────────────
@@ -464,6 +447,14 @@ def _woe_iv_folder_name(ml_folder: str) -> str:
     m = re.match(r"(ml-\d+)", ml_folder)
     return m.group(1) if m else ml_folder
 
+def _ml_folder_num(ml_folder: str) -> int:
+    m = re.match(r"ml-(\d+)", ml_folder)
+    return int(m.group(1)) if m else -1
+
+def _gnn_folder_num(folder: str) -> int:
+    m = re.search(r"(\d+)", folder)
+    return int(m.group(1)) if m else -1
+
 
 def _catalog_filename(ml_folder: str) -> str:
     return _woe_iv_folder_name(ml_folder).replace("-", "") + "_feature_catalog.csv"
@@ -473,9 +464,17 @@ def _is_valid_rep(rep: dict) -> bool:
     return bool(re.match(r"ml-\d+", woe_folder)) and woe_folder != "ml-00"
 
 
-def _exp_label(rep: dict) -> str:
-    note = rep.get("note", "")
-    return f"{_woe_iv_folder_name(rep['ml_folder'])}  {('— ' + note) if note else ''}".strip()
+def _exp_label(rep: dict, is_rep: bool = False) -> str:
+    folder = _woe_iv_folder_name(rep["ml_folder"]).upper()
+    if is_rep:
+        desc = rep.get("description", "")
+        run_id = rep.get("run_id", "")
+        model_run_id = rep.get("model_run_id", "")
+        suffix = f" — {run_id}{model_run_id}" if (run_id or model_run_id) else ""
+        return f"* {folder}{suffix}{(' (' + desc + ')') if desc else ''}"
+    run_id = rep.get("run_id", "")
+    model_run_id = rep.get("model_run_id", "")
+    return f"   {folder} — {run_id}{model_run_id}"
 
 
 # ── Data loaders ───────────────────────────────────────────────────────────
@@ -496,7 +495,6 @@ def _load_ml_results(folder_id: str, prefix: str) -> dict:
     out: dict = {}
     if f"{prefix}_metrics_val.json"                in fm: out["metrics"]           = _download_json(fm[f"{prefix}_metrics_val.json"])
     if f"{prefix}_train_summary.json"              in fm: out["train_summary"]     = _download_json(fm[f"{prefix}_train_summary.json"])
-    if f"{prefix}_scores_train_summary.json"       in fm: out["scores_summary"]    = _download_json(fm[f"{prefix}_scores_train_summary.json"])
     if f"{prefix}_feature_importance.csv"          in fm: out["feature_importance"] = _download_csv(fm[f"{prefix}_feature_importance.csv"])
     if f"{prefix}_confusion_matrix_val.csv"        in fm: out["confusion_matrix"]   = _download_csv(fm[f"{prefix}_confusion_matrix_val.csv"])
     if f"{prefix}_feature_assoc_mixed_val.json"    in fm: out["feature_assoc"]     = _download_json(fm[f"{prefix}_feature_assoc_mixed_val.json"])
@@ -558,24 +556,94 @@ def _load_catalog(folder_id: str, catalog_fn: str) -> pd.DataFrame | None:
     return _read_catalog_bytes(r.content)
 
 
+# ── Experiment discovery ───────────────────────────────────────────────────
+
+def _discover_all_ml_runs(ml_folder_id: str) -> list[dict]:
+    """ml/ 하위의 모든 실험 run을 탐색. 폴더 목록만 조회하고 파일 다운로드는 없음."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    ml_exp_folders = _list_subfolders(ml_folder_id)
+    valid_ml = sorted(
+        [(name, fid) for name, fid in ml_exp_folders.items()
+         if re.match(r"ml-\d+", name) and name != "ml-00"]
+    )
+    if not valid_ml:
+        return []
+
+    def _runs_for_folder(name_fid: tuple) -> list[dict]:
+        folder_name, folder_id = name_fid
+        run_folders = _list_subfolders(folder_id)
+        runs: list[dict] = []
+        for run_name, run_fid in sorted(run_folders.items()):
+            files = _list_files(run_fid)
+            prefixes = sorted(
+                re.match(r"(.+)_metrics_val\.json$", fn).group(1)
+                for fn in files if re.match(r"(.+)_metrics_val\.json$", fn)
+            )
+            for prefix in prefixes:
+                runs.append({"ml_folder": folder_name, "run_id": run_name, "prefix": prefix})
+        return runs
+
+    all_runs: list[dict] = []
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for runs in ex.map(_runs_for_folder, valid_ml):
+            all_runs.extend(runs)
+    return sorted(all_runs, key=lambda x: (x["ml_folder"], x["run_id"], x["prefix"]))
+
+
+def _discover_all_gnn_runs(project_folder_id: str) -> list[dict]:
+    """gnn/ 하위의 모든 실험 run을 탐색. 폴더 목록만 조회하고 파일 다운로드는 없음."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    gnn_id = _get_folder_id(project_folder_id, "gnn") if project_folder_id else ""
+    if not gnn_id:
+        return []
+    exp_folders = _list_subfolders(gnn_id)
+    valid_exps  = sorted(
+        [(name, fid) for name, fid in exp_folders.items() if not name.endswith(".json")]
+    )
+    if not valid_exps:
+        return []
+
+    def _runs_for_exp(name_fid: tuple) -> list[dict]:
+        folder_name, folder_id = name_fid
+        run_folders = _list_subfolders(folder_id)
+        return [
+            {"folder": folder_name, "run_id": run_name}
+            for run_name in sorted(run_folders.keys())
+        ]
+
+    all_runs: list[dict] = []
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for runs in ex.map(_runs_for_exp, valid_exps):
+            all_runs.extend(runs)
+    return sorted(all_runs, key=lambda x: (x["folder"], x["run_id"]))
+
+
 # ── GNN helpers ────────────────────────────────────────────────────────────
 
 def _parse_gnn_log(text: str) -> dict:
     train_re = re.compile(
         r"Train F1:\s*([\d.]+)\s*\|\s*Recall:\s*([\d.]+)\s*\|\s*Precision:\s*([\d.]+)\s*\|\s*AUPRC:\s*([\d.]+)"
+        r"(?:\s*\|\s*LogLoss:\s*([\d.]+))?"
     )
     val_re = re.compile(
         r"Val\s+[—\-]\s*F1:\s*([\d.]+)\s*\|\s*Recall:\s*([\d.]+)\s*\|\s*Precision:\s*([\d.]+)\s*\|\s*AUPRC:\s*([\d.]+)"
+        r"(?:\s*\|\s*LogLoss:\s*([\d.]+))?"
     )
     test_re = re.compile(
         r"Test\s+[—\-]\s*F1:\s*([\d.]+)\s*\|\s*Recall:\s*([\d.]+)\s*\|\s*Precision:\s*([\d.]+)\s*\|\s*AUPRC:\s*([\d.]+)"
+        r"(?:\s*\|\s*LogLoss:\s*([\d.]+))?"
     )
-    nodes_re   = re.search(r"Number of nodes = (\d+)", text)
-    txns_re    = re.search(r"Number of transactions = (\d+)", text)
-    ir_re      = re.search(r"Illicit ratio = \d+ / \d+ = ([\d.]+)%", text)
-    edge_re    = re.search(r"Edge features being used: (\[.*?\])", text)
-    params_re  = re.search(r"GraphModule\s+\|[^|]+\|[^|]+\|\s*([\d,]+)", text)
-    time_re    = re.search(r"Total training time:\s*([\d.]+)s", text)
+    nodes_re        = re.search(r"Number of nodes = (\d+)", text)
+    txns_re         = re.search(r"Number of transactions = (\d+)", text)
+    ir_re           = re.search(r"Illicit ratio = \d+ / \d+ = ([\d.]+)%", text)
+    edge_re         = re.search(r"Edge features being used: (\[.*?\])", text)
+    params_re       = re.search(r"GraphModule\s+\|[^|]+\|[^|]+\|\s*([\d,]+)", text)
+    time_re         = re.search(r"Total training time:\s*([\d.]+)s", text)
+    best_epoch_re   = re.search(r"Best epoch:\s*(\d+)", text)
+    early_stop_re   = re.search(r"Early stopping at epoch\s*(\d+)", text)
+    xai_cm_re       = re.search(r"\[XAI\].*?TP=(\d+)\s+FP=(\d+)\s+FN=(\d+)\s+TN=(\d+)", text)
 
     epochs: list[dict] = []
     buf: dict = {}
@@ -584,16 +652,22 @@ def _parse_gnn_log(text: str) -> dict:
         if m:
             buf = dict(train_f1=float(m[1]), train_recall=float(m[2]),
                        train_precision=float(m[3]), train_auprc=float(m[4]))
+            if m[5] is not None:
+                buf["train_logloss"] = float(m[5])
             continue
         m = val_re.search(line)
         if m and buf:
             buf.update(val_f1=float(m[1]), val_recall=float(m[2]),
                        val_precision=float(m[3]), val_auprc=float(m[4]))
+            if m[5] is not None:
+                buf["val_logloss"] = float(m[5])
             continue
         m = test_re.search(line)
         if m and buf:
             buf.update(test_f1=float(m[1]), test_recall=float(m[2]),
                        test_precision=float(m[3]), test_auprc=float(m[4]))
+            if m[5] is not None:
+                buf["test_logloss"] = float(m[5])
             epochs.append(buf)
             buf = {}
 
@@ -606,12 +680,17 @@ def _parse_gnn_log(text: str) -> dict:
 
     return {
         "epochs":            epochs,
-        "n_nodes":           int(nodes_re[1])                   if nodes_re  else None,
-        "n_txns":            int(txns_re[1])                    if txns_re   else None,
-        "illicit_ratio":     float(ir_re[1])                    if ir_re     else None,
+        "n_nodes":           int(nodes_re[1])                   if nodes_re      else None,
+        "n_txns":            int(txns_re[1])                    if txns_re       else None,
+        "illicit_ratio":     float(ir_re[1])                    if ir_re         else None,
         "edge_features":     edge_feats,
-        "total_params":      int(params_re[1].replace(",", "")) if params_re else None,
-        "training_time_sec": float(time_re[1])                  if time_re   else None,
+        "total_params":      int(params_re[1].replace(",", "")) if params_re     else None,
+        "training_time_sec": float(time_re[1])                  if time_re       else None,
+        "best_epoch":        int(best_epoch_re[1])              if best_epoch_re else None,
+        "early_stop_epoch":  int(early_stop_re[1])              if early_stop_re else None,
+        "xai_cm":            {"tp": int(xai_cm_re[1]), "fp": int(xai_cm_re[2]),
+                              "fn": int(xai_cm_re[3]), "tn": int(xai_cm_re[4])}
+                             if xai_cm_re else None,
     }
 
 
@@ -622,8 +701,9 @@ def _get_gnn_base_folders(project_folder_id: str) -> dict[str, str]:
     if not gnn_id:
         return {}
     return {
-        "logs":   _get_folder_id(gnn_id, "logs"),
-        "models": _get_folder_id(gnn_id, "models"),
+        "logs":               _get_folder_id(gnn_id, "logs"),
+        "models":             _get_folder_id(gnn_id, "models"),
+        "feature_importance": _get_folder_id(gnn_id, "feature_importance"),
     }
 
 
@@ -661,7 +741,38 @@ def _load_gnn_experiment(project_folder_id: str, exp_name: str) -> dict:
             if r.ok:
                 out["parsed"] = _parse_gnn_log(r.text)
 
+    fi_id = base.get("feature_importance", "")
+    if fi_id:
+        fi_files = _list_files(fi_id)
+        fi_fn    = f"{exp_name}_feature_importance.csv"
+        if fi_fn in fi_files:
+            out["feature_importance"] = _download_csv(fi_files[fi_fn])
+
     return out
+
+
+@st.cache_data(ttl=3600)
+def _load_gnn_representatives(project_folder_id: str) -> list[dict]:
+    gnn_id = _get_folder_id(project_folder_id, "gnn")
+    if not gnn_id:
+        return []
+    files = _drive_list(
+        f"'{gnn_id}' in parents"
+        " and name='gnn_leaderboard_representatives.json'"
+        " and trashed=false"
+    )
+    return _download_json(files[0]["id"]) if files else []
+
+
+def _gnn_exp_label(rep: dict, is_rep: bool = False) -> str:
+    folder = rep.get("folder", "")
+    if is_rep:
+        desc = rep.get("description", "")
+        run_id = rep.get("run_id", "")
+        suffix = f" — {run_id}" if run_id else ""
+        return f"* {folder}{suffix}{(' (' + desc + ')') if desc else ''}"
+    return f"   {folder} — {rep['run_id']}"
+
 
 
 # ── Figure cache helpers ───────────────────────────────────────────────────
@@ -670,21 +781,21 @@ def _load_gnn_experiment(project_folder_id: str, exp_name: str) -> dict:
 def _make_gnn_lc_fig(epochs_json: str, mc: str, best_epoch: int, metric_sel: str) -> go.Figure:
     ep_df = pd.read_json(StringIO(epochs_json))
     fig = go.Figure()
-    for split, color, dash in [
-        ("train", "#aec7e8", "dot"),
-        ("val",   "#1f77b4", "solid"),
-        ("test",  "#ff7f0e", "dash"),
+    for split, color in [
+        ("train", "#4f9cf9"),
+        ("val",   "#ff7f0e"),
+        ("test",  "#2ca02c"),
     ]:
         col_name = f"{split}_{mc}"
         if col_name in ep_df.columns:
             fig.add_trace(go.Scatter(
                 x=ep_df["epoch"], y=ep_df[col_name],
                 mode="lines", name=split,
-                line=dict(color=color, dash=dash, width=2),
+                line=dict(color=color, width=2),
             ))
     fig.add_vline(
-        x=best_epoch, line_dash="dot", line_color="#888888",
-        annotation_text=f"best val  epoch {best_epoch}",
+        x=best_epoch, line_dash="dot", line_color="#d62728",
+        annotation_text=f"best epoch {best_epoch}",
         annotation_font_size=10,
     )
     fig.update_layout(
@@ -694,8 +805,6 @@ def _make_gnn_lc_fig(epochs_json: str, mc: str, best_epoch: int, metric_sel: str
     )
     return fig
 
-
-@st.cache_data(ttl=3600)
 
 @st.cache_data(ttl=3600)
 def _make_ml_lc_fig2(train_vals: tuple, val_vals: tuple, metric_label: str, best_iter: int) -> go.Figure:
@@ -755,12 +864,11 @@ def _make_assoc_heatmap(
         showscale=False,
     ))
     fig.update_layout(
-        title="Feature Correlation Matrix",
         height=max(400, n * 28),
         margin=dict(t=40, b=20),
+        yaxis=dict(scaleanchor="x", tickfont_size=9),
+        xaxis=dict(showticklabels=False, ticks=""),
     )
-    fig.update_xaxes(tickangle=-45, tickfont_size=9)
-    fig.update_yaxes(tickfont_size=9)
     return fig
 
 
@@ -917,16 +1025,137 @@ def _make_woe_bin_fig(feat_bins_json: str, sel_feature: str) -> go.Figure:
     return fig_woe
 
 
+# ── Mann-Whitney U + FDR ──────────────────────────────────────────────────
+
+def _compute_mann_whitney(indiv_df: pd.DataFrame, feat_names: list[str]) -> pd.DataFrame:
+    """TP/FP/FN 쌍별 Mann-Whitney U 검정 + BH FDR 보정, rank-biserial r 반환."""
+    from scipy import stats
+    try:
+        from scipy.stats import false_discovery_control as _fdr
+    except ImportError:
+        _fdr = None  # scipy < 1.11 fallback: Bonferroni
+
+    comparisons = [("TP", "TN"), ("TP", "FP"), ("TP", "FN"),
+                   ("FP", "TN"), ("FN", "TN"), ("FP", "FN")]
+    rows = []
+    for g1, g2 in comparisons:
+        d1 = indiv_df[indiv_df["group"] == g1][feat_names].values
+        d2 = indiv_df[indiv_df["group"] == g2][feat_names].values
+        if len(d1) < 5 or len(d2) < 5:
+            continue
+        p_vals, u_vals = [], []
+        for i in range(len(feat_names)):
+            res = stats.mannwhitneyu(d1[:, i], d2[:, i], alternative="two-sided")
+            p_vals.append(res.pvalue)
+            u_vals.append(res.statistic)
+        import numpy as _np
+        p_arr = _np.array(p_vals)
+        p_adj = _fdr(p_arr, method="bh") if _fdr is not None else _np.minimum(p_arr * len(p_arr), 1.0)
+        for f, u, pa in zip(feat_names, u_vals, p_adj):
+            n1, n2 = len(d1), len(d2)
+            r = (2 * u) / (n1 * n2) - 1   # rank-biserial = (U1-U2)/(n1*n2): 양수 = g1이 더 높음
+            rows.append({"comparison": f"{g1} vs {g2}", "feature": f,
+                         "r": round(r, 3), "p_adj": float(pa),
+                         "sig": "*" if pa < 0.05 else ""})
+    return pd.DataFrame(rows)
+
+
+_MW_INTERP: dict[tuple, tuple[str, str]] = {
+    # (comparison, r>0) → (_, interpretation)  |  r>0 = 앞 그룹 saliency 높음
+    ("TP vs TN", True):  ("", "TP > TN: 이상 탐지 시 이 피처가 정상 판별보다 더 강하게 활성화"),
+    ("TP vs TN", False): ("", "TN > TP: 정상 판별 시 이 피처가 더 강하게 활성화"),
+    ("TP vs FP", True):  ("", "TP > FP: 정탐이 오탐보다 이 피처 saliency 높음"),
+    ("TP vs FP", False): ("", "FP > TP: 오탐(FP)에서 이 피처가 더 강하게 활성화 → 오탐 원인 후보"),
+    ("TP vs FN", True):  ("", "TP > FN: 탐지 성공한 이상거래에서 이 피처 신호가 더 강함"),
+    ("TP vs FN", False): ("", "FN > TP: 미탐 케이스에서 이 피처 saliency가 더 높음"),
+    ("FP vs TN", True):  ("", "FP > TN: 오탐(FP)이 정상보다 이 피처 강하게 활성화 → 이 피처들이 오탐 유발"),
+    ("FP vs TN", False): ("", "TN > FP: 정상(TN)이 오탐보다 이 피처 더 활성화"),
+    ("FN vs TN", True):  ("", "FN > TN: 미탐(FN)이 정상보다 이 피처 더 활성화 → 미탐 거래도 이 피처에서 이상 신호 존재"),
+    ("FN vs TN", False): ("", "TN > FN: 정상(TN)이 미탐보다 이 피처 더 활성화"),
+    ("FP vs FN", True):  ("", "FP > FN: 오탐이 미탐보다 이 피처 더 강하게 활성화"),
+    ("FP vs FN", False): ("", "FN > FP: 미탐이 오탐보다 이 피처 더 활성화"),
+}
+
+def _mw_effect_label(r: float) -> str:
+    a = abs(r)
+    if a >= 0.7: return "매우 강한 효과"
+    if a >= 0.5: return "강한 효과"
+    if a >= 0.3: return "중간 효과"
+    return "약한 효과"
+
+
+@st.cache_data(ttl=3600)
+def _make_mw_heatmap(indiv_json: str, feat_names: tuple) -> go.Figure:
+    """Mann-Whitney effect size heatmap (rank-biserial r)."""
+    import pandas as _pd
+    indiv_df = _pd.read_json(StringIO(indiv_json))
+    mw_df    = _compute_mann_whitney(indiv_df, list(feat_names))
+    if mw_df.empty:
+        return go.Figure()
+
+    _comp_labels = {
+        "TP vs TN": "TP vs TN<br><sub>탐지 기준</sub>",
+        "TP vs FP": "TP vs FP<br><sub>오탐 원인</sub>",
+        "TP vs FN": "TP vs FN<br><sub>미탐 원인</sub>",
+        "FP vs TN": "FP vs TN<br><sub>오탐 특성</sub>",
+        "FN vs TN": "FN vs TN<br><sub>미탐 특성</sub>",
+        "FP vs FN": "FP vs FN<br><sub>두 오류 비교</sub>",
+    }
+    comparisons     = mw_df["comparison"].unique().tolist()
+    comparisons_lbl = [_comp_labels.get(c, c) for c in comparisons]
+    r_mat, t_mat, cd_mat = [], [], []
+    for f in feat_names:
+        r_row, t_row, cd_row = [], [], []
+        for c in comparisons:
+            sub = mw_df[(mw_df["feature"] == f) & (mw_df["comparison"] == c)]
+            if sub.empty:
+                r_row.append(None); t_row.append(""); cd_row.append(["", "", ""])
+            else:
+                rv   = sub.iloc[0]["r"]
+                p    = sub.iloc[0]["p_adj"]
+                _, interp = _MW_INTERP.get((c, rv > 0), ("", ""))
+                r_row.append(rv)
+                t_row.append(f"{rv:+.2f}{sub.iloc[0]['sig']}")
+                cd_row.append([f"{p:.4f}", interp, _mw_effect_label(rv)])
+        r_mat.append(r_row)
+        t_mat.append(t_row)
+        cd_mat.append(cd_row)
+
+    fig = go.Figure(go.Heatmap(
+        z=r_mat, x=comparisons_lbl, y=list(feat_names),
+        text=t_mat, texttemplate="%{text}",
+        customdata=cd_mat,
+        colorscale="RdBu_r", zmid=0, zmin=-1, zmax=1,
+        showscale=False,
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "%{x}<br>"
+            "<b>r = %{z:+.3f}</b>  <i>(%{customdata[2]})</i><br>"
+            "p (FDR) = %{customdata[0]}<br>"
+            "<br>%{customdata[1]}"
+            "<extra></extra>"
+        ),
+    ))
+    fig.update_layout(
+        height=max(260, 42 * len(feat_names) + 110),
+        margin=dict(t=20, b=60, l=10, r=10),
+        yaxis=dict(autorange="reversed"),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    return fig
+
+
 # ── Fragment sections ──────────────────────────────────────────────────────
 
 @st.fragment
 def _gnn_lc_section(ep_df: pd.DataFrame, best_ep: pd.Series) -> None:
     _mc, _ = st.columns([3, 5])
     metric_sel = _mc.radio(
-        "지표", ["F1", "AUPRC", "Recall", "Precision"],
+        "지표", ["F1", "AUPRC", "Recall", "Precision", "LogLoss"],
         horizontal=True, key="gnn_metric", label_visibility="collapsed",
     )
-    mc = metric_sel.lower()
+    mc = "logloss" if metric_sel == "LogLoss" else metric_sel.lower()
     fig_lc = _make_gnn_lc_fig(ep_df.to_json(orient="records"), mc, int(best_ep["epoch"]), metric_sel)
     st.plotly_chart(fig_lc, use_container_width=True)
 
@@ -963,6 +1192,154 @@ def _woe_iv_bin_section(
                 st.plotly_chart(fig_woe, use_container_width=True)
 
 
+# ── On-demand experiment loaders ──────────────────────────────────────────
+
+def _compute_exp_data(rep: dict, ml_fid: str, woe_root_id: str) -> dict:
+    """Load one ML experiment's files in parallel. Pure — no Streamlit state access."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    ml_exp_fid  = _get_folder_id(ml_fid, rep["ml_folder"]) if ml_fid else ""
+    run_fid     = _get_folder_id(ml_exp_fid, rep["run_id"]) if ml_exp_fid else ""
+    woe_iv_name  = _woe_iv_folder_name(rep["ml_folder"])
+    _woe_base    = _get_folder_id(woe_root_id,  woe_iv_name)        if woe_root_id else ""
+    _woe_run     = _get_folder_id(_woe_base,    rep["run_id"])       if _woe_base   else ""
+    woe_iv_fid   = _get_folder_id(_woe_run,     rep["model_run_id"]) if _woe_run    else ""
+    _woe_path_used = (f"woe_iv/{woe_iv_name}/{rep['run_id']}/{rep['model_run_id']}"
+                      if _woe_base else f"woe_iv/{woe_iv_name} ← 폴더 없음")
+    prefix      = _artifact_prefix(rep)
+    cat_fn      = _catalog_filename(rep["ml_folder"])
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_woe = ex.submit(_load_woe_results, woe_iv_fid)
+        f_cat = ex.submit(_load_catalog, ml_exp_fid, cat_fn)
+        f_ml  = ex.submit(_load_ml_results, run_fid, prefix) if run_fid else None
+        woe     = f_woe.result()
+        catalog = f_cat.result()
+        ml      = f_ml.result() if f_ml else {}
+
+    cached_pfx   = (woe.get("meta", {}) or {}).get("prefix") if woe else None
+    stale_status = ("no_woe" if not woe or "iv_df" not in woe
+                    else "stale" if cached_pfx != prefix
+                    else "fresh")
+    return {
+        "rep": rep, "ml": ml, "woe": woe, "catalog": catalog,
+        "stale_status": stale_status, "prefix": prefix, "_loaded": True,
+        "_woe_path_used": _woe_path_used,
+    }
+
+
+def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
+    """Load one GNN experiment's files in parallel. Pure — no Streamlit state access."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    gnn_id = _get_folder_id(project_folder_id, "gnn") if project_folder_id else ""
+    _dbg = {"gnn_id": bool(gnn_id)}
+    if not gnn_id:
+        return {"rep": rep, "d": {}, "_loaded": True, "_gnn_debug": _dbg}
+    exp_id = _get_folder_id(gnn_id, rep["folder"])
+    _dbg["exp_id"] = bool(exp_id)
+    if not exp_id:
+        return {"rep": rep, "d": {}, "_loaded": True, "_gnn_debug": _dbg}
+    run_fid = _get_folder_id(exp_id, rep["run_id"])
+    _dbg["run_fid"] = bool(run_fid)
+    if not run_fid:
+        return {"rep": rep, "d": {}, "_loaded": True, "_gnn_debug": _dbg}
+
+    # 하위 폴더 ID 병렬 조회
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_logs   = ex.submit(_get_folder_id, run_fid, "logs")
+        f_models = ex.submit(_get_folder_id, run_fid, "models")
+        f_fi_dir = ex.submit(_get_folder_id, run_fid, "feature_importance")
+        logs_id   = f_logs.result()
+        models_id = f_models.result()
+        fi_dir_id = f_fi_dir.result()
+    _dbg["logs_id"] = bool(logs_id)
+
+    def _fetch_args():
+        if not models_id:
+            return None
+        mf       = _list_files(models_id)
+        args_fns = [n for n in mf if n.endswith("_args.json")]
+        return _download_json(mf[args_fns[0]]) if args_fns else None
+
+    # args를 먼저 로드해서 unique_name으로 정확한 로그 파일 특정
+    args_data = _fetch_args()
+    unique_name = (args_data or {}).get("unique_name", "") if args_data else ""
+
+    def _fetch_log():
+        if not logs_id:
+            return None, "logs 폴더 없음"
+        lf      = _list_files(logs_id)
+        log_fns = [n for n in lf if n.endswith(".log")]
+        if not log_fns:
+            return None, f"logs/ 안 파일 목록: {list(lf.keys())}"
+        # unique_name으로 특정 로그 파일 선택, 없으면 첫 번째
+        target = f"{unique_name}.log" if unique_name else ""
+        fn = target if target in lf else log_fns[0]
+        r = requests.get(
+            f"https://drive.google.com/uc?export=download&id={lf[fn]}",
+            timeout=60,
+        )
+        if not r.ok:
+            return None, f"다운로드 실패 {r.status_code}: {fn}"
+        result = _parse_gnn_log(r.content.decode("utf-8", errors="replace"))
+        epochs = result.get("epochs", []) if result else []
+        return result, f"OK — {fn} ({len(epochs)} epochs)"
+
+    def _fetch_fi():
+        if not fi_dir_id:
+            return None, None
+        fi_files     = _list_files(fi_dir_id)
+        fi_fns       = [n for n in fi_files
+                        if n.endswith("_feature_importance.csv") and "individual" not in n]
+        fi_indiv_fns = [n for n in fi_files
+                        if n.endswith("_feature_importance_individual.csv")]
+        fi       = _download_csv(fi_files[fi_fns[0]])       if fi_fns       else None
+        fi_indiv = _download_csv(fi_files[fi_indiv_fns[0]]) if fi_indiv_fns else None
+        return fi, fi_indiv
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_parsed = ex.submit(_fetch_log)
+        f_fi_res = ex.submit(_fetch_fi)
+        parsed, _log_msg = f_parsed.result()
+        fi, fi_indiv     = f_fi_res.result()
+    _dbg["log_msg"] = _log_msg
+
+    out: dict = {}
+    if parsed   is not None: out["parsed"]                        = parsed
+    if args_data is not None: out["args"]                         = args_data
+    if fi        is not None: out["feature_importance"]           = fi
+    if fi_indiv  is not None: out["feature_importance_individual"] = fi_indiv
+
+    return {"rep": rep, "d": out, "_loaded": True, "_gnn_debug": _dbg}
+
+
+def _load_exp_data(label: str) -> None:
+    """Load one ML experiment and store in session_state (main thread only)."""
+    entry      = st.session_state["exp_data"][label]
+    is_rep     = entry.get("is_rep", False)
+    is_ongoing = entry.get("is_ongoing", False)
+    result     = _compute_exp_data(
+        entry["rep"],
+        st.session_state.get("_ml_folder_id", ""),
+        st.session_state.get("_woe_iv_root_id", ""),
+    )
+    result["is_rep"]     = is_rep
+    result["is_ongoing"] = is_ongoing
+    st.session_state["exp_data"][label] = result
+
+
+def _load_gnn_exp_data(label: str) -> None:
+    """Load one GNN experiment and store in session_state (main thread only)."""
+    entry      = st.session_state["gnn_exp_data"][label]
+    is_rep     = entry.get("is_rep", False)
+    is_ongoing = entry.get("is_ongoing", False)
+    result     = _compute_gnn_exp_data(entry["rep"], st.session_state.get("_project_folder_id", ""))
+    result["is_rep"]     = is_rep
+    result["is_ongoing"] = is_ongoing
+    st.session_state["gnn_exp_data"][label] = result
+
+
 # ── Page header ────────────────────────────────────────────────────────────
 
 col_title, col_btn = st.columns([8, 1])
@@ -997,44 +1374,56 @@ if not woe_iv_root_id:
 
 reps       = _load_representatives(ml_folder_id)
 valid_reps = [r for r in reps if _is_valid_rep(r)]
+gnn_reps   = _load_gnn_representatives(PROJECT_FOLDER_ID)
 
-if not valid_reps:
-    st.warning("ml_leaderboard_representatives.json에 유효한 실험이 없습니다.")
+# ── 폴더 ID 세션 저장 (loader 함수에서 참조) ──────────────────────────────
+st.session_state["_ml_folder_id"]      = ml_folder_id
+st.session_state["_woe_iv_root_id"]    = woe_iv_root_id
+st.session_state["_project_folder_id"] = PROJECT_FOLDER_ID
+
+# ── 전체 실험 탐색 (폴더 목록만, 다운로드 없음) ────────────────────────────
+with st.spinner("실험 목록 탐색 중..."):
+    all_ml_runs  = _discover_all_ml_runs(ml_folder_id)
+    all_gnn_runs = _discover_all_gnn_runs(PROJECT_FOLDER_ID)
+
+if not all_ml_runs:
+    st.warning("탐색된 ML 실험이 없습니다. PROJECT_FOLDER_ID와 Drive 구조를 확인하세요.")
     st.stop()
 
-# 실험별 데이터 로드 + stale 상태 계산
-exp_data: dict[str, dict] = {}
-bar = st.progress(0, text="실험 데이터 로드 중...")
-for i, rep in enumerate(valid_reps):
-    ml_exp_folder_id = _get_folder_id(ml_folder_id, rep["ml_folder"])
-    run_folder_id    = _get_folder_id(ml_exp_folder_id, rep["run_id"]) if ml_exp_folder_id else ""
-    woe_iv_name      = _woe_iv_folder_name(rep["ml_folder"])
-    woe_iv_exp_id    = _get_folder_id(woe_iv_root_id, woe_iv_name) if woe_iv_root_id else ""
-    prefix           = _artifact_prefix(rep)
-    cat_fn           = _catalog_filename(rep["ml_folder"])
-    label            = _exp_label(rep)
+# ── 대표 실험 맵 ───────────────────────────────────────────────────────────
+_rep_map     = {(_woe_iv_folder_name(r["ml_folder"]), r["run_id"], r["model_run_id"]): r for r in valid_reps}
+_gnn_rep_map = {(r["folder"], r["run_id"]): r                          for r in gnn_reps}
 
-    woe     = _load_woe_results(woe_iv_exp_id)
-    catalog = _load_catalog(ml_exp_folder_id, cat_fn)
-    cached_prefix = woe.get("meta", {}).get("prefix") if woe else None
+# ── ML 실험 메타데이터 초기화 (파일 다운로드 없음) ─────────────────────────
+_ml_fp       = tuple((r["ml_folder"], r["run_id"], r["prefix"])    for r in all_ml_runs)
+_rp_fp       = tuple((r["ml_folder"], _artifact_prefix(r))         for r in valid_reps)
+_combined_fp = (_ml_fp, _rp_fp)
+if st.session_state.get("_exp_data_fp") != _combined_fp:
+    st.cache_data.clear()
+    _exp_init: dict[str, dict] = {}
+    for _run in all_ml_runs:
+        _parts  = _run["prefix"].split("__", 2)
+        _model_run_id = _parts[2] if len(_parts) >= 3 else _run["prefix"]
+        _rep_e  = _rep_map.get((_woe_iv_folder_name(_run["ml_folder"]), _run["run_id"], _model_run_id))
+        _is_rep = _rep_e is not None
+        _srep   = _rep_e or {
+            "ml_folder":     _run["ml_folder"],
+            "run_id":        _run["run_id"],
+            "experiment_id": _parts[0] if len(_parts) >= 1 else "",
+            "model_run_id":  _model_run_id,
+            "description":   "",
+            "note":          "",
+        }
+        _lbl = _exp_label(_srep, _is_rep)
+        _exp_init[_lbl] = {
+            "rep": _srep, "is_rep": _is_rep,
+            "ml": {}, "woe": {}, "catalog": None,
+            "stale_status": "unknown", "prefix": _run["prefix"], "_loaded": False,
+        }
+    st.session_state["exp_data"]    = _exp_init
+    st.session_state["_exp_data_fp"] = _combined_fp
 
-    if not woe or "iv_df" not in woe:
-        stale_status = "no_woe"
-    elif cached_prefix != prefix:
-        stale_status = "stale"
-    else:
-        stale_status = "fresh"
-
-    exp_data[label] = {
-        "rep":          rep,
-        "ml":           _load_ml_results(run_folder_id, prefix) if run_folder_id else {},
-        "woe":          woe,
-        "catalog":      catalog,
-        "stale_status": stale_status,
-        "prefix":       prefix,
-    }
-    bar.progress((i + 1) / len(valid_reps), text=f"로드: {rep['ml_folder']}")
-bar.empty()
+exp_data: dict[str, dict] = st.session_state["exp_data"]
 
 if not exp_data:
     st.warning("로드 가능한 실험이 없습니다.")
@@ -1042,9 +1431,60 @@ if not exp_data:
 
 exp_labels   = list(exp_data.keys())
 _default_idx = 0
+st.session_state["_exp_labels"] = exp_labels
 
-# GNN 실험 목록 로드
-gnn_exp_names = _list_gnn_experiments(PROJECT_FOLDER_ID)
+# ── GNN 실험 메타데이터 초기화 (파일 다운로드 없음) ───────────────────────
+st.session_state["_gnn_reps"] = gnn_reps
+
+_gnn_fp       = tuple((r["folder"], r["run_id"]) for r in all_gnn_runs)
+_grp_fp       = tuple((r["folder"], r["run_id"]) for r in gnn_reps)
+_combined_gfp = (_gnn_fp, _grp_fp)
+if st.session_state.get("_gnn_exp_data_fp") != _combined_gfp:
+    # 새 실험 감지 시 파일 목록 캐시 초기화 (stale _list_files 방지)
+    st.cache_data.clear()
+    _gnn_init: dict[str, dict] = {}
+    for _run in all_gnn_runs:
+        _rep_e  = _gnn_rep_map.get((_run["folder"], _run["run_id"]))
+        _is_rep = _rep_e is not None
+        _srep   = _rep_e or {"folder": _run["folder"], "run_id": _run["run_id"], "description": "", "note": ""}
+        _lbl    = _gnn_exp_label(_srep, _is_rep)
+        _gnn_init[_lbl] = {"rep": _srep, "is_rep": _is_rep, "d": {}, "_loaded": False}
+    st.session_state["gnn_exp_data"]    = _gnn_init
+    st.session_state["_gnn_exp_data_fp"] = _combined_gfp
+
+gnn_exp_data: dict[str, dict] = st.session_state.get("gnn_exp_data", {})
+
+# ── Ongoing 실험 마킹 (대표 미지정 실험 넘버별 최신 run) ──────────────────────
+# 대표 실험이 지정된 ml_folder 집합
+_rep_ml_folders  = {_woe_iv_folder_name(d["rep"]["ml_folder"]) for d in exp_data.values()     if d.get("is_rep")}
+_rep_gnn_folders = {d["rep"]["folder"]                          for d in gnn_exp_data.values() if d.get("is_rep")}
+
+# 대표 미지정 폴더별로 가장 마지막 run을 ongoing으로 마킹
+_ml_ongoing_set: set[str] = set()
+_ml_by_folder: dict[str, list] = {}
+for lbl, _d in exp_data.items():
+    if not _d.get("is_rep"):
+        folder = _woe_iv_folder_name(_d["rep"]["ml_folder"])
+        if folder not in _rep_ml_folders:
+            _ml_by_folder.setdefault(folder, []).append(lbl)
+for folder, lbls in _ml_by_folder.items():
+    latest = sorted(lbls, key=lambda l: (exp_data[l]["rep"].get("run_id",""), exp_data[l]["rep"].get("model_run_id","")))[-1]
+    _ml_ongoing_set.add(latest)
+for lbl, _d in exp_data.items():
+    _d["is_ongoing"] = (lbl in _ml_ongoing_set)
+
+_gnn_ongoing_set: set[str] = set()
+_gnn_by_folder: dict[str, list] = {}
+for lbl, _d in gnn_exp_data.items():
+    if not _d.get("is_rep"):
+        folder = _d["rep"]["folder"]
+        if folder not in _rep_gnn_folders:
+            _gnn_by_folder.setdefault(folder, []).append(lbl)
+for folder, lbls in _gnn_by_folder.items():
+    latest = sorted(lbls, key=lambda l: gnn_exp_data[l]["rep"].get("run_id",""))[-1]
+    _gnn_ongoing_set.add(latest)
+for lbl, _d in gnn_exp_data.items():
+    _d["is_ongoing"] = (lbl in _gnn_ongoing_set)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1058,55 +1498,383 @@ tab_overview, tab_gnn, tab_ml, tab_woe = st.tabs(["Overview", "GNN Result", "ML 
 # 탭 0: Overview
 # ──────────────────────────────────────────────────────────────────────────────
 with tab_overview:
-    st.markdown(
-        "<div style='text-align:center; padding: 60px 0 20px'>"
-        "<div style='font-size: 3rem'>🚧</div>"
-        "<div style='font-size: 1.4rem; font-weight: 600; margin-top: 12px'>공사중</div>"
-        "<div style='color: #888; margin-top: 8px'>이 탭은 현재 준비 중입니다.</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    # ── 미로드 실험 병렬 로드 ─────────────────────────────────────────────
+    _unloaded_ml  = [lbl for lbl in exp_data     if not exp_data[lbl].get("_loaded")     and (exp_data[lbl].get("is_rep")     or exp_data[lbl].get("is_ongoing"))]
+    _unloaded_gnn = [lbl for lbl in gnn_exp_data if not gnn_exp_data[lbl].get("_loaded") and (gnn_exp_data[lbl].get("is_rep") or gnn_exp_data[lbl].get("is_ongoing"))]
+    if _unloaded_ml or _unloaded_gnn:
+        from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+        _ml_fid      = st.session_state.get("_ml_folder_id", "")
+        _woe_root_id = st.session_state.get("_woe_iv_root_id", "")
+        _pfid        = st.session_state.get("_project_folder_id", "")
+        _ml_args  = [(lbl, exp_data[lbl]["rep"])     for lbl in _unloaded_ml]
+        _gnn_args = [(lbl, gnn_exp_data[lbl]["rep"]) for lbl in _unloaded_gnn]
+        _total = len(_ml_args) + len(_gnn_args)
+        _bar   = st.progress(0, text=f"데이터 로드 중 (0/{_total})...")
+        with ThreadPoolExecutor(max_workers=6) as _ex:
+            _ml_futs  = {_ex.submit(_compute_exp_data,     rep, _ml_fid, _woe_root_id): lbl
+                         for lbl, rep in _ml_args}
+            _gnn_futs = {_ex.submit(_compute_gnn_exp_data, rep, _pfid):                 lbl
+                         for lbl, rep in _gnn_args}
+            _all_futs = {**_ml_futs, **_gnn_futs}
+            _unloaded_ml_set = set(_unloaded_ml)
+            for _n, _fut in enumerate(_as_completed(_all_futs), 1):
+                _lbl = _all_futs[_fut]
+                try:
+                    _result = _fut.result()
+                    if _lbl in _unloaded_ml_set:
+                        _result["is_rep"]     = exp_data.get(_lbl, {}).get("is_rep", False)
+                        _result["is_ongoing"] = exp_data.get(_lbl, {}).get("is_ongoing", False)
+                        st.session_state["exp_data"][_lbl] = _result
+                    else:
+                        _result["is_rep"]     = gnn_exp_data.get(_lbl, {}).get("is_rep", False)
+                        _result["is_ongoing"] = gnn_exp_data.get(_lbl, {}).get("is_ongoing", False)
+                        st.session_state["gnn_exp_data"][_lbl] = _result
+                except Exception as _e:
+                    st.warning(f"'{_lbl}' 로드 실패: {_e}")
+                _bar.progress(_n / _total, text=f"데이터 로드 중 ({_n}/{_total}): {_lbl}")
+        _bar.empty()
+        exp_data     = st.session_state["exp_data"]
+        gnn_exp_data = st.session_state.get("gnn_exp_data", {})
+
+    # Overview: 대표 실험 + ongoing 실험 표시
+    _ov_exp = {lbl: d for lbl, d in exp_data.items()     if d.get("is_rep") or d.get("is_ongoing")}
+    _ov_gnn = {lbl: d for lbl, d in gnn_exp_data.items() if d.get("is_rep") or d.get("is_ongoing")}
+
+    st.markdown("#### Project Summary")
+
+    # ── 최신 실험 F1 불릿 차트 ───────────────────────────────────────────────
+    _bullet_rows: list[dict] = []
+
+    _ml_sorted = sorted([(lbl, d) for lbl, d in _ov_exp.items() if d.get("is_rep")],
+                        key=lambda kv: _woe_iv_folder_name(kv[1]["rep"]["ml_folder"]))
+    _ml_all_f1s: list[tuple[float, str]] = []
+    for _, _d in _ml_sorted:
+        _m = _d["ml"].get("metrics", {}); _m = _m.get("metrics", _m)
+        _v = _m.get("f1")
+        if _v is not None:
+            _ml_all_f1s.append((_v, _woe_iv_folder_name(_d["rep"]["ml_folder"]).upper()))
+    if _ml_sorted:
+        _, _ld = _ml_sorted[-1]
+        _lm = _ld["ml"].get("metrics", {})
+        _lm = _lm.get("metrics", _lm)
+        _lf1 = _lm.get("f1")
+        if _lf1 is not None:
+            _ml_max_pair = max(_ml_all_f1s, key=lambda t: t[0]) if _ml_all_f1s else (_lf1, "")
+            _bullet_rows.append({
+                "label": f"ML  ({_woe_iv_folder_name(_ld['rep']['ml_folder']).upper()})",
+                "f1": _lf1, "max_f1": _ml_max_pair[0], "max_exp": _ml_max_pair[1],
+                "color": "#fbbf24",
+            })
+
+    _gnn_sorted = sorted([(lbl, d) for lbl, d in _ov_gnn.items() if d.get("is_rep")],
+                         key=lambda kv: kv[1]["rep"]["folder"])
+    _gnn_all_f1s: list[tuple[float, str]] = []
+    for _, _d in _gnn_sorted:
+        _gp2 = _d["d"].get("parsed", {}); _ge2 = _gp2.get("epochs", [])
+        if not _ge2: continue
+        _gdf2 = pd.DataFrame(_ge2); _gdf2.index = _gdf2.index + 1; _gdf2.index.name = "epoch"; _gdf2 = _gdf2.reset_index()
+        _glb2 = _gp2.get("best_epoch")
+        _gm2  = _gdf2[_gdf2["epoch"] == _glb2].index if _glb2 is not None else pd.Index([])
+        _gi2  = _gm2[0] if len(_gm2) else _gdf2["val_auprc"].idxmax()
+        _gv2  = _gdf2.loc[_gi2].get("test_f1")
+        if _gv2 is not None: _gnn_all_f1s.append((_gv2, _d["rep"]["folder"]))
+    if _gnn_sorted:
+        _, _gd = _gnn_sorted[-1]
+        _gp = _gd["d"].get("parsed", {})
+        _ge = _gp.get("epochs", [])
+        if _ge:
+            _gdf = pd.DataFrame(_ge)
+            _gdf.index = _gdf.index + 1
+            _gdf.index.name = "epoch"
+            _gdf = _gdf.reset_index()
+            _glb = _gp.get("best_epoch")
+            if _glb is not None:
+                _gm = _gdf[_gdf["epoch"] == _glb].index
+                _gi = _gm[0] if len(_gm) else _gdf["val_auprc"].idxmax()
+            else:
+                _gi = _gdf["val_auprc"].idxmax()
+            _gf1 = _gdf.loc[_gi].get("test_f1")
+            if _gf1 is not None:
+                _gnn_max_pair = max(_gnn_all_f1s, key=lambda t: t[0]) if _gnn_all_f1s else (_gf1, "")
+                _bullet_rows.append({
+                    "label": f"GNN  ({_gd['rep']['folder']})",
+                    "f1": _gf1, "max_f1": _gnn_max_pair[0], "max_exp": _gnn_max_pair[1],
+                    "color": "#f43f5e",
+                })
+
+    if _bullet_rows:
+        _labels   = [r["label"]    for r in _bullet_rows]
+        _f1s      = [r["f1"]       for r in _bullet_rows]
+        _max_f1s  = [r["max_f1"]   for r in _bullet_rows]
+        _max_exps = [r["max_exp"]  for r in _bullet_rows]
+        _colors   = [r["color"]    for r in _bullet_rows]
+        _fig_b    = go.Figure()
+        # 배경 바 (전체 범위)
+        _fig_b.add_trace(go.Bar(
+            y=_labels, x=[1.0] * len(_bullet_rows), orientation="h",
+            marker_color="rgba(255,255,255,0.06)", marker_line_width=0,
+            showlegend=False, hoverinfo="skip",
+        ))
+        # 최대값 회색 바
+        _fig_b.add_trace(go.Bar(
+            y=_labels, x=_max_f1s, orientation="h",
+            marker_color="rgba(180,180,180,0.30)", marker_line_width=0,
+            showlegend=False,
+            customdata=_max_exps,
+            hovertemplate="<b>%{y}</b><br>Max F1: %{x:.4f}  (%{customdata})<extra></extra>",
+        ))
+        # 현재(최신 대표) 값 컬러 바
+        _fig_b.add_trace(go.Bar(
+            y=_labels, x=_f1s, orientation="h",
+            marker_color=_colors, marker_line_width=0,
+            showlegend=False,
+            text=[f"F1  {v:.4f}" for v in _f1s],
+            textposition="outside",
+            textfont=dict(size=13, color="#e2e5ec"),
+            hovertemplate="<b>%{y}</b><br>F1: %{x:.4f}<extra></extra>",
+        ))
+        _fig_b.update_layout(
+            barmode="overlay",
+            height=110 + 50 * len(_bullet_rows),
+            margin=dict(t=10, b=10, l=10, r=130),
+            xaxis=dict(
+                range=[0, 1.18],
+                tickvals=[0, 0.25, 0.5, 0.75, 1.0],
+                gridcolor="rgba(255,255,255,0.08)",
+            ),
+            yaxis=dict(showgrid=False, autorange="reversed"),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(_fig_b, use_container_width=True)
+
+    _METRIC_COLORS = {"F1": "#4f9cf9", "AUPRC": "#a78bfa", "Recall": "#34d399"}
+
+    # ── ML ────────────────────────────────────────────────────────────────────
+    ml_rows: list[dict] = []
+    for label, d in sorted(_ov_exp.items(),
+                            key=lambda kv: _woe_iv_folder_name(kv[1]["rep"]["ml_folder"])):
+        rep  = d["rep"]
+        m    = d["ml"].get("metrics", {})
+        m    = m.get("metrics", m)
+        desc = rep.get("description", "")
+        exp  = _woe_iv_folder_name(rep["ml_folder"]).upper()
+        if d.get("is_ongoing"):
+            exp = f"{exp} (ongoing)"
+        f1      = m.get("f1")
+        auprc   = m.get("average_precision") or d["ml"].get("train_summary", {}).get("best_score")
+        recall  = m.get("recall")
+        for metric, val in [("F1", f1), ("AUPRC", auprc), ("Recall", recall)]:
+            if val is not None:
+                ml_rows.append({"exp": exp, "metric": metric, "value": val, "description": desc})
+
+    # ── GNN ───────────────────────────────────────────────────────────────────
+    gnn_rows:      list[dict] = []
+    gnn_time_rows: list[dict] = []
+    for label, d in sorted(_ov_gnn.items(),
+                            key=lambda kv: kv[1]["rep"]["folder"]):
+        rep    = d["rep"]
+        parsed = d["d"].get("parsed", {})
+        epochs = parsed.get("epochs", [])
+        desc   = rep.get("description", "")
+        exp    = rep["folder"]
+        if d.get("is_ongoing"):
+            exp = f"{exp} (ongoing)"
+        t_sec  = parsed.get("training_time_sec")
+        if t_sec is not None and epochs:
+            gnn_time_rows.append({"exp": exp, "time_sec": t_sec / len(epochs), "description": desc})
+        if epochs:
+            _ep_df = pd.DataFrame(epochs)
+            _ep_df.index = _ep_df.index + 1
+            _ep_df.index.name = "epoch"
+            _ep_df = _ep_df.reset_index()
+            _log_best = parsed.get("best_epoch")
+            if _log_best is not None:
+                _match = _ep_df[_ep_df["epoch"] == _log_best].index
+                _bi = _match[0] if len(_match) else _ep_df["val_auprc"].idxmax()
+            else:
+                _bi = _ep_df["val_auprc"].idxmax()
+            _bp = _ep_df.loc[_bi]
+            for metric, val in [
+                ("F1",     _bp.get("test_f1")),
+                ("AUPRC",  _bp.get("test_auprc")),
+                ("Recall", _bp.get("test_recall")),
+            ]:
+                if val is not None:
+                    gnn_rows.append({"exp": exp, "metric": metric, "value": val, "description": desc})
+
+    # ── 지표 선택 버튼 (ML·GNN 공통) ─────────────────────────────────────────
+    _all_metrics = ["F1", "AUPRC", "Recall", "학습시간"]
+    _sel_metrics: list[str] = st.pills(
+        "지표 선택",
+        _all_metrics,
+        selection_mode="multi",
+        default=["F1", "AUPRC", "Recall"],
+        key="ov_metric_sel",
+        label_visibility="collapsed",
+    ) or ["F1", "AUPRC", "Recall"]
+    _perf_metrics = [m for m in _sel_metrics if m != "학습시간"]
+    _show_time    = "학습시간" in _sel_metrics
+
+    def _overview_line(rows: list[dict], title: str, show_metrics: list[str]) -> None:
+        if not rows:
+            st.caption(f"{title} — 데이터 없음")
+            return
+        df_ov = pd.DataFrame(rows)
+        df_ov = df_ov[df_ov["metric"].isin(show_metrics)]
+        if df_ov.empty:
+            st.caption(f"{title} — 선택된 지표 없음")
+            return
+        exps  = pd.DataFrame(rows)["exp"].unique().tolist()
+        fig   = go.Figure()
+        for metric, color in _METRIC_COLORS.items():
+            if metric not in show_metrics: continue
+            sub  = df_ov[df_ov["metric"] == metric]
+            dash = "solid" if metric == "F1" else "dash"
+            fig.add_trace(go.Scatter(
+                x=sub["exp"], y=sub["value"],
+                mode="lines+markers", name=metric,
+                line=dict(color=color, width=2, dash=dash),
+                marker=dict(size=8, color=color),
+                customdata=sub["description"],
+                hovertemplate="<b>%{x}</b><br>" + f"{metric}: " + "%{y:.4f}<br><i>%{customdata}</i><extra></extra>",
+            ))
+        desc_map = pd.DataFrame(rows).drop_duplicates("exp").set_index("exp")["description"]
+        fig.add_trace(go.Scatter(
+            x=exps, y=[0]*len(exps), mode="markers",
+            marker=dict(opacity=0, size=16),
+            customdata=[desc_map.get(e, "") for e in exps],
+            hovertemplate="<b>%{x}</b><br><i>%{customdata}</i><extra></extra>",
+            showlegend=False, name="",
+        ))
+        fig.update_layout(
+            title=title, height=300, margin=dict(t=40, b=20),
+            xaxis=dict(categoryorder="array", categoryarray=exps),
+            yaxis=dict(range=[0, 1]),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    def _overview_line_gnn(rows: list[dict], time_rows: list[dict], title: str,
+                           show_metrics: list[str], show_time: bool) -> None:
+        if not rows:
+            st.caption(f"{title} — 데이터 없음")
+            return
+        from plotly.subplots import make_subplots as _make_subplots
+        df_ov   = pd.DataFrame(rows)
+        df_time = pd.DataFrame(time_rows) if time_rows else pd.DataFrame(columns=["exp","time_sec","description"])
+        exps    = df_ov["exp"].unique().tolist()
+        use_secondary = show_time and not df_time.empty
+        fig = _make_subplots(specs=[[{"secondary_y": use_secondary}]])
+        for metric, color in _METRIC_COLORS.items():
+            if metric not in show_metrics: continue
+            sub  = df_ov[df_ov["metric"] == metric]
+            dash = "solid" if metric == "F1" else "dash"
+            fig.add_trace(go.Scatter(
+                x=sub["exp"], y=sub["value"],
+                mode="lines+markers", name=metric,
+                line=dict(color=color, width=2, dash=dash),
+                marker=dict(size=8, color=color),
+                customdata=sub["description"],
+                hovertemplate="<b>%{x}</b><br>" + f"{metric}: " + "%{y:.4f}<br><i>%{customdata}</i><extra></extra>",
+            ), secondary_y=False)
+        if use_secondary:
+            fig.add_trace(go.Bar(
+                x=df_time["exp"], y=df_time["time_sec"],
+                name="평균 에폭 학습시간 (s/ep)", width=0.3,
+                marker_color="rgba(255,200,80,0.25)",
+                marker_line=dict(color="rgba(255,200,80,0.6)", width=1),
+                customdata=df_time["description"],
+                hovertemplate="<b>%{x}</b><br>에폭당 학습시간: %{y:.1f}s/ep<br><i>%{customdata}</i><extra></extra>",
+            ), secondary_y=True)
+        desc_map = df_ov.drop_duplicates("exp").set_index("exp")["description"]
+        fig.add_trace(go.Scatter(
+            x=exps, y=[0]*len(exps), mode="markers",
+            marker=dict(opacity=0, size=16),
+            customdata=[desc_map.get(e, "") for e in exps],
+            hovertemplate="<b>%{x}</b><br><i>%{customdata}</i><extra></extra>",
+            showlegend=False, name="",
+        ), secondary_y=False)
+        fig.update_layout(
+            title=title, height=320, margin=dict(t=40, b=20),
+            xaxis=dict(categoryorder="array", categoryarray=exps),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            barmode="overlay",
+        )
+        if show_metrics:
+            fig.update_yaxes(range=[0, 1], title_text="Metric", secondary_y=False)
+        if use_secondary:
+            fig.update_yaxes(title_text="평균 에폭 학습시간 (s/ep)", secondary_y=True, showgrid=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+    _overview_line(ml_rows, "ML", _perf_metrics)
+    _overview_line_gnn(gnn_rows, gnn_time_rows, "GNN", _perf_metrics, _show_time)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 탭 1: GNN 결과
 # ──────────────────────────────────────────────────────────────────────────────
-with tab_gnn:
-    if not gnn_exp_names:
-        st.info("Drive의 gnn/logs 폴더에서 실험을 찾을 수 없습니다.")
+@st.fragment
+def _tab_gnn_render():
+    gnn_exp_data = st.session_state.get("gnn_exp_data", {})
+
+    if not gnn_exp_data:
+        st.info("탐색된 GNN 실험이 없습니다.")
     else:
-        sel_gnn = st.selectbox("실험 선택", gnn_exp_names, key="gnn_sel",
-                               label_visibility="collapsed")
-
-        _render_report("GNN Result", sel_gnn)
+        _gnn_labels   = list(gnn_exp_data.keys())
+        _gnn_rep_idx  = [i for i, l in enumerate(_gnn_labels) if gnn_exp_data[l].get("is_rep")]
+        _gnn_def_idx  = max(_gnn_rep_idx, key=lambda i: _gnn_folder_num(gnn_exp_data[_gnn_labels[i]]["rep"]["folder"]), default=0) if _gnn_rep_idx else 0
+        sel_gnn_label = st.selectbox("실험 선택", _gnn_labels, key="gnn_sel",
+                                     index=_gnn_def_idx, label_visibility="collapsed")
+        sel_gnn_rep   = gnn_exp_data[sel_gnn_label]["rep"]
+        if not gnn_exp_data.get(sel_gnn_label, {}).get("_loaded"):
+            with st.spinner("실험 데이터 로드 중..."):
+                _load_gnn_exp_data(sel_gnn_label)
+            gnn_exp_data = st.session_state.get("gnn_exp_data", {})
+        _gnn_note = sel_gnn_rep.get("note", "")
+        if _gnn_note:
+            st.caption(f"**Note**: {_gnn_note}")
+        _render_report("GNN Result", f"{sel_gnn_rep['folder']}__{sel_gnn_rep['run_id']}")
         st.divider()
-
-        with st.spinner("GNN 실험 로드 중..."):
-            gnn_d  = _load_gnn_experiment(PROJECT_FOLDER_ID, sel_gnn)
+        gnn_d  = gnn_exp_data.get(sel_gnn_label, {}).get("d", {})
 
         args   = gnn_d.get("args", {})
         parsed = gnn_d.get("parsed", {})
         epochs = parsed.get("epochs", [])
 
         if not epochs:
+            _dbg = gnn_exp_data.get(sel_gnn_label, {}).get("_gnn_debug", {})
             st.info("학습 로그를 파싱할 수 없습니다.")
+            if _dbg:
+                st.caption(
+                    f"🔍 gnn폴더: {'✅' if _dbg.get('gnn_id') else '❌'}  "
+                    f"실험폴더({sel_gnn_rep.get('folder','?')}): {'✅' if _dbg.get('exp_id') else '❌'}  "
+                    f"run폴더({sel_gnn_rep.get('run_id','?')}): {'✅' if _dbg.get('run_fid') else '❌'}  "
+                    f"logs폴더: {'✅' if _dbg.get('logs_id') else '❌'}  "
+                    f"로그: {_dbg.get('log_msg', '—')}"
+                )
         else:
             ep_df = pd.DataFrame(epochs)
             ep_df.index = ep_df.index + 1
             ep_df.index.name = "epoch"
             ep_df = ep_df.reset_index()
 
-            best_idx = ep_df["val_auprc"].idxmax()
+            _log_best = parsed.get("best_epoch")
+            if _log_best is not None:
+                _match = ep_df[ep_df["epoch"] == _log_best].index
+                best_idx = _match[0] if len(_match) else ep_df["val_auprc"].idxmax()
+            else:
+                best_idx = ep_df["val_auprc"].idxmax()
             best_ep  = ep_df.loc[best_idx]
 
             # ── 핵심 지표 ──────────────────────────────────────────────────
             _model_name = args.get("model", "—") if args else "—"
             st.markdown(f"#### Metrics (model: {_model_name})")
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("F1",            f"{best_ep['test_f1']:.4f}")
-            c2.metric("AUPRC",         f"{best_ep['test_auprc']:.4f}")
-            c3.metric("Precision",     f"{best_ep['test_precision']:.4f}")
-            c4.metric("Recall",        f"{best_ep['test_recall']:.4f}")
+            c1.metric("F1",             f"{best_ep['test_f1']:.4f}")
+            c2.metric("AUPRC",          f"{best_ep['test_auprc']:.4f}")
+            c3.metric("Recall",         f"{best_ep['test_recall']:.4f}")
+            c4.metric("Precision",      f"{best_ep['test_precision']:.4f}")
             c5.metric("Best Val AUPRC", f"{best_ep['val_auprc']:.4f}")
 
             c6, c7 = st.columns(2)
@@ -1134,9 +1902,101 @@ with tab_gnn:
 
             st.divider()
 
-            # ── Learning Curve ─────────────────────────────────────────────
-            st.markdown("##### Learning Curve")
-            _gnn_lc_section(ep_df, best_ep)
+            # ── Learning Curve + Confusion Matrix ─────────────────────────
+            col_curve, col_cm = st.columns([3, 2])
+
+            with col_curve:
+                st.markdown("##### Learning Curve")
+                _gnn_lc_section(ep_df, best_ep)
+
+            with col_cm:
+                st.markdown("##### Confusion Matrix")
+                xai_cm = parsed.get("xai_cm")
+                if xai_cm:
+                    tp, fp, fn, tn = xai_cm["tp"], xai_cm["fp"], xai_cm["fn"], xai_cm["tn"]
+                    fig_cm = _make_cm_fig(tp, fn, fp, tn)
+                    st.plotly_chart(fig_cm, use_container_width=True)
+                    st.markdown(
+                        f"<div style='text-align:center;font-size:0.8rem;color:#888'>"
+                        f"TP={tp:,} | FP={fp:,} | FN={fn:,} | TN={tn:,}</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.info("Confusion matrix 정보 없음 (XAI 미실행)")
+
+            st.divider()
+
+            # ── Feature Importance (XAI) ───────────────────────────────────
+            fi_df_gnn = gnn_d.get("feature_importance")
+            st.markdown("##### Feature Importance (XAI — Gradient Saliency)")
+            if fi_df_gnn is not None and not fi_df_gnn.empty:
+                mean_cols = [c for c in fi_df_gnn.columns if c.endswith("__mean")]
+                feat_names = [c.replace("__mean", "") for c in mean_cols]
+                fi_long_rows = []
+                for _, row in fi_df_gnn.iterrows():
+                    n_samples = int(row.get("n_samples", 0))
+                    for mc2, fname in zip(mean_cols, feat_names):
+                        std_col = fname + "__std"
+                        fi_long_rows.append({
+                            "group":    row["group"],
+                            "feature":  fname,
+                            "saliency": row[mc2],
+                            "std":      row.get(std_col, 0),
+                            "n":        n_samples,
+                        })
+                fi_long = pd.DataFrame(fi_long_rows)
+
+                groups_order = [g for g in ["TP", "FP", "FN", "TN"]
+                                if g in fi_long["group"].values]
+                subplot_titles = []
+                for grp in groups_order:
+                    n_val = int(fi_long.loc[fi_long["group"] == grp, "n"].iloc[0])
+                    subplot_titles.append(f"{grp}  (n={n_val:,})")
+
+                fig_gnn_fi = make_subplots(
+                    rows=2, cols=2,
+                    shared_yaxes="all",
+                    subplot_titles=subplot_titles,
+                    vertical_spacing=0.32,
+                    horizontal_spacing=0.06,
+                )
+                for idx, grp in enumerate(groups_order):
+                    r, c = idx // 2 + 1, idx % 2 + 1
+                    fi_grp = fi_long[fi_long["group"] == grp].sort_values("saliency", ascending=False)
+                    fig_gnn_fi.add_trace(go.Bar(
+                        x=fi_grp["feature"],
+                        y=fi_grp["saliency"],
+                        error_y=dict(type="data", array=fi_grp["std"].tolist(),
+                                     visible=True, color="#888888", thickness=1.2, width=4),
+                        marker_color="#4f9cf9",
+                        showlegend=False,
+                        hovertemplate="<b>%{x}</b><br>Mean: %{y:.4f}<br>Std: %{error_y.array:.4f}<extra></extra>",
+                    ), row=r, col=c)
+
+                y_max = (fi_long["saliency"] + fi_long["std"]).max() * 1.15
+                y_min = max(0, (fi_long["saliency"] - fi_long["std"]).min() * 0.9)
+                fig_gnn_fi.update_layout(
+                    height=660, margin=dict(t=60, b=60),
+                )
+                fig_gnn_fi.update_xaxes(tickangle=-40)
+                fig_gnn_fi.update_yaxes(range=[y_min, y_max])
+                fig_gnn_fi.update_yaxes(title_text="Mean Saliency", col=1)
+                st.plotly_chart(fig_gnn_fi, use_container_width=True)
+
+                # ── Group Comparison (Mann-Whitney U) ─────────────────────
+                fi_indiv = gnn_d.get("feature_importance_individual")
+                with st.expander("Group Comparison (Mann-Whitney U, FDR corrected)"):
+                    if fi_indiv is not None and not fi_indiv.empty:
+                        fig_mw = _make_mw_heatmap(
+                            fi_indiv.to_json(orient="records"),
+                            tuple(feat_names),
+                        )
+                        st.plotly_chart(fig_mw, use_container_width=True)
+                        st.caption("\\* FDR < 0.05 (Benjamini-Hochberg)  |  r: rank-biserial correlation  |  양수 = 왼쪽 그룹이 saliency 더 높음")
+                    else:
+                        st.info("개별 샘플 파일 없음 (feature_importance_individual.csv 확인)")
+            else:
+                st.info("Feature importance 파일 없음 (feature_importance/ 폴더 확인)")
 
             st.divider()
 
@@ -1159,12 +2019,29 @@ with tab_gnn:
                     )
 
 
+
+with tab_gnn:
+    _tab_gnn_render()
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 탭 2: ML 결과
 # ──────────────────────────────────────────────────────────────────────────────
-with tab_ml:
+@st.fragment
+def _tab_ml_render():
+    exp_data   = st.session_state.get("exp_data", {})
+    exp_labels = list(exp_data.keys())
+    _ml_rep_idx  = [i for i, l in enumerate(exp_labels) if exp_data[l].get("is_rep")]
+    _default_idx = max(_ml_rep_idx, key=lambda i: _ml_folder_num(exp_data[exp_labels[i]]["rep"]["ml_folder"]), default=0) if _ml_rep_idx else 0
+
     sel = st.selectbox("실험 선택", exp_labels, key="ml_sel",
                        index=_default_idx, label_visibility="collapsed")
+
+    if not sel or sel not in exp_data:
+        sel = next((lbl for lbl in exp_labels if lbl in exp_data), None)
+        if not sel:
+            st.info("로드 가능한 실험이 없습니다.")
+            return
 
     # 실험 변경 시 이전 fi_* 키 정리
     if st.session_state.get("_ml_prev_sel") != sel:
@@ -1174,22 +2051,27 @@ with tab_ml:
                 st.session_state.pop(k, None)
         st.session_state["_ml_prev_sel"] = sel
 
+    if not exp_data.get(sel, {}).get("_loaded"):
+        with st.spinner("실험 데이터 로드 중..."):
+            _load_exp_data(sel)
+        exp_data = st.session_state.get("exp_data", {})
+
     d   = exp_data[sel]
     rep = d["rep"]
     ml  = d["ml"]
 
-    note = rep.get("note", "")
-    st.caption(f"**Status**: {rep.get('status', '—')}")
+    _note = rep.get("note", "")
+    if _note:
+        st.caption(f"**Note**: {_note}")
 
-    _render_report("ML Result", sel)
+    _render_report("ML Result", f"{_woe_iv_folder_name(rep['ml_folder'])}__{rep['run_id']}__{rep['model_run_id']}")
     st.divider()
 
     if not ml:
         st.info("학습된 모델이 없습니다.")
     else:
-        metrics_raw    = ml.get("metrics", {})
-        train_summary  = ml.get("train_summary", {})
-        scores_summary = ml.get("scores_summary", {})
+        metrics_raw   = ml.get("metrics", {})
+        train_summary = ml.get("train_summary", {})
         feat_imp       = ml.get("feature_importance")
         conf_mat       = ml.get("confusion_matrix")
         feature_assoc  = ml.get("feature_assoc")
@@ -1203,8 +2085,8 @@ with tab_ml:
         aucpr = m.get("average_precision") or train_summary.get("best_score")
         c1.metric("F1",        f"{f1:.4f}")
         c2.metric("AUPRC",     f"{aucpr:.4f}" if aucpr is not None else "—")
-        c3.metric("Precision", f"{m.get('precision', 0):.4f}")
-        c4.metric("Recall",    f"{m.get('recall', 0):.4f}")
+        c3.metric("Recall",    f"{m.get('recall', 0):.4f}")
+        c4.metric("Precision", f"{m.get('precision', 0):.4f}")
         c5.metric("Threshold", f"{m.get('threshold', 0):.4f}",
                   help=f"전략: {train_summary.get('xgboost_params', {}).get('eval_metric', '—')}")
 
@@ -1237,35 +2119,26 @@ with tab_ml:
 
         with col_curve:
             st.markdown("##### Learning Curve")
-            # scores_train_summary.learning_curve 우선, 없으면 evals_result fallback
-            lc       = (scores_summary.get("learning_curve") or {})
-            lc_curves = lc.get("curves", {})
-            aliases  = lc.get("eval_set_aliases", {})
-            diag     = train_summary.get("xgboost_diagnostics", {})
-            evals    = diag.get("evals_result", {})
+            diag  = train_summary.get("xgboost_diagnostics", {})
+            evals = diag.get("evals_result", {})
 
             # metric → (train_vals, val_vals)
             available: dict[str, tuple] = {}
-            for metric, vals in lc_curves.get("train", {}).items():
-                val_vals = lc_curves.get("val", {}).get(metric)
-                if val_vals:
-                    available[metric] = (tuple(vals), tuple(val_vals))
-            # evals_result에서 추가 지표 수집
-            train_key = next((k for k, v in aliases.items() if v == "train"), None)
-            val_key   = next((k for k, v in aliases.items() if v == "val"),   None)
-            if not train_key and evals:
+            if evals:
                 keys = list(evals.keys())
                 train_key, val_key = (keys[0], keys[1]) if len(keys) >= 2 else (keys[0], None) if keys else (None, None)
-            if train_key and val_key and evals.get(train_key) and evals.get(val_key):
-                for metric, t_vals in evals[train_key].items():
-                    if metric not in available and metric in evals[val_key]:
-                        available[metric] = (tuple(t_vals), tuple(evals[val_key][metric]))
+                if train_key and val_key and evals.get(train_key) and evals.get(val_key):
+                    for metric, t_vals in evals[train_key].items():
+                        if metric in evals[val_key]:
+                            available[metric] = (tuple(t_vals), tuple(evals[val_key][metric]))
 
             if available:
-                metric_options = list(available.keys())
+                _lc_display = {"aucpr": "AUPRC", "logloss": "LogLoss"}
+                metric_options = [_lc_display.get(m, m) for m in available]
+                _lc_raw = {_lc_display.get(m, m): m for m in available}
                 lc_sel = st.radio("지표", metric_options, horizontal=True,
                                   key=f"lc_metric_{sel}", label_visibility="collapsed")
-                t_v, v_v = available[lc_sel]
+                t_v, v_v = available[_lc_raw[lc_sel]]
                 fig_curve = _make_ml_lc_fig2(t_v, v_v, lc_sel, int(best_iter))
                 st.plotly_chart(fig_curve, use_container_width=True)
             else:
@@ -1329,7 +2202,7 @@ with tab_ml:
 
             _sel_fi = _sel_fi_pre
 
-            with st.expander("Feature Association Heatmap"):
+            with st.expander("Feature Correlation Heatmap"):
                 if feature_assoc:
                     assoc     = feature_assoc.get("association", {})
                     feat_list = feature_assoc.get("features", [])  # top-level: [{name, feature_type}, ...]
@@ -1415,21 +2288,38 @@ with tab_ml:
             if _from_scat and _from_scat != _cur:
                 st.session_state[f"fi_sel_{sel}"]       = _from_scat
                 st.session_state[f"fi_bar_ver_{sel}"]   = _bar_ver + 1   # 바 선택 초기화
-                st.rerun()
+                st.rerun(scope="fragment")
             elif _from_bar and _from_bar != _cur:
                 st.session_state[f"fi_sel_{sel}"]        = _from_bar
                 st.session_state[f"fi_scat_ver_{sel}"]   = _scat_ver + 1  # 버블 선택 초기화
-                st.rerun()
+                st.rerun(scope="fragment")
         else:
             st.info("Feature importance 파일 없음")
+
+
+
+with tab_ml:
+    _tab_ml_render()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 탭 2: WOE / IV
 # ──────────────────────────────────────────────────────────────────────────────
-with tab_woe:
-    sel_woe  = st.selectbox("실험 선택", exp_labels, key="woe_sel",
-                            index=_default_idx, label_visibility="collapsed")
+@st.fragment
+def _tab_woe_render():
+    exp_data   = st.session_state.get("exp_data", {})
+    exp_labels = list(exp_data.keys())
+    _woe_rep_idx = [i for i, l in enumerate(exp_labels) if exp_data[l].get("is_rep")]
+    _default_idx = max(_woe_rep_idx, key=lambda i: _ml_folder_num(exp_data[exp_labels[i]]["rep"]["ml_folder"]), default=0) if _woe_rep_idx else 0
+
+    sel_woe = st.selectbox("실험 선택", exp_labels, key="woe_sel",
+                           index=_default_idx, label_visibility="collapsed")
+
+    if not sel_woe or sel_woe not in exp_data:
+        sel_woe = next((lbl for lbl in exp_labels if lbl in exp_data), None)
+        if not sel_woe:
+            st.info("로드 가능한 실험이 없습니다.")
+            return
 
     # 실험 변경 시 이전 catalog 편집 상태 정리
     if st.session_state.get("_woe_prev_sel") != sel_woe:
@@ -1438,7 +2328,13 @@ with tab_woe:
             st.session_state.pop(f"catalog_{prev_woe}", None)
         st.session_state["_woe_prev_sel"] = sel_woe
 
-    _render_report("Univariate Analysis", sel_woe)
+    if not exp_data.get(sel_woe, {}).get("_loaded"):
+        with st.spinner("실험 데이터 로드 중..."):
+            _load_exp_data(sel_woe)
+        exp_data = st.session_state.get("exp_data", {})
+
+    _rep_woe = exp_data[sel_woe]["rep"]
+    _render_report("Univariate Analysis", f"{_woe_iv_folder_name(_rep_woe['ml_folder'])}__{_rep_woe['run_id']}__{_rep_woe['model_run_id']}")
     st.divider()
 
     d_woe    = exp_data[sel_woe]
@@ -1464,14 +2360,17 @@ with tab_woe:
         )
 
     elif stale_st == "no_woe":
+        _woe_path = d_woe.get("_woe_path_used", "")
         tip = (
             "WOE/IV 결과가 없습니다. compute_woe_iv.ipynb를 실행하세요.&#10;"
-            f"prefix: {cur_pfx}"
+            f"prefix: {cur_pfx}&#10;"
+            f"조회 경로: {_woe_path}"
         )
         st.markdown(
             f'<span title="{tip}" style="cursor:help;font-size:1.1rem">⚠️</span>',
             unsafe_allow_html=True,
         )
+        st.caption(f"🔍 조회 경로: `{_woe_path}`")
 
     # ── 정상 표시 ─────────────────────────────────────────────────────────────
     if "iv_df" in woe:
@@ -1542,7 +2441,7 @@ with tab_woe:
                 )
                 if not edited.equals(active_catalog):
                     st.session_state[ss_key] = edited
-                    st.rerun()
+                    st.rerun(scope="fragment")
         st.divider()
 
         st.markdown("##### Information Value")
@@ -1575,3 +2474,7 @@ with tab_woe:
         top_df["_iv_bar"] = top_df["iv"].clip(lower=0.003, upper=IV_CUT)
 
         _woe_iv_bin_section(top_df, bin_df, unregistered, woe_desc)
+
+
+with tab_woe:
+    _tab_woe_render()

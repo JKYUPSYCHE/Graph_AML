@@ -16,6 +16,12 @@ Feature build 전체 실행 모듈
 - 컬럼명이 바뀌면 노트북의 `column_map` dict를 우선 수정한다.
 - full data 실행 전 sample_rows로 smoke build를 먼저 수행하는 것을 권장한다.
 - overwrite=False가 기본이며 기존 산출물이 있으면 즉시 중단한다.
+
+읽는 순서
+---------
+`FeatureBuildConfig`와 공개 진입점(`build_features`, `build_features_from_frame`)을 먼저 본다.
+두 진입점은 `_build_from_raw_frame()`을 거쳐 `_build_from_split_frame()`으로 수렴한다.
+operation 세부 계산은 `ml_01_fb_operations.py`와 `ml_01_fb_rolling.py`가 담당한다.
 """
 
 from __future__ import annotations
@@ -24,10 +30,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Tuple, Union
 
-import numpy as np
 import pandas as pd
 
-from ml_01_fb_catalog import make_feature_catalog, make_feature_columns_table, make_split_summary
+from ml_01_fb_build_artifacts import (
+    assemble_build_artifacts as _assemble_build_artifacts,
+    preserve_source_columns as _preserve_source_columns,
+    save_build_artifacts as _save_build_artifacts,
+)
+from ml_01_fb_build_validation import (
+    existing_split_metadata_frame as _existing_split_metadata_frame,
+    validate_stage0_rolling_outputs,
+    validate_time_split as _validate_time_split,
+)
 from ml_01_fb_io import (
     DEFAULT_INPUT_PATH,
     DEFAULT_OUTPUT_DIR,
@@ -37,12 +51,7 @@ from ml_01_fb_io import (
     parquet_columns,
     require_no_existing_outputs,
     resolve_path,
-    save_dataframe_csv,
-    save_dataframe_parquet,
-    save_json,
-    utc_now_iso,
 )
-from ml_01_fb_operations import execute_feature_specs
 from ml_01_fb_schema import (
     resolve_requested_columns,
     standardize_input_frame,
@@ -50,7 +59,6 @@ from ml_01_fb_schema import (
 )
 from ml_01_fb_specs import (
     FeatureSpec,
-    feature_columns,
     required_input_columns,
     validate_feature_specs,
 )
@@ -71,6 +79,8 @@ class FeatureBuildConfig:
         build_features_from_frame()을 써야 한다.
     output_dir:
         산출물 저장 폴더. None이면 파일 저장 없이 메모리 결과만 반환한다.
+        공식 노트북 경로는 output_dir=None으로 build 후 encode_split_frame()에서 저장한다.
+        output_dir을 지정하는 direct-save 모드는 보조 실행 경로다.
     feature_specs:
         생성할 ML-01 Stage 0 feature 선언 목록. 명시하지 않으면 실행을 중단한다.
     column_map:
@@ -86,7 +96,7 @@ class FeatureBuildConfig:
     input_path: Optional[Union[str, Path]] = DEFAULT_INPUT_PATH
     output_dir: Optional[Union[str, Path]] = DEFAULT_OUTPUT_DIR
     # base_dir: input_path/output_dir이 상대경로일 때 해석 기준이 되는 루트.
-    # None이면 ml_00_fb_io.resolve_path() 내부에서 ml_00_fb_utils.BASE_DIR(=Git 루트)를 사용한다.
+    # None이면 ml_01_fb_io.resolve_path() 내부에서 ml_01_fb_utils.BASE_DIR(=Git 루트)를 사용한다.
     base_dir: Optional[Union[str, Path]] = None
 
     # --- 실행 식별자 (재현성 메타데이터 + 산출물 파일명 prefix) ---
@@ -101,7 +111,7 @@ class FeatureBuildConfig:
 
     # --- 컬럼명 매핑 ---
     # 노트북의 COLUMN_MAP이 그대로 들어온다. 예: {"amount": "Amount Paid"}.
-    # 여기 없는 logical key는 ml_00_fb_schema.COLUMN_CANDIDATES로 자동 fallback된다.
+    # 여기 없는 logical key는 ml_01_fb_schema.COLUMN_CANDIDATES로 자동 fallback된다.
     # 명시성을 위해 모든 key를 직접 넘기는 것을 권장.
     column_map: Optional[Mapping[str, str]] = None
 
@@ -171,481 +181,8 @@ class FeatureBuildResult:
     feature_info: pd.DataFrame
 
 
-# -----------------------------------------------------------------------------
-# 2. train/val/test split 검증
-# -----------------------------------------------------------------------------
-# ML-01 feature build 기본 흐름은 source parquet의 기존 split 컬럼만 사용한다.
-# -----------------------------------------------------------------------------
-def _validate_time_split(df: pd.DataFrame) -> None:
-    """
-    split 결과가 train < val < test 시간 순서를 만족하는지 검사
-
-    검사 항목
-    --------
-    1. train/val/test 세 split이 모두 존재 (어느 하나도 비어서는 안 됨)
-    2. max(train.timestamp) < min(val.timestamp)
-    3. max(val.timestamp)   < min(test.timestamp)
-    """
-
-    # [1] 세 split이 모두 존재하는지 확인. 누락 시 이후 학습 단계에서 KeyError가 나므로 여기서 잡는다.
-    counts = df["split"].value_counts().to_dict()
-    missing = {"train", "val", "test"} - set(counts)
-    if missing:
-        raise ValueError(f"Missing required split values in existing split column: {sorted(missing)}")
-
-    # [2] 인접 split 경계에서 시간 역전 또는 같은 timestamp 공유가 없는지 검사.
-    # temporal/history feature의 과거 기준은 past_timestamp < current_timestamp로 고정한다.
-    # 따라서 같은 timestamp가 split 경계 양쪽에 있으면 보수적으로 실패시킨다.
-    train_max = df.loc[df["split"] == "train", "timestamp"].max()
-    val_min = df.loc[df["split"] == "val", "timestamp"].min()
-    val_max = df.loc[df["split"] == "val", "timestamp"].max()
-    test_min = df.loc[df["split"] == "test", "timestamp"].min()
-    if train_max >= val_min:
-        raise ValueError(f"Time split boundary violation: train_max={train_max}, val_min={val_min}")
-    if val_max >= test_min:
-        raise ValueError(f"Time split boundary violation: val_max={val_max}, test_min={test_min}")
-
-
-
-def _split_feature_frame(feature_frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    최종 feature_frame(=meta + 생성 feature)을 train/val/test 3개로 분리
-
-    호출 시점
-    --------
-    execute_feature_specs()가 끝난 뒤, 파일 저장 직전에 호출한다.
-    feature 계산까지 마친 한 덩어리 frame을 split별 parquet로 저장하기 위한 마지막 단계.
-
-    빈 split 방어
-    ------------
-    _validate_time_split이 이미 비어 있지 않음을 보장하지만, reset_index까지 거친 뒤 한 번 더 확인
-    """
-
-    train_df = feature_frame[feature_frame["split"] == "train"].reset_index(drop=True)
-    val_df = feature_frame[feature_frame["split"] == "val"].reset_index(drop=True)
-    test_df = feature_frame[feature_frame["split"] == "test"].reset_index(drop=True)
-
-    # 하나라도 비면 학습 단계에서 의미 없는 산출물이 만들어지므로 명시적으로 중단.
-    if train_df.empty or val_df.empty or test_df.empty:
-        raise ValueError(
-            "Feature split output must not be empty. "
-            f"train={len(train_df)}, val={len(val_df)}, test={len(test_df)}"
-        )
-    return train_df, val_df, test_df
-
-
-def _preserve_source_columns(raw_df: pd.DataFrame, standardized_df: pd.DataFrame) -> pd.DataFrame:
-    """원본 컬럼 전체를 보존하고 feature build용 표준 컬럼을 덧붙인다."""
-
-    output = raw_df.reset_index(drop=True).copy(deep=False)
-    for column in standardized_df.columns:
-        output[column] = standardized_df[column].reset_index(drop=True)
-    return output
-
-
-def _append_generated_features(
-    source_frame: pd.DataFrame,
-    built_feature_frame: pd.DataFrame,
-    generated_columns: list[str],
-) -> pd.DataFrame:
-    """원본 보존 frame에 새로 계산한 feature 컬럼만 추가한다."""
-
-    source = source_frame.reset_index(drop=True).copy(deep=False)
-    built = built_feature_frame.reset_index(drop=True)
-    if len(source) != len(built):
-        raise ValueError(
-            "Feature build failed: source and generated feature row counts differ. "
-            f"source_rows={len(source)}, generated_rows={len(built)}"
-        )
-
-    for meta_col in ["tx_id", "split", "label"]:
-        if meta_col not in source.columns or meta_col not in built.columns:
-            raise ValueError(f"Feature build failed: metadata column is missing before append. column={meta_col!r}")
-        left = source[meta_col].astype("string").reset_index(drop=True)
-        right = built[meta_col].astype("string").reset_index(drop=True)
-        if not left.equals(right):
-            raise ValueError(f"Feature build failed: metadata order mismatch before append. column={meta_col!r}")
-
-    collisions = [column for column in generated_columns if column in source.columns]
-    if collisions:
-        raise ValueError(
-            "Feature build refused to overwrite existing columns. "
-            f"generated_columns_already_exist={collisions[:30]}, collision_count={len(collisions)}"
-        )
-
-    for column in generated_columns:
-        if column not in built.columns:
-            raise ValueError(f"Feature build failed: generated column is missing. column={column!r}")
-        source[column] = built[column]
-    source["label"] = built["label"].astype("int8")
-    source["split"] = built["split"].astype("string")
-    return source
-
-
-def _numeric_validation_series(frame: pd.DataFrame, column: str) -> pd.Series:
-    """semantic validation에서 사용할 feature column을 finite numeric series로 변환한다."""
-
-    if column not in frame.columns:
-        raise ValueError(f"Stage 0 rolling validation failed: required column is missing. column={column!r}")
-    numeric = pd.to_numeric(frame[column], errors="coerce").reset_index(drop=True)
-    missing_mask = numeric.isna()
-    if missing_mask.any():
-        examples = frame.loc[missing_mask.to_numpy(), column].astype(str).head(5).tolist()
-        raise ValueError(
-            "Stage 0 rolling validation failed: feature column contains non-numeric or missing values. "
-            f"column={column!r}, bad_count={int(missing_mask.sum())}, examples={examples}"
-        )
-    inf_mask = numeric.isin([float("inf"), float("-inf")])
-    if inf_mask.any():
-        raise ValueError(
-            "Stage 0 rolling validation failed: feature column contains inf values. "
-            f"column={column!r}, inf_count={int(inf_mask.sum())}"
-        )
-    return numeric.astype("float64")
-
-
-def _stage0_monotonic_tolerance(
-    *,
-    short_col: str,
-    long_col: str,
-    short_values: pd.Series,
-    long_values: pd.Series,
-    base_tolerance: float,
-) -> Union[float, pd.Series]:
-    """count는 엄격히, amount sum은 float32/누적합 반올림 오차만 허용한다."""
-
-    is_amount_sum = "__amount__sum__" in short_col and "__amount__sum__" in long_col
-    if not is_amount_sum:
-        return base_tolerance
-
-    magnitude = np.maximum(
-        short_values.abs().to_numpy(dtype="float64", copy=False),
-        long_values.abs().to_numpy(dtype="float64", copy=False),
-    )
-    magnitude = np.maximum(magnitude, 1.0)
-    roundoff_tolerance = 2.0 * float(np.finfo(np.float32).eps) * magnitude
-    allowed_tolerance = np.maximum(roundoff_tolerance, max(base_tolerance, 1e-5))
-    return pd.Series(allowed_tolerance, index=short_values.index, dtype="float64")
-
-
-def _validation_tolerance_at(tolerance: Union[float, pd.Series], index: int) -> float:
-    if isinstance(tolerance, pd.Series):
-        return float(tolerance.iloc[index])
-    return float(tolerance)
-
-
-def validate_stage0_rolling_outputs(
-    feature_frame: pd.DataFrame,
-    *,
-    min_rows_for_diversity_check: int = 1_000,
-    duplicate_group_sample_size: int = 3,
-    tolerance: float = 1e-6,
-) -> dict[str, Any]:
-    """
-    ML-01 Stage 0 rolling 산출물이 저장되기 전에 semantic 오류를 차단한다.
-
-    이 검증은 기존 missing/inf 검증으로 잡히지 않는 stale import/old rolling logic 문제를 겨냥한다.
-    - count/sum은 더 긴 window 값이 더 짧은 window 값보다 작아지면 실패한다.
-      단 amount sum은 float32/누적합 반올림 오차 범위만 허용한다.
-    - 충분히 큰 데이터에서 w1h와 w7d가 완전히 같으면 window별 결과 복제로 보고 실패한다.
-    - duplicate timestamp sample에서 count feature가 동일 timestamp row를 과거로 포함하면 실패한다.
-    """
-
-    if feature_frame.empty:
-        raise ValueError("Stage 0 rolling validation failed: feature_frame is empty.")
-    if min_rows_for_diversity_check <= 0:
-        raise ValueError("min_rows_for_diversity_check must be a positive integer.")
-    if duplicate_group_sample_size < 0:
-        raise ValueError("duplicate_group_sample_size must be zero or a positive integer.")
-    if tolerance < 0:
-        raise ValueError("tolerance must be non-negative.")
-
-    windows = ("w1h", "w6h", "w1d", "w3d", "w7d")
-    monotonic_prefixes = (
-        "timehist__sender__out__tx_count__count__",
-        "timehist__receiver__in__tx_count__count__",
-        "timehist__sender__out__amount__sum__",
-        "timehist__receiver__in__amount__sum__",
-    )
-    diversity_pairs = (
-        (
-            "timehist__sender__out__tx_count__count__w1h",
-            "timehist__sender__out__tx_count__count__w7d",
-        ),
-        (
-            "timehist__receiver__in__tx_count__count__w1h",
-            "timehist__receiver__in__tx_count__count__w7d",
-        ),
-        (
-            "timehist__sender__out__amount__sum__w1h",
-            "timehist__sender__out__amount__sum__w7d",
-        ),
-        (
-            "timehist__receiver__in__amount__sum__w1h",
-            "timehist__receiver__in__amount__sum__w7d",
-        ),
-        (
-            "timehist__sender__out__amount__cur_vs_mean_ratio__w1d",
-            "timehist__sender__out__amount__cur_vs_mean_ratio__w7d",
-        ),
-        (
-            "timehist__receiver__in__amount__cur_vs_mean_ratio__w1d",
-            "timehist__receiver__in__amount__cur_vs_mean_ratio__w7d",
-        ),
-    )
-    duplicate_count_checks = (
-        ("sender_account_id", "timehist__sender__out__tx_count__count__", "w1h", "1h"),
-        ("sender_account_id", "timehist__sender__out__tx_count__count__", "w7d", "7d"),
-        ("receiver_account_id", "timehist__receiver__in__tx_count__count__", "w1h", "1h"),
-        ("receiver_account_id", "timehist__receiver__in__tx_count__count__", "w7d", "7d"),
-    )
-
-    series_cache: dict[str, pd.Series] = {}
-
-    def get_series(column: str) -> pd.Series:
-        if column not in series_cache:
-            series_cache[column] = _numeric_validation_series(feature_frame, column)
-        return series_cache[column]
-
-    monotonic_failures: list[dict[str, Any]] = []
-    monotonic_checks = 0
-    for prefix in monotonic_prefixes:
-        existing_windows = [window for window in windows if f"{prefix}{window}" in feature_frame.columns]
-        for short_window, long_window in zip(existing_windows, existing_windows[1:]):
-            short_col = f"{prefix}{short_window}"
-            long_col = f"{prefix}{long_window}"
-            short_values = get_series(short_col)
-            long_values = get_series(long_col)
-            monotonic_tolerance = _stage0_monotonic_tolerance(
-                short_col=short_col,
-                long_col=long_col,
-                short_values=short_values,
-                long_values=long_values,
-                base_tolerance=tolerance,
-            )
-            excess = short_values - long_values - monotonic_tolerance
-            bad_mask = excess > 0
-            monotonic_checks += 1
-            if bad_mask.any():
-                first_bad_index = int(bad_mask[bad_mask].index[0])
-                monotonic_failures.append(
-                    {
-                        "short_col": short_col,
-                        "long_col": long_col,
-                        "bad_count": int(bad_mask.sum()),
-                        "first_bad_index": first_bad_index,
-                        "short_value": float(short_values.iloc[first_bad_index]),
-                        "long_value": float(long_values.iloc[first_bad_index]),
-                        "allowed_tolerance": _validation_tolerance_at(monotonic_tolerance, first_bad_index),
-                        "max_excess": float(excess.loc[bad_mask].max()),
-                    }
-                )
-    if monotonic_failures:
-        raise ValueError(
-            "Stage 0 rolling validation failed: shorter count/sum window is greater than longer window. "
-            f"failures={monotonic_failures[:10]}"
-        )
-
-    diversity_failures: list[dict[str, Any]] = []
-    diversity_checks = 0
-    if len(feature_frame) >= min_rows_for_diversity_check:
-        for short_col, long_col in diversity_pairs:
-            if short_col not in feature_frame.columns or long_col not in feature_frame.columns:
-                continue
-            short_values = get_series(short_col)
-            long_values = get_series(long_col)
-            diversity_checks += 1
-            max_abs_diff = float((short_values - long_values).abs().max())
-            has_signal = bool((short_values.abs().max() > tolerance) or (long_values.abs().max() > tolerance))
-            has_variation = bool(short_values.nunique(dropna=True) > 1 or long_values.nunique(dropna=True) > 1)
-            if max_abs_diff <= tolerance and has_signal and has_variation:
-                diversity_failures.append(
-                    {
-                        "short_col": short_col,
-                        "long_col": long_col,
-                        "max_abs_diff": max_abs_diff,
-                        "short_unique_count": int(short_values.nunique(dropna=True)),
-                        "long_unique_count": int(long_values.nunique(dropna=True)),
-                    }
-                )
-    if diversity_failures:
-        raise ValueError(
-            "Stage 0 rolling validation failed: short and long rolling windows are exact duplicates. "
-            "This usually indicates a stale notebook import or old rolling implementation. "
-            f"failures={diversity_failures[:10]}"
-        )
-
-    duplicate_timestamp_checks = 0
-    if duplicate_group_sample_size > 0 and "timestamp" in feature_frame.columns:
-        timestamps = pd.to_datetime(feature_frame["timestamp"], errors="coerce").reset_index(drop=True)
-        if timestamps.isna().any():
-            raise ValueError(
-                "Stage 0 rolling validation failed: timestamp column cannot be parsed. "
-                f"bad_count={int(timestamps.isna().sum())}"
-            )
-        for entity_col, prefix, window_suffix, window_value in duplicate_count_checks:
-            count_col = f"{prefix}{window_suffix}"
-            if entity_col not in feature_frame.columns or count_col not in feature_frame.columns:
-                continue
-            entity = feature_frame[entity_col].astype("string").str.strip().reset_index(drop=True)
-            if entity.isna().any() or (entity == "").any():
-                raise ValueError(
-                    "Stage 0 rolling validation failed: entity column has missing or blank values. "
-                    f"entity_col={entity_col!r}"
-                )
-            key_frame = pd.DataFrame({"_entity": entity, "_timestamp": timestamps})
-            duplicate_mask = key_frame.duplicated(["_entity", "_timestamp"], keep=False)
-            duplicate_keys = key_frame.loc[duplicate_mask, ["_entity", "_timestamp"]].drop_duplicates().head(
-                duplicate_group_sample_size
-            )
-            if duplicate_keys.empty:
-                continue
-            count_values = get_series(count_col)
-            window = pd.Timedelta(window_value)
-            for _, duplicate_key in duplicate_keys.iterrows():
-                entity_value = duplicate_key["_entity"]
-                timestamp_value = duplicate_key["_timestamp"]
-                same_entity = entity == entity_value
-                same_timestamp = timestamps == timestamp_value
-                group_mask = same_entity & same_timestamp
-                expected_count = int((same_entity & (timestamps >= timestamp_value - window) & (timestamps < timestamp_value)).sum())
-                observed_values = count_values.loc[group_mask].unique()
-                duplicate_timestamp_checks += 1
-                if any(abs(float(observed) - expected_count) > tolerance for observed in observed_values):
-                    raise ValueError(
-                        "Stage 0 rolling validation failed: duplicate timestamp rows were included as history. "
-                        f"entity_col={entity_col!r}, count_col={count_col!r}, entity={entity_value!r}, "
-                        f"timestamp={timestamp_value}, expected_count={expected_count}, "
-                        f"observed_values={[float(value) for value in observed_values[:10]]}"
-                    )
-
-    total_checks = monotonic_checks + diversity_checks + duplicate_timestamp_checks
-    if total_checks == 0:
-        raise ValueError(
-            "Stage 0 rolling validation could not run any check. "
-            "Confirm that Stage 0 rolling columns are present before saving artifacts."
-        )
-
-    return {
-        "rows": int(len(feature_frame)),
-        "monotonic_checks": monotonic_checks,
-        "diversity_checks": diversity_checks,
-        "duplicate_timestamp_checks": duplicate_timestamp_checks,
-        "validated_columns": sorted(series_cache),
-    }
-
-
-
 # =============================================================================
-# 3. 기존 split 컬럼 기준 단일 parquet 분할
-# =============================================================================
-# ML-01 build는 기존 split 컬럼을 검증하고 보존한다.
-# -----------------------------------------------------------------------------
-def _normalize_existing_split_values(series: pd.Series, *, source_path: Path, split_col: str) -> pd.Series:
-    """기존 split 컬럼 값을 train/val/test canonical 값으로 정규화하고 검증한다."""
-
-    if series.isna().any():
-        raise ValueError(
-            "Existing split column has missing values. "
-            f"path={source_path}, split_col={split_col!r}, missing_count={int(series.isna().sum())}"
-        )
-
-    normalized = series.astype("string").str.strip().str.lower()
-    blank_mask = normalized == ""
-    if blank_mask.any():
-        raise ValueError(
-            "Existing split column has blank values. "
-            f"path={source_path}, split_col={split_col!r}, blank_count={int(blank_mask.sum())}"
-        )
-
-    allowed = {"train", "val", "test"}
-    invalid = normalized[~normalized.isin(allowed)]
-    if not invalid.empty:
-        raise ValueError(
-            "Existing split column has unsupported values. "
-            f"path={source_path}, split_col={split_col!r}, allowed={sorted(allowed)}, "
-            f"observed_examples={sorted(invalid.unique().tolist())[:20]}"
-        )
-    return normalized
-
-
-def _existing_split_metadata_frame(
-    df: pd.DataFrame,
-    *,
-    source_path: Path,
-    tx_id_col: str,
-    timestamp_col: str,
-    label_col: str,
-    split_col: str,
-) -> pd.DataFrame:
-    """split-only 검증에 필요한 canonical metadata frame을 만든다."""
-
-    required = {tx_id_col, timestamp_col, label_col, split_col}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(
-            "Single parquet input is missing columns required for existing split export. "
-            f"path={source_path}, missing={sorted(missing)}"
-        )
-
-    tx_id = df[tx_id_col]
-    if tx_id.isna().any():
-        raise ValueError(
-            "tx_id column has missing values. "
-            f"path={source_path}, tx_id_col={tx_id_col!r}, missing_count={int(tx_id.isna().sum())}"
-        )
-
-    raw_timestamp = df[timestamp_col]
-    if raw_timestamp.isna().any():
-        raise ValueError(
-            "timestamp column has missing values. "
-            f"path={source_path}, timestamp_col={timestamp_col!r}, missing_count={int(raw_timestamp.isna().sum())}"
-        )
-    timestamp = pd.to_datetime(raw_timestamp, errors="coerce")
-    if timestamp.isna().any():
-        failed = raw_timestamp.loc[timestamp.isna()].astype(str).head(5).tolist()
-        raise ValueError(
-            "timestamp parsing failed for existing split export. "
-            f"path={source_path}, timestamp_col={timestamp_col!r}, "
-            f"failed_count={int(timestamp.isna().sum())}, example_values={failed}"
-        )
-
-    raw_label = df[label_col]
-    if raw_label.isna().any():
-        raise ValueError(
-            "label column has missing values. "
-            f"path={source_path}, label_col={label_col!r}, missing_count={int(raw_label.isna().sum())}"
-        )
-    label = pd.to_numeric(raw_label, errors="coerce")
-    if label.isna().any():
-        failed = raw_label.loc[label.isna()].astype(str).head(5).tolist()
-        raise ValueError(
-            "label parsing failed for existing split export. "
-            f"path={source_path}, label_col={label_col!r}, "
-            f"failed_count={int(label.isna().sum())}, example_values={failed}"
-        )
-    label_values = sorted(label.dropna().unique().tolist())
-    if not set(label_values).issubset({0, 1}):
-        raise ValueError(
-            "label must be binary 0/1 for existing split export. "
-            f"path={source_path}, label_col={label_col!r}, observed_values={label_values[:20]}"
-        )
-
-    metadata = pd.DataFrame(
-        {
-            "tx_id": tx_id.reset_index(drop=True),
-            "timestamp": timestamp.reset_index(drop=True),
-            "label": label.astype("int8").reset_index(drop=True),
-            "split": _normalize_existing_split_values(df[split_col], source_path=source_path, split_col=split_col).reset_index(drop=True),
-        }
-    )
-    _validate_unique_tx_ids(metadata)
-    _validate_time_split(metadata)
-    return metadata
-
-
-# =============================================================================
-# 4. 공개 feature build 진입점 (사용자 코드/노트북에서 직접 호출)
+# 5. 공개 feature build 진입점 (사용자 코드/노트북에서 직접 호출)
 # =============================================================================
 # 기본 권장 흐름은 단일 parquet 입력이다. DataFrame 입력은 smoke/debug용 보조 진입점으로 유지한다.
 # 두 진입점은 모두 최종적으로 _build_from_split_frame()으로 수렴한다.
@@ -772,9 +309,9 @@ def build_features_from_frame(
 
 
 # =============================================================================
-# 4. 내부 검증 헬퍼
+# 6. 내부 FeatureSpec/build 검증 helper
 # =============================================================================
-# 공개 진입점이 공유하는 검증 로직을 모은 섹션
+# 공개 진입점이 공유하는 검증 로직을 모은 섹션이다.
 # 모든 검증은 "조용히 통과시키지 않고 즉시 ValueError로 중단" 원칙
 # -----------------------------------------------------------------------------
 def _validate_specs_for_build(specs: Tuple[FeatureSpec, ...]) -> None:
@@ -830,21 +367,8 @@ def _validate_resolved_feature_source_columns(
     validate_no_forbidden_input_columns(resolved_columns[column] for column in feature_input_columns)
 
 
-def _validate_unique_tx_ids(df: pd.DataFrame) -> None:
-    """
-    train/val/test 전체 합본에서 tx_id가 중복되지 않는지 확인
-    """
-    # 문자열로 정규화한 뒤 중복 검사 (정수/문자열 혼합 데이터로 인한 매칭 실패 방지).
-    duplicated = df["tx_id"].astype("string").duplicated(keep=False)
-    if duplicated.any():  # 디버깅을 돕기 위해 상위 10개 예시를 함께 에러 메시지에 포함.
-        examples = df.loc[duplicated, "tx_id"].astype(str).head(10).tolist()
-        raise ValueError(
-            "Feature build failed: tx_id values are duplicated across split files. "
-            f"duplicated_count={int(duplicated.sum())}, examples={examples}"
-        )
-
 # =============================================================================
-# 5. 공통 build 본체 (공개 진입점이 최종적으로 도달하는 곳)
+# 7. 공통 build 본체 (공개 진입점이 최종적으로 도달하는 곳)
 # =============================================================================
 # _build_from_raw_frame:  split 포함 입력 → 표준화 + 기존 split 검증/보존 → _build_from_split_frame 호출
 # _build_from_split_frame: split 확정 입력 → operation 실행 + catalog 생성 + 저장
@@ -926,173 +450,41 @@ def _build_from_split_frame(
     input_mode: str,
 ) -> FeatureBuildResult:
     """
-    split 컬럼이 확정된 DataFrame에서 feature 계산과 저장을 수행
+    split 컬럼이 확정된 DataFrame에서 feature 계산과 저장을 수행한다.
 
     공식 노트북 경로는 output_dir=None으로 이 함수의 파일 저장을 건너뛰고,
     validate_stage0_rolling_outputs() 통과 후 encode_split_frame()에서 최종 parquet와
     output contract를 저장한다. output_dir이 지정된 direct-save 모드는 보조 실행 경로다.
-
-    호출 흐름의 종착점
-    ------------------
-    build_features                  ┐
-    build_features_from_frame       ├─► _build_from_raw_frame ─┐
-                                    │                          ├─► 여기
-                                    └────────────────────────────┘
-
-    처리 단계
-    ---------
-    1. FeatureSpec 확정 + 출력 경로 객체 생성
-    2. (있다면) 기존 산출물 overwrite 정책 확인
-    3. split이 확정된 frame을 다시 한 번 정렬 + invariant 재검증
-    4. FeatureSpec operation 실행 → feature_frame / feature_info / artifacts
-    5. train/val/test로 분리
-    6. catalog/요약 테이블 생성
-    7. build_summary.json 메타데이터 조립
-    8. output_dir이 있으면 모든 산출물을 디스크에 저장
     """
-    # [1] spec 확정 + 출력 경로 객체 생성.
-    # output_dir이 None이면 메모리 결과만 반환하는 모드 → output_paths도 None.
     specs = _require_feature_specs(config.feature_specs)
     _validate_resolved_feature_source_columns(specs, column_map)
     output_paths = make_output_paths(config.output_dir, config.experiment_id) if config.output_dir is not None else None
 
-    # [2] overwrite 보호: 기존 산출물이 하나라도 있으면 overwrite=False일 때 즉시 중단.
-    # output_paths가 None이면 저장하지 않으므로 이 단계도 건너뛴다.
     if output_paths is not None:
         require_no_existing_outputs(output_paths, overwrite=config.overwrite)
 
-    # [3] 정렬 + invariant 재검증.
-    # 기존 split 합본에 동일한 정렬/검증 로직을 적용해 시간 순서가 train ≤ val ≤ test인지 확인
     split_df = split_df.sort_values(["timestamp", "tx_id"], kind="mergesort").reset_index(drop=True)
     _validate_time_split(split_df)
 
-    # [4] feature 계산 실행.
-    # FeatureSpec 목록에 있는 operation만 실행
-    # run_name/experiment_id 같은 라벨은 어떤 feature가 만들어질지 결정하지 않는다 (그냥 추적용).
-    # 반환값:
-    #   feature_frame: meta(tx_id/split/label) + 생성 feature 컬럼이 합쳐진 최종 DataFrame
-    #   feature_info:  컬럼별 missing/inf/분포 통계 (사람이 검토)
-    #   artifacts:     category_mapping, category_unknown_summary 등 부가 산출물 dict
-    generated_feature_frame, feature_info, artifacts = execute_feature_specs(split_df, specs)
-    selected_feature_columns = feature_columns(specs)
-    feature_frame = _append_generated_features(split_df, generated_feature_frame, selected_feature_columns)
-
-    # [5] split 분리. _split_feature_frame은 빈 split 검사도 함께 수행.
-    train_df, val_df, test_df = _split_feature_frame(feature_frame)
-
-    # [6] catalog / 요약 테이블 생성.
-    # selected_feature_columns:    모델 입력 truth source용 컬럼 목록
-    # feature_columns_table:       feature_contract.csv (column_name + used_in_ml)
-    # feature_catalog:             feature_catalog.csv    (사람이 검토하는 설명서)
-    # split_summary:               split_summary.csv      (기간, row 수, label 분포)
-    feature_columns_table = make_feature_columns_table(specs)
-    feature_catalog = make_feature_catalog(specs, experiment_id=config.experiment_id, run_name=config.run_name)
-    split_summary = make_split_summary(split_df)
-
-    # [7] build_summary.json 메타데이터 조립.
-    # 이 dict는 "다음 작업자(또는 미래의 자신)가 이 실행을 재현할 때 필요한 모든 것"을 담는다.
-    # 입력 경로, 출력 경로, sample 여부, ratio, column_map, resolve된 컬럼, operation 목록, row count 등.
-    row_counts = {
-        "all": int(len(feature_frame)),
-        "train": int(len(train_df)),
-        "val": int(len(val_df)),
-        "test": int(len(test_df)),
-    }
-    # category_code operation이 없거나 모든 unknown이 0이어도 안전하게 0을 반환한다.
-    unknown_category_total = _unknown_category_total(artifacts.get("category_unknown_summary", pd.DataFrame()))
-
-    build_summary: dict[str, Any] = {
-        "created_at_utc": utc_now_iso(),
-        "experiment_id": config.experiment_id,
-        "run_name": config.run_name,
-        "input_mode": input_mode,     # "single_parquet_existing_split" / "dataframe_existing_split" / "split_parquet"
-        "input": input_label,         # str 또는 dict (split_paths 모드일 때 dict)
-        "output_dir": str(output_paths.output_dir) if output_paths is not None else None,
-        "sample_rows": config.sample_rows,
-        "sampled": config.sample_rows is not None,
-        "overwrite": config.overwrite,
-
-        # ML-01은 기존 split만 사용하므로 split 생성 옵션은 항상 None으로 기록.
-        # JSON에 None을 남겨두면 "여기서는 적용 안 됐다"는 사실이 명시적으로 보존된다.
-        "train_ratio": None,
-        "val_ratio": None,
-
-        "preserve_timestamp_groups": None,
-
-        # 사용자가 노트북에서 넘긴 매핑(configured)과 실제 resolve된 매핑(resolved)을 모두 기록.
-        # 둘이 다를 수 있다 (configured에 없던 logical은 COLUMN_CANDIDATES로 채워짐).
-        "configured_column_map": dict(config.column_map) if config.column_map is not None else None,
-        "resolved_columns": dict(column_map),
-        "feature_columns": selected_feature_columns,
-        "operations": [spec.operation for spec in specs],
-        "unknown_category_total": unknown_category_total,
-        "row_counts": row_counts,
-    }
-
-    # [8] 디스크 저장.
-    # 저장은 모든 검증/계산이 끝난 뒤 마지막에 한 번에 수행
-    if output_paths is not None:
-        output_paths.output_dir.mkdir(parents=True, exist_ok=True)
-
-        # 학습 입력용 train/val/test parquet.
-        save_dataframe_parquet(train_df, output_paths.train_path)
-        save_dataframe_parquet(val_df, output_paths.val_path)
-        save_dataframe_parquet(test_df, output_paths.test_path)
-
-        # 사람이 검토하는 CSV 산출물 6종.
-        save_dataframe_csv(feature_columns_table, output_paths.feature_columns_path)
-        save_dataframe_csv(feature_catalog, output_paths.feature_catalog_path)
-        save_dataframe_csv(split_summary, output_paths.split_summary_path)
-        save_dataframe_csv(feature_info, output_paths.feature_info_path)
-        save_dataframe_csv(artifacts["category_mapping"], output_paths.category_mapping_path)
-        save_dataframe_csv(artifacts["category_unknown_summary"], output_paths.category_unknown_summary_path)
-
-        # 저장이 끝난 뒤에야 outputs 섹션을 build_summary에 추가한
-        # → JSON 안의 outputs 키 존재 여부 = "디스크 저장까지 성공했는가" 판별기준
-        build_summary["outputs"] = {
-            "train_path": str(output_paths.train_path),
-            "val_path": str(output_paths.val_path),
-            "test_path": str(output_paths.test_path),
-            "feature_columns_path": str(output_paths.feature_columns_path),
-            "feature_catalog_path": str(output_paths.feature_catalog_path),
-            "split_summary_path": str(output_paths.split_summary_path),
-            "feature_info_path": str(output_paths.feature_info_path),
-            "category_mapping_path": str(output_paths.category_mapping_path),
-            "category_unknown_summary_path": str(output_paths.category_unknown_summary_path),
-        }
-        save_json(build_summary, output_paths.build_summary_path)
-
-    # [9] 메모리 결과 반환. output_dir=None인 경우에도 사용자는 이 객체로 결과를 받는다.
-    # feature_frame/feature_info는 항상 메모리에 함께 반환되므로 노트북에서 즉시 display 가능.
-    return FeatureBuildResult(
+    build_artifacts = _assemble_build_artifacts(
+        split_df,
+        specs=specs,
+        config=config,
+        column_map=column_map,
+        input_label=input_label,
+        input_mode=input_mode,
         output_paths=output_paths,
-        feature_columns=selected_feature_columns,
-        row_counts=row_counts,
-        build_summary=build_summary,
-        feature_frame=feature_frame,
-        feature_info=feature_info,
     )
 
+    result_summary = build_artifacts.build_summary
+    if output_paths is not None:
+        result_summary = _save_build_artifacts(output_paths, build_artifacts)
 
-def _unknown_category_total(unknown_summary: pd.DataFrame) -> int:
-    """
-    category_unknown_summary artifact에서 전체 unknown category 건수를 합산
-
-    용도
-    ----
-    build_summary.json의 "unknown_category_total" 필드에 들어가는 단일 정수.
-    val/test에 처음 등장한 category(=train에서 보지 못한 값)가 얼마나 많은지를 보여주는 지표.
-    0이면 안전, 크면 category 분포 shift를 의심할 신호.
-
-    빈 DataFrame 처리
-    ----------------
-    category_code spec이 하나도 없으면 unknown_summary는 빈 DataFrame이다 (header만).
-    이 경우 0을 반환하고, 컬럼명 검사 단계로 넘어가지 않는다.
-    """
-
-    if unknown_summary.empty:
-        return 0
-    # 빈 frame이 아닌데 컬럼이 없다면 ml_00_fb_operations.py의 schema가 깨진 것 → 즉시 중단.
-    if "unknown_count" not in unknown_summary.columns:
-        raise ValueError("category_unknown_summary artifact is missing unknown_count column.")
-    return int(unknown_summary["unknown_count"].sum())
+    return FeatureBuildResult(
+        output_paths=output_paths,
+        feature_columns=build_artifacts.selected_feature_columns,
+        row_counts=build_artifacts.row_counts,
+        build_summary=result_summary,
+        feature_frame=build_artifacts.feature_frame,
+        feature_info=build_artifacts.feature_info,
+    )

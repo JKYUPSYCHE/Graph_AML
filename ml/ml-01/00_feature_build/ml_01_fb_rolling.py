@@ -11,58 +11,25 @@ ML-01 Stage 0 rolling aggregation 전용 모듈.
 
 from __future__ import annotations
 
-import json
 from collections import deque
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Tuple
 
 import numpy as np
 import pandas as pd
 
 from ml_01_fb_schema import normalize_category_strict, parse_datetime_strict, parse_numeric_strict
 from ml_01_fb_specs import FeatureOpResult, FeatureSpec, validate_feature_specs
+from ml_01_fb_operation_result_validation import (
+    finalize_result as _finalize_result,
+    param_value as _param_value,
+    require_allowed_params as _require_allowed_params,
+    require_columns as _require_columns,
+    require_roles as _require_roles,
+)
 
 
 SUPPORTED_ROLLING_AGGS: Tuple[str, ...] = ("sum", "mean", "std", "min", "max", "count")
 RollingAggGroupKey = Tuple[str, str, str, str]
-
-
-def _json_dumps(payload: Mapping[str, Any]) -> str:
-    return json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, default=str)
-
-
-def _require_columns(df: pd.DataFrame, columns: Tuple[str, ...], operation: str) -> None:
-    missing = set(columns) - set(df.columns)
-    if missing:
-        raise ValueError(
-            "Feature operation failed: input DataFrame is missing required columns. "
-            f"operation={operation!r}, missing_columns={sorted(missing)}"
-        )
-
-
-def _require_roles(spec: FeatureSpec, roles: Tuple[str, ...]) -> dict[str, str]:
-    missing_roles = set(roles) - set(spec.input_cols)
-    if missing_roles:
-        raise ValueError(
-            "Feature operation failed: FeatureSpec.input_cols is missing roles. "
-            f"operation={spec.operation!r}, output_col={spec.output_col!r}, missing_roles={sorted(missing_roles)}"
-        )
-    return {role: str(spec.input_cols[role]) for role in roles}
-
-
-def _require_allowed_params(spec: FeatureSpec, allowed: Tuple[str, ...]) -> None:
-    unknown = sorted(set(spec.params) - set(allowed))
-    if unknown:
-        raise ValueError(
-            "Feature operation failed: unsupported params were provided. "
-            f"operation={spec.operation!r}, output_col={spec.output_col!r}, unknown_params={unknown}, "
-            f"allowed_params={list(allowed)}"
-        )
-
-
-def _param_value(spec: FeatureSpec, name: str, default: Any) -> Any:
-    if name in spec.params:
-        return spec.params[name]
-    return default
 
 
 def parse_window(window: Any, operation: str, output_col: str) -> pd.Timedelta:
@@ -80,106 +47,6 @@ def parse_window(window: Any, operation: str, output_col: str) -> pd.Timedelta:
             f"operation={operation!r}, output_col={output_col!r}, window={window!r}"
         )
     return parsed
-
-
-def _feature_info(
-    features: pd.DataFrame,
-    spec: FeatureSpec,
-    input_columns: Mapping[str, str],
-    params: Mapping[str, Any],
-) -> pd.DataFrame:
-    column = spec.output_col
-    if column not in features.columns:
-        raise ValueError(
-            "Feature operation failed: output column was not created. "
-            f"operation={spec.operation!r}, output_col={column!r}"
-        )
-    if len(features) == 0:
-        raise ValueError(f"Feature operation failed: output feature is empty. output_col={column!r}")
-
-    series = features[column]
-    numeric = pd.to_numeric(series, errors="coerce")
-    missing_count = int(series.isna().sum())
-    if missing_count:
-        raise ValueError(
-            "Feature operation failed: output feature contains missing values. "
-            f"operation={spec.operation!r}, output_col={column!r}, missing_count={missing_count}"
-        )
-    failed_mask = numeric.isna()
-    if failed_mask.any():
-        examples = series.loc[failed_mask].astype(str).head(5).tolist()
-        raise ValueError(
-            "Feature operation failed: output feature must be numeric. "
-            f"operation={spec.operation!r}, output_col={column!r}, examples={examples}"
-        )
-
-    values = numeric.to_numpy(dtype="float64", na_value=np.nan)
-    inf_count = int(np.isinf(values).sum())
-    if inf_count:
-        raise ValueError(
-            "Feature operation failed: output feature contains inf values. "
-            f"operation={spec.operation!r}, output_col={column!r}, inf_count={inf_count}"
-        )
-
-    quantiles = numeric.quantile([0.25, 0.5, 0.75])
-    return pd.DataFrame(
-        [
-            {
-                "column_name": column,
-                "operation": spec.operation,
-                "input_columns": _json_dumps(input_columns),
-                "params": _json_dumps(params),
-                "dtype": str(features[column].dtype),
-                "rows": int(len(features)),
-                "missing_count": missing_count,
-                "missing_rate": float(missing_count / len(features)),
-                "inf_count": inf_count,
-                "zero_count": int((numeric == 0).sum()),
-                "zero_rate": float((numeric == 0).sum() / len(features)),
-                "unique_count": int(numeric.nunique(dropna=True)),
-                "min": float(numeric.min()),
-                "p25": float(quantiles.loc[0.25]),
-                "median": float(quantiles.loc[0.5]),
-                "mean": float(numeric.mean()),
-                "p75": float(quantiles.loc[0.75]),
-                "max": float(numeric.max()),
-                "near_zero_variance": bool(numeric.nunique(dropna=True) <= 1),
-                "leakage_policy": spec.leakage_policy,
-                "computational_cost": spec.computational_cost,
-            }
-        ]
-    )
-
-
-def _finalize_result(
-    series: pd.Series,
-    spec: FeatureSpec,
-    *,
-    row_count: int,
-    input_columns: Mapping[str, str],
-    params: Mapping[str, Any],
-    dtype: str,
-    artifacts: Optional[Mapping[str, Any]] = None,
-) -> FeatureOpResult:
-    if len(series) != row_count:
-        raise ValueError(
-            "Feature operation failed: output row count mismatch. "
-            f"operation={spec.operation!r}, output_col={spec.output_col!r}, "
-            f"expected_rows={row_count}, observed_rows={len(series)}"
-        )
-
-    features = pd.DataFrame({spec.output_col: series.reset_index(drop=True)})
-    numeric = pd.to_numeric(features[spec.output_col], errors="coerce")
-    if numeric.isna().any():
-        bad_examples = features.loc[numeric.isna(), spec.output_col].astype(str).head(5).tolist()
-        raise ValueError(
-            "Feature operation failed: output cannot be converted to numeric dtype. "
-            f"operation={spec.operation!r}, output_col={spec.output_col!r}, examples={bad_examples}"
-        )
-    features[spec.output_col] = numeric.astype(dtype)
-    info = _feature_info(features, spec, input_columns=input_columns, params=params)
-    artifact_payload: Mapping[str, Any] = {} if artifacts is None else artifacts
-    return FeatureOpResult(features=features, feature_info=info, artifacts=artifact_payload)
 
 
 def _rolling_agg_spec_parts(spec: FeatureSpec) -> tuple[dict[str, str], pd.Timedelta, str, str, Any, str]:

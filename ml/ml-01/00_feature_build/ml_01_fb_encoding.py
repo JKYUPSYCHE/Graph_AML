@@ -33,6 +33,7 @@ from ml_01_fb_io import (
 )
 from ml_01_fb_schema import (
     normalize_category_strict,
+    parse_numeric_strict,
     validate_no_forbidden_feature_columns,
     validate_no_forbidden_input_columns,
 )
@@ -41,6 +42,25 @@ from ml_01_fb_schema import (
 SUPPORTED_ENCODINGS = {"passthrough", "label_code", "xgb_native"}
 SUPPORTED_BUILD_ACTIONS = {"carry_forward", "build", "encode"}
 META_COLUMNS = ("tx_id", "timestamp", "split", "label")
+UNKNOWN_CATEGORY = "__UNKNOWN__"
+FIXED_CATEGORY_DOMAINS: dict[str, list[str]] = {
+    "time__row__hour": [str(value) for value in range(24)],
+    "time__row__dayofweek": [str(value) for value in range(7)],
+    "time__row__is_weekend": ["0", "1"],
+}
+OUTPUT_PATH_FIELDS = (
+    ("all", "all_path"),
+    ("train", "train_path"),
+    ("val", "val_path"),
+    ("test", "test_path"),
+    ("feature_contract", "feature_contract_path"),
+    ("encoding_manifest", "encoding_manifest_path"),
+    ("feature_types", "feature_types_path"),
+    ("category_mapping", "category_mapping_path"),
+    ("category_unknown_summary", "category_unknown_summary_path"),
+    ("split_summary", "split_summary_path"),
+)
+SPLIT_PATH_FIELDS = (("train", "train_path"), ("val", "val_path"), ("test", "test_path"))
 
 
 @dataclass(frozen=True)
@@ -56,6 +76,7 @@ class EncodingSpec:
     encoding: str
     used_in_ml: bool = True
     build_action: str = "carry_forward"
+    xgb_feature_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -96,6 +117,77 @@ def parse_used_in_ml_value(value: Any) -> bool:
     if normalized in {"false", "0", "no", "n"}:
         return False
     raise ValueError(f"Unsupported used_in_ml value: {value!r}")
+
+
+def _numeric_passthrough_series(split_df: pd.DataFrame, spec: EncodingSpec) -> pd.Series:
+    """passthrough(q) feature가 downstream numeric 입력 계약을 만족하는지 검증한다."""
+
+    try:
+        return parse_numeric_strict(split_df, spec.source_column, spec.output_column)
+    except ValueError as exc:
+        raise ValueError(
+            "Encoding failed: passthrough feature must be numeric because xgb_feature_type='q'. "
+            f"source_column={spec.source_column!r}, output_column={spec.output_column!r}, "
+            f"encoding={spec.encoding!r}"
+        ) from exc
+
+
+def _normalize_xgb_feature_type(
+    value: Any,
+    *,
+    encoding: str,
+    used_in_ml: bool,
+    csv_row: int | None = None,
+) -> str:
+    """contract의 xgb_feature_type을 q/c/blank 중 하나로 정규화한다."""
+
+    observed = "" if pd.isna(value) else str(value).strip().lower()
+    if observed:
+        if observed not in {"q", "c"}:
+            row_context = "" if csv_row is None else f" csv_row={csv_row},"
+            raise ValueError(
+                "Unsupported xgb_feature_type. "
+                f"{row_context} xgb_feature_type={observed!r}, supported=['c', 'q']"
+            )
+        return observed
+    if not used_in_ml:
+        return ""
+    if encoding == "xgb_native":
+        return "c"
+    if encoding in {"label_code", "passthrough"}:
+        return "q"
+    return ""
+
+
+def _passthrough_series(split_df: pd.DataFrame, spec: EncodingSpec) -> pd.Series:
+    """passthrough 컬럼을 contract의 xgb_feature_type 정책에 맞춰 materialize한다."""
+
+    if spec.xgb_feature_type == "q":
+        return _numeric_passthrough_series(split_df, spec)
+    return split_df[spec.source_column]
+
+
+def _output_paths_by_name(paths: EncodingOutputPaths) -> dict[str, Path]:
+    return {name: getattr(paths, field_name) for name, field_name in OUTPUT_PATH_FIELDS}
+
+
+def _duplicated_names(names: list[str]) -> list[str]:
+    return sorted({name for name in names if names.count(name) > 1})
+
+
+def _category_mapping_row(spec: EncodingSpec, category: str, encoded_value: int | None) -> dict[str, Any]:
+    return {
+        "feature_column": spec.output_column,
+        "source_column": spec.source_column,
+        "category_value": category,
+        "encoded_value": encoded_value,
+        "encoding": spec.encoding,
+        "fit_split": "train",
+    }
+
+
+def _categories_with_unknown(categories: list[str]) -> list[str]:
+    return [*categories, UNKNOWN_CATEGORY]
 
 
 def load_encoding_specs(path: Union[str, Path]) -> list[EncodingSpec]:
@@ -167,6 +259,13 @@ def load_encoding_specs(path: Union[str, Path]) -> list[EncodingSpec]:
                 "Unsupported encoding. "
                 f"csv_row={row_number + 2}, encoding={encoding!r}, supported={sorted(SUPPORTED_ENCODINGS)}"
             )
+        raw_xgb_feature_type = row["xgb_feature_type"] if "xgb_feature_type" in table.columns else ""
+        xgb_feature_type = _normalize_xgb_feature_type(
+            raw_xgb_feature_type,
+            encoding=encoding,
+            used_in_ml=used_in_ml,
+            csv_row=row_number + 2,
+        )
         if build_action == "encode" and encoding == "passthrough":
             raise ValueError(f"Encode row must not use passthrough encoding. csv_row={row_number + 2}")
         specs.append(
@@ -176,6 +275,7 @@ def load_encoding_specs(path: Union[str, Path]) -> list[EncodingSpec]:
                 encoding=encoding,
                 used_in_ml=used_in_ml,
                 build_action=build_action,
+                xgb_feature_type=xgb_feature_type,
             )
         )
     return specs
@@ -206,19 +306,7 @@ def make_encoding_output_paths(output_dir: Union[str, Path], artifact_prefix: st
 def require_no_existing_encoding_outputs(paths: EncodingOutputPaths, overwrite: bool) -> None:
     """encoding 산출물이 이미 있으면 overwrite=False일 때 중단한다."""
 
-    protected_outputs = [
-        paths.all_path,
-        paths.train_path,
-        paths.val_path,
-        paths.test_path,
-        paths.feature_contract_path,
-        paths.encoding_manifest_path,
-        paths.feature_types_path,
-        paths.category_mapping_path,
-        paths.category_unknown_summary_path,
-        paths.split_summary_path,
-    ]
-    existing = [str(path) for path in protected_outputs if path.exists()]
+    existing = [str(path) for path in _output_paths_by_name(paths).values() if path.exists()]
     if existing and not overwrite:
         raise FileExistsError(
             "Existing encoding artifacts found. Set overwrite=True or change RUN_ID. "
@@ -240,19 +328,7 @@ def validate_encoding_outputs(
     """
 
     # 저장 완료 여부를 먼저 확인한다. 파일이 누락된 상태에서 schema 검증을 계속하면 원인 추적이 어려워진다.
-    required_files = {
-        "all": paths.all_path,
-        "train": paths.train_path,
-        "val": paths.val_path,
-        "test": paths.test_path,
-        "feature_contract": paths.feature_contract_path,
-        "encoding_manifest": paths.encoding_manifest_path,
-        "feature_types": paths.feature_types_path,
-        "category_mapping": paths.category_mapping_path,
-        "category_unknown_summary": paths.category_unknown_summary_path,
-        "split_summary": paths.split_summary_path,
-    }
-    missing_files = {name: str(path) for name, path in required_files.items() if not path.is_file()}
+    missing_files = {name: str(path) for name, path in _output_paths_by_name(paths).items() if not path.is_file()}
     if missing_files:
         raise FileNotFoundError(f"encoding export did not create required files: {missing_files}")
 
@@ -262,10 +338,10 @@ def validate_encoding_outputs(
         raise ValueError("encoding export produced no feature columns.")
     if not materialized_columns:
         raise ValueError("encoding export produced no materialized columns.")
-    duplicated = sorted({column for column in feature_columns if feature_columns.count(column) > 1})
+    duplicated = _duplicated_names(feature_columns)
     if duplicated:
         raise ValueError(f"encoding export produced duplicated feature columns: {duplicated}")
-    duplicated_materialized = sorted({column for column in materialized_columns if materialized_columns.count(column) > 1})
+    duplicated_materialized = _duplicated_names(materialized_columns)
     if duplicated_materialized:
         raise ValueError(f"encoding export produced duplicated materialized columns: {duplicated_materialized}")
     validate_no_forbidden_feature_columns(feature_columns)
@@ -286,11 +362,8 @@ def validate_encoding_outputs(
         )
     all_types = parquet_schema_types(paths.all_path)
     split_row_total = 0
-    for split_name, split_path in {
-        "train": paths.train_path,
-        "val": paths.val_path,
-        "test": paths.test_path,
-    }.items():
+    for split_name, split_field in SPLIT_PATH_FIELDS:
+        split_path = getattr(paths, split_field)
         split_columns_ordered = parquet_columns(split_path)
         missing_columns = sorted(expected_columns - set(split_columns_ordered))
         if missing_columns:
@@ -358,7 +431,23 @@ def validate_encoding_outputs(
 def _normalize_specs(specs: Iterable[EncodingSpec]) -> list[EncodingSpec]:
     """encoding spec 목록을 list로 고정하고 기본 무결성을 확인한다."""
 
-    normalized = list(specs)
+    normalized: list[EncodingSpec] = []
+    for spec in specs:
+        normalized_xgb_feature_type = _normalize_xgb_feature_type(
+            spec.xgb_feature_type,
+            encoding=spec.encoding,
+            used_in_ml=spec.used_in_ml,
+        )
+        normalized.append(
+            EncodingSpec(
+                source_column=str(spec.source_column).strip(),
+                output_column=str(spec.output_column).strip(),
+                encoding=str(spec.encoding).strip().lower(),
+                used_in_ml=spec.used_in_ml,
+                build_action=str(spec.build_action).strip().lower(),
+                xgb_feature_type=normalized_xgb_feature_type,
+            )
+        )
     if not normalized:
         raise ValueError("No encoding specs. At least one contract row is required.")
 
@@ -432,6 +521,28 @@ def _split_indexed_category(series: pd.Series, split_values: pd.Series, source_c
     )
 
 
+def _fit_categories(normalized: pd.Series, source_column: str) -> list[str]:
+    """category 목록을 정한다.
+
+    일반 category는 split contamination을 막기 위해 train split에서만 fit한다.
+    시간 calendar category는 가능한 값의 domain이 사전에 닫혀 있으므로 fixed domain을 사용한다.
+    """
+
+    fixed_categories = FIXED_CATEGORY_DOMAINS.get(source_column)
+    if fixed_categories is None:
+        train_values = normalized.loc["train"]
+        return sorted(train_values.unique().tolist())
+
+    observed_values = set(normalized.tolist())
+    invalid_values = sorted(observed_values - set(fixed_categories))
+    if invalid_values:
+        raise ValueError(
+            "Fixed-domain categorical feature contains values outside allowed domain. "
+            f"source_column={source_column!r}, values={invalid_values[:10]}"
+        )
+    return list(fixed_categories)
+
+
 def encode_split_frame(
     split_df: pd.DataFrame,
     specs: Iterable[EncodingSpec],
@@ -450,6 +561,7 @@ def encode_split_frame(
 
     split_df = split_df.reset_index(drop=True).copy()
     materialized_specs = _normalize_specs(specs)
+    specs_by_output = {spec.output_column: spec for spec in materialized_specs}
     required_columns = set(META_COLUMNS) | {spec.source_column for spec in materialized_specs}
     missing = required_columns - set(split_df.columns)
     if missing:
@@ -463,8 +575,6 @@ def encode_split_frame(
     feature_columns: list[str] = []
     materialized_columns: list[str] = []
     feature_types: dict[str, str] = {}
-    materialized_feature_types: dict[str, str] = {}
-    feature_spec_metadata: dict[str, dict[str, str]] = {}
     category_values: dict[str, list[str]] = {}
     mapping_rows: list[dict[str, Any]] = []
     unknown_rows: list[dict[str, Any]] = []
@@ -478,11 +588,6 @@ def encode_split_frame(
     def record_materialized_output(spec: EncodingSpec, xgb_feature_type: str) -> None:
         # materialized_columns는 parquet 저장 대상 전체이고, feature_columns는 used_in_ml=True인 모델 입력 후보만 담는다.
         materialized_columns.append(spec.output_column)
-        materialized_feature_types[spec.output_column] = xgb_feature_type
-        feature_spec_metadata[spec.output_column] = {
-            "source_column": spec.source_column,
-            "encoding": spec.encoding,
-        }
         if spec.used_in_ml:
             feature_columns.append(spec.output_column)
             feature_types[spec.output_column] = xgb_feature_type
@@ -490,20 +595,17 @@ def encode_split_frame(
     for spec in materialized_specs:
         source = split_df[spec.source_column]
 
-        if spec.encoding == "passthrough":
-            # passthrough는 numeric/current_build 컬럼을 그대로 내보낸다. XGBoost feature type은 quantitative(q)로 둔다.
-            feature_frame[spec.output_column] = source
-            record_materialized_output(spec, "q")
+        if spec.encoding == "passthrough" and spec.xgb_feature_type != "c":
+            feature_frame[spec.output_column] = _passthrough_series(split_df, spec)
+            record_materialized_output(spec, spec.xgb_feature_type)
             continue
 
         # label_code/xgb_native는 모두 train category 목록으로 fit한다.
         # train에 없는 val/test 값은 label_code=-1 또는 xgb_native missing category로 남기고 summary에 기록한다.
         normalized = _split_indexed_category(source, split_df["split"], spec.source_column)
-        train_values = normalized.loc["train"]
-        categories = sorted(train_values.unique().tolist())
+        categories = _fit_categories(normalized, spec.source_column)
         if not categories:
             raise ValueError(f"train split has no category values. source_column={spec.source_column!r}")
-        category_values[spec.output_column] = categories
         unknown_rows.extend(
             _unknown_rows(
                 output_column=spec.output_column,
@@ -516,55 +618,40 @@ def encode_split_frame(
 
         if spec.encoding == "label_code":
             # label_code는 XGBoost에는 numeric(q) feature로 전달된다. unknown category는 -1 sentinel로 둔다.
+            category_values[spec.output_column] = categories
             mapping = {category: code for code, category in enumerate(categories)}
             feature_frame[spec.output_column] = normalized.reset_index(level="split", drop=True).map(mapping).fillna(-1).astype("int32")
             record_materialized_output(spec, "q")
             for category, code in mapping.items():
-                mapping_rows.append(
-                    {
-                        "feature_column": spec.output_column,
-                        "source_column": spec.source_column,
-                        "category_value": category,
-                        "encoded_value": int(code),
-                        "encoding": spec.encoding,
-                        "fit_split": "train",
-                    }
-                )
+                mapping_rows.append(_category_mapping_row(spec, category, int(code)))
             continue
 
-        if spec.encoding == "xgb_native":
+        if spec.encoding == "xgb_native" or spec.xgb_feature_type == "c":
             # xgb_native는 pandas Categorical dtype으로 저장하고 XGBoost feature type을 categorical(c)로 기록한다.
+            categories_with_unknown = _categories_with_unknown(categories)
             values = normalized.reset_index(level="split", drop=True)
-            feature_frame[spec.output_column] = pd.Categorical(values.where(values.isin(categories)), categories=categories)
+            mapped_values = values.where(values.isna() | values.isin(categories), UNKNOWN_CATEGORY)
+            category_values[spec.output_column] = categories_with_unknown
+            feature_frame[spec.output_column] = pd.Categorical(mapped_values, categories=categories_with_unknown)
             record_materialized_output(spec, "c")
-            for category in categories:
-                mapping_rows.append(
-                    {
-                        "feature_column": spec.output_column,
-                        "source_column": spec.source_column,
-                        "category_value": category,
-                        "encoded_value": None,
-                        "encoding": spec.encoding,
-                        "fit_split": "train",
-                    }
-                )
+            for category in categories_with_unknown:
+                mapping_rows.append(_category_mapping_row(spec, category, None))
             continue
 
         raise ValueError(f"Unsupported encoding: {spec.encoding!r}")
 
     validate_no_forbidden_feature_columns(feature_columns)
-    duplicated_features = sorted({column for column in feature_columns if feature_columns.count(column) > 1})
+    duplicated_features = _duplicated_names(feature_columns)
     if duplicated_features:
         raise ValueError(f"Encoded feature columns are duplicated: {duplicated_features}")
-    duplicated_materialized = sorted({column for column in materialized_columns if materialized_columns.count(column) > 1})
+    duplicated_materialized = _duplicated_names(materialized_columns)
     if duplicated_materialized:
         raise ValueError(f"Materialized output columns are duplicated: {duplicated_materialized}")
 
     # split별 parquet는 Xy_all과 컬럼 순서/dtype이 같아야 한다. 저장 전에 메모리에서 먼저 확인한다.
     all_df = feature_frame.reset_index(drop=True)
-    train_df = all_df.loc[all_df["split"] == "train"].reset_index(drop=True)
-    val_df = all_df.loc[all_df["split"] == "val"].reset_index(drop=True)
-    test_df = all_df.loc[all_df["split"] == "test"].reset_index(drop=True)
+    split_frames = {split: all_df.loc[all_df["split"] == split].reset_index(drop=True) for split, _field in SPLIT_PATH_FIELDS}
+    train_df, val_df, test_df = split_frames["train"], split_frames["val"], split_frames["test"]
     if train_df.empty or val_df.empty or test_df.empty:
         raise ValueError(
             "encoded split output must not be empty. "
@@ -572,11 +659,7 @@ def encode_split_frame(
         )
     reference_columns = list(all_df.columns)
     reference_dtypes = {column: str(all_df[column].dtype) for column in reference_columns}
-    for split_name, split_frame in {
-        "train": train_df,
-        "val": val_df,
-        "test": test_df,
-    }.items():
+    for split_name, split_frame in split_frames.items():
         if list(split_frame.columns) != reference_columns:
             raise ValueError(f"{split_name} columns do not match Xy_all columns.")
         dtype_mismatch = {
@@ -597,11 +680,11 @@ def encode_split_frame(
                 {
                     "column_name": column,
                     "used_in_ml": "TRUE" if feature_spec.used_in_ml else "FALSE",
-                    "source_column": feature_spec_metadata[column]["source_column"],
-                    "encoding": feature_spec_metadata[column]["encoding"],
+                    "source_column": feature_spec.source_column,
+                    "encoding": feature_spec.encoding,
                     "feature_group": "encoded",
                     "dtype": str(feature_frame[column].dtype),
-                    "xgb_feature_type": materialized_feature_types[column] if feature_spec.used_in_ml else "",
+                    "xgb_feature_type": feature_spec.xgb_feature_type if feature_spec.used_in_ml else "",
                     "materialized": "TRUE",
                 }
                 for feature_spec in materialized_specs
@@ -614,21 +697,17 @@ def encode_split_frame(
         feature_columns_table["used_in_ml"] = feature_columns_table["used_in_ml"].map(
             lambda value: "TRUE" if parse_used_in_ml_value(value) else "FALSE"
         )
-        if "dtype" not in feature_columns_table.columns:
-            feature_columns_table["dtype"] = ""
-        if "xgb_feature_type" not in feature_columns_table.columns:
-            feature_columns_table["xgb_feature_type"] = ""
-        if "materialized" not in feature_columns_table.columns:
-            feature_columns_table["materialized"] = ""
-        if "observed_dtype" not in feature_columns_table.columns:
-            feature_columns_table["observed_dtype"] = ""
+        for column in ("dtype", "xgb_feature_type", "materialized", "observed_dtype"):
+            if column not in feature_columns_table.columns:
+                feature_columns_table[column] = ""
 
         for column in materialized_columns:
+            spec = specs_by_output[column]
             matched = feature_columns_table["column_name"].astype(str).str.strip() == column
             if not matched.any():
                 raise ValueError(f"materialized column is missing from output contract table: {column}")
-            feature_columns_table.loc[matched, "source_column"] = feature_spec_metadata[column]["source_column"]
-            feature_columns_table.loc[matched, "encoding"] = feature_spec_metadata[column]["encoding"]
+            feature_columns_table.loc[matched, "source_column"] = spec.source_column
+            feature_columns_table.loc[matched, "encoding"] = spec.encoding
             feature_columns_table.loc[matched, "dtype"] = str(feature_frame[column].dtype)
             feature_columns_table.loc[matched, "observed_dtype"] = str(feature_frame[column].dtype)
             feature_columns_table.loc[matched, "materialized"] = "TRUE"
@@ -657,33 +736,29 @@ def encode_split_frame(
         "feature_types": feature_types,
         "categorical_columns": [column for column in feature_columns if feature_types[column] == "c"],
         "category_values": category_values,
+        "unknown_category_policy": {
+            "sentinel": UNKNOWN_CATEGORY,
+            "applies_to": "xgb_native",
+            "fit_split": "train",
+        },
         "encoding_specs": [spec.__dict__ for spec in materialized_specs],
         "row_counts": row_counts,
-        "outputs": {
-            "all_path": str(paths.all_path),
-            "train_path": str(paths.train_path),
-            "val_path": str(paths.val_path),
-            "test_path": str(paths.test_path),
-            "feature_contract_path": str(paths.feature_contract_path),
-            "encoding_manifest_path": str(paths.encoding_manifest_path),
-            "feature_types_path": str(paths.feature_types_path),
-            "category_mapping_path": str(paths.category_mapping_path),
-            "category_unknown_summary_path": str(paths.category_unknown_summary_path),
-            "split_summary_path": str(paths.split_summary_path),
-        },
+        "outputs": {field: str(getattr(paths, field)) for _name, field in OUTPUT_PATH_FIELDS},
     }
 
     paths.output_dir.mkdir(parents=True, exist_ok=True)
     save_dataframe_parquet(all_df, paths.all_path)
-    save_dataframe_parquet(train_df, paths.train_path)
-    save_dataframe_parquet(val_df, paths.val_path)
-    save_dataframe_parquet(test_df, paths.test_path)
-    save_dataframe_csv(feature_columns_table, paths.feature_contract_path)
-    save_dataframe_csv(mapping_frame, paths.category_mapping_path)
-    save_dataframe_csv(unknown_frame, paths.category_unknown_summary_path)
-    save_dataframe_csv(split_summary, paths.split_summary_path)
-    save_json({"feature_types": feature_types}, paths.feature_types_path)
-    save_json(manifest, paths.encoding_manifest_path)
+    for split_name, split_field in SPLIT_PATH_FIELDS:
+        save_dataframe_parquet(split_frames[split_name], getattr(paths, split_field))
+    for frame, path in (
+        (feature_columns_table, paths.feature_contract_path),
+        (mapping_frame, paths.category_mapping_path),
+        (unknown_frame, paths.category_unknown_summary_path),
+        (split_summary, paths.split_summary_path),
+    ):
+        save_dataframe_csv(frame, path)
+    for payload, path in (({"feature_types": feature_types}, paths.feature_types_path), (manifest, paths.encoding_manifest_path)):
+        save_json(payload, path)
     validate_encoding_outputs(
         paths,
         feature_columns=feature_columns,

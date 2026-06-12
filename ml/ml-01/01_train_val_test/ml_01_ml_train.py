@@ -48,6 +48,7 @@ from typing import Any
 from uuid import uuid4
 
 import joblib
+from ml_01_cpugpu import XGBAccelerationConfig, resolve_xgb_acceleration
 from ml_01_ml_utils import set_seed
 
 # ml_00_ml_io는 이전 단계에서 만든 입출력/검증 유틸리티 모듈이다. 이 학습 모듈은 parquet를 직접 읽지 않고, load_split()에 위임한다.
@@ -141,6 +142,7 @@ class XGBTrainConfig:
     gamma: float = 0.0                      # 추가 split을 만들기 위한 최소 손실 감소량.
     early_stopping_rounds: int = 30         # validation AUPRC 개선이 멈췄을 때 학습을 중단하는 기준.
     n_jobs: int = -1                        # -1은 사용 가능한 모든 코어 사용.
+    accelerator: str = "auto"               # auto/cpu/cuda. 실제 XGBoost tree_method는 ml_01_cpugpu에서 중앙 관리.
     encoding_manifest_path: Path | str | None = None  # native categorical dtype 복원용 manifest. None이면 기존 numeric-only 흐름.
 
 
@@ -325,7 +327,12 @@ def get_xgb_classifier_class() -> type[Any]:
     return XGBClassifier # 호출부에서는 이 클래스를 받아 XGBClassifier(...) 형태로 실제 모델 객체 생성
 
 
-def build_xgb_model(config: XGBTrainConfig, scale_pos_weight: float, enable_categorical: bool = False) -> Any:
+def build_xgb_model(
+    config: XGBTrainConfig,
+    scale_pos_weight: float,
+    acceleration: XGBAccelerationConfig,
+    enable_categorical: bool = False,
+) -> Any:
     """
     XGBClassifier 모델 객체를 생성하고 학습 설정을 적용한다.
     매개변수
@@ -336,7 +343,7 @@ def build_xgb_model(config: XGBTrainConfig, scale_pos_weight: float, enable_cate
     --------------
     - objective="binary:logistic": 0/1 이진분류 확률 출력
     - eval_metric="aucpr": 불균형 데이터에서 ROC AUC보다 positive class 탐지 성능 변화를 더 민감하게 보기 위한 PR AUC 사용
-    - tree_method="hist": 대용량 tabular 데이터에서 빠른 histogram 기반 학습 사용
+    - tree_method/predictor: ml_01_cpugpu에서 CPU/GPU 정책에 맞춰 결정
     - early_stopping_rounds: validation 성능이 개선되지 않으면 불필요한 tree 추가 중단
     코드 주의점
     -----------
@@ -347,11 +354,13 @@ def build_xgb_model(config: XGBTrainConfig, scale_pos_weight: float, enable_cate
     # xgboost.XGBClassifier 클래스를 호출한다. get_xgb_classifier_class() 내부에서 xgboost 설치 여부도 함께 확인한다.
     XGBClassifier = get_xgb_classifier_class()
 
+    # CPU/GPU별 XGBoost 파라미터는 ml_01_cpugpu에서만 결정한다.
+    acceleration_params = dict(acceleration.xgb_params)
+
     # 아래 객체는 하이퍼파라미터와 학습 정책이 설정된 모델 인스턴스다.
     return XGBClassifier(
         objective="binary:logistic",              # 이진분류용 objective. predict_proba로 label=1 확률을 얻는 후속 흐름에 사용 가능.
         eval_metric=["logloss", "aucpr"],         # logloss curve를 기록하고, 마지막 metric인 AUPRC로 early stopping을 유지한다.
-        tree_method="hist",                       # 대용량 tabular 데이터에서 빠른 histogram 기반 학습 사용.
         n_estimators=config.n_estimators,         # 만들 tree 개수의 최대값. early stopping이 있으면 실제 best_iteration은 더 작을 수 있다.
         max_depth=config.max_depth,               # 각 tree의 최대 깊이. 과적합과 표현력에 영향.
         learning_rate=config.learning_rate,       # 각 boosting step 반영 비율.
@@ -366,6 +375,7 @@ def build_xgb_model(config: XGBTrainConfig, scale_pos_weight: float, enable_cate
         n_jobs=config.n_jobs,                     # 병렬 학습에 사용할 CPU worker 수.
         early_stopping_rounds=config.early_stopping_rounds,
         enable_categorical=enable_categorical,
+        **acceleration_params,
     )
 
 
@@ -481,9 +491,11 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
         with runtime_tracker.measure("build_model"):              # 모델 생성 전 필요한 파생값을 만든다.
             features_hash = feature_columns_hash(feature_columns) # feature 순서까지 반영한 hash다.
             scale_pos_weight = compute_scale_pos_weight(y_train)
+            acceleration = resolve_xgb_acceleration(config.accelerator)
             model = build_xgb_model(
                 config,
                 scale_pos_weight=scale_pos_weight,
+                acceleration=acceleration,
                 enable_categorical=bool(categorical_feature_columns),
             )
 
@@ -722,10 +734,13 @@ def train_xgb(config: XGBTrainConfig) -> XGBTrainResult:
             "reg_alpha": config.reg_alpha,
             "gamma": config.gamma,
             "early_stopping_rounds": config.early_stopping_rounds,
-            "tree_method": "hist",
+            "tree_method": acceleration.xgb_params.get("tree_method"),
+            "predictor": acceleration.xgb_params.get("predictor"),
             "eval_metric": ["logloss", "aucpr"],
             "enable_categorical": bool(categorical_feature_columns),
         },
+
+        "xgboost_acceleration": acceleration.as_summary(),
 
         # fit 단계 소요 시간이다. 기존 필드명을 유지한다.
         "training_time_sec": float(training_time_sec),
