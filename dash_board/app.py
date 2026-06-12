@@ -468,7 +468,10 @@ def _exp_label(rep: dict, is_rep: bool = False) -> str:
     folder = _woe_iv_folder_name(rep["ml_folder"]).upper()
     if is_rep:
         desc = rep.get("description", "")
-        return f"* {folder}{(' — ' + desc) if desc else ''}"
+        run_id = rep.get("run_id", "")
+        model_run_id = rep.get("model_run_id", "")
+        suffix = f" — {run_id}{model_run_id}" if (run_id or model_run_id) else ""
+        return f"* {folder}{suffix}{(' (' + desc + ')') if desc else ''}"
     run_id = rep.get("run_id", "")
     model_run_id = rep.get("model_run_id", "")
     return f"   {folder} — {run_id}{model_run_id}"
@@ -765,7 +768,9 @@ def _gnn_exp_label(rep: dict, is_rep: bool = False) -> str:
     folder = rep.get("folder", "")
     if is_rep:
         desc = rep.get("description", "")
-        return f"* {folder}{(' — ' + desc) if desc else ''}"
+        run_id = rep.get("run_id", "")
+        suffix = f" — {run_id}" if run_id else ""
+        return f"* {folder}{suffix}{(' (' + desc + ')') if desc else ''}"
     return f"   {folder} — {rep['run_id']}"
 
 
@@ -1228,14 +1233,17 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
     from concurrent.futures import ThreadPoolExecutor
 
     gnn_id = _get_folder_id(project_folder_id, "gnn") if project_folder_id else ""
+    _dbg = {"gnn_id": bool(gnn_id)}
     if not gnn_id:
-        return {"rep": rep, "d": {}, "_loaded": True}
+        return {"rep": rep, "d": {}, "_loaded": True, "_gnn_debug": _dbg}
     exp_id = _get_folder_id(gnn_id, rep["folder"])
+    _dbg["exp_id"] = bool(exp_id)
     if not exp_id:
-        return {"rep": rep, "d": {}, "_loaded": True}
+        return {"rep": rep, "d": {}, "_loaded": True, "_gnn_debug": _dbg}
     run_fid = _get_folder_id(exp_id, rep["run_id"])
+    _dbg["run_fid"] = bool(run_fid)
     if not run_fid:
-        return {"rep": rep, "d": {}, "_loaded": True}
+        return {"rep": rep, "d": {}, "_loaded": True, "_gnn_debug": _dbg}
 
     # 하위 폴더 ID 병렬 조회
     with ThreadPoolExecutor(max_workers=3) as ex:
@@ -1245,19 +1253,7 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
         logs_id   = f_logs.result()
         models_id = f_models.result()
         fi_dir_id = f_fi_dir.result()
-
-    def _fetch_log():
-        if not logs_id:
-            return None
-        lf      = _list_files(logs_id)
-        log_fns = [n for n in lf if n.endswith(".log")]
-        if not log_fns:
-            return None
-        r = requests.get(
-            f"https://drive.google.com/uc?export=download&id={lf[log_fns[0]]}",
-            timeout=60,
-        )
-        return _parse_gnn_log(r.text) if r.ok else None
+    _dbg["logs_id"] = bool(logs_id)
 
     def _fetch_args():
         if not models_id:
@@ -1265,6 +1261,30 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
         mf       = _list_files(models_id)
         args_fns = [n for n in mf if n.endswith("_args.json")]
         return _download_json(mf[args_fns[0]]) if args_fns else None
+
+    # args를 먼저 로드해서 unique_name으로 정확한 로그 파일 특정
+    args_data = _fetch_args()
+    unique_name = (args_data or {}).get("unique_name", "") if args_data else ""
+
+    def _fetch_log():
+        if not logs_id:
+            return None, "logs 폴더 없음"
+        lf      = _list_files(logs_id)
+        log_fns = [n for n in lf if n.endswith(".log")]
+        if not log_fns:
+            return None, f"logs/ 안 파일 목록: {list(lf.keys())}"
+        # unique_name으로 특정 로그 파일 선택, 없으면 첫 번째
+        target = f"{unique_name}.log" if unique_name else ""
+        fn = target if target in lf else log_fns[0]
+        r = requests.get(
+            f"https://drive.google.com/uc?export=download&id={lf[fn]}",
+            timeout=60,
+        )
+        if not r.ok:
+            return None, f"다운로드 실패 {r.status_code}: {fn}"
+        result = _parse_gnn_log(r.content.decode("utf-8", errors="replace"))
+        epochs = result.get("epochs", []) if result else []
+        return result, f"OK — {fn} ({len(epochs)} epochs)"
 
     def _fetch_fi():
         if not fi_dir_id:
@@ -1278,13 +1298,12 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
         fi_indiv = _download_csv(fi_files[fi_indiv_fns[0]]) if fi_indiv_fns else None
         return fi, fi_indiv
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    with ThreadPoolExecutor(max_workers=2) as ex:
         f_parsed = ex.submit(_fetch_log)
-        f_args   = ex.submit(_fetch_args)
         f_fi_res = ex.submit(_fetch_fi)
-        parsed       = f_parsed.result()
-        args_data    = f_args.result()
-        fi, fi_indiv = f_fi_res.result()
+        parsed, _log_msg = f_parsed.result()
+        fi, fi_indiv     = f_fi_res.result()
+    _dbg["log_msg"] = _log_msg
 
     out: dict = {}
     if parsed   is not None: out["parsed"]                        = parsed
@@ -1292,7 +1311,7 @@ def _compute_gnn_exp_data(rep: dict, project_folder_id: str) -> dict:
     if fi        is not None: out["feature_importance"]           = fi
     if fi_indiv  is not None: out["feature_importance_individual"] = fi_indiv
 
-    return {"rep": rep, "d": out, "_loaded": True}
+    return {"rep": rep, "d": out, "_loaded": True, "_gnn_debug": _dbg}
 
 
 def _load_exp_data(label: str) -> None:
@@ -1380,6 +1399,7 @@ _ml_fp       = tuple((r["ml_folder"], r["run_id"], r["prefix"])    for r in all_
 _rp_fp       = tuple((r["ml_folder"], _artifact_prefix(r))         for r in valid_reps)
 _combined_fp = (_ml_fp, _rp_fp)
 if st.session_state.get("_exp_data_fp") != _combined_fp:
+    st.cache_data.clear()
     _exp_init: dict[str, dict] = {}
     for _run in all_ml_runs:
         _parts  = _run["prefix"].split("__", 2)
@@ -1420,6 +1440,8 @@ _gnn_fp       = tuple((r["folder"], r["run_id"]) for r in all_gnn_runs)
 _grp_fp       = tuple((r["folder"], r["run_id"]) for r in gnn_reps)
 _combined_gfp = (_gnn_fp, _grp_fp)
 if st.session_state.get("_gnn_exp_data_fp") != _combined_gfp:
+    # 새 실험 감지 시 파일 목록 캐시 초기화 (stale _list_files 방지)
+    st.cache_data.clear()
     _gnn_init: dict[str, dict] = {}
     for _run in all_gnn_runs:
         _rep_e  = _gnn_rep_map.get((_run["folder"], _run["run_id"]))
@@ -1432,24 +1454,37 @@ if st.session_state.get("_gnn_exp_data_fp") != _combined_gfp:
 
 gnn_exp_data: dict[str, dict] = st.session_state.get("gnn_exp_data", {})
 
-# ── Ongoing 실험 마킹 (대표보다 높은 넘버링의 최신 비대표 실험) ──────────────
-_max_rep_ml_n  = max((_ml_folder_num(d["rep"]["ml_folder"])  for d in exp_data.values()     if d.get("is_rep")), default=-1)
-_max_all_ml_n  = max((_ml_folder_num(d["rep"]["ml_folder"])  for d in exp_data.values()),     default=-1)
-_max_rep_gnn_n = max((_gnn_folder_num(d["rep"]["folder"])    for d in gnn_exp_data.values() if d.get("is_rep")), default=-1)
-_max_all_gnn_n = max((_gnn_folder_num(d["rep"]["folder"])    for d in gnn_exp_data.values()), default=-1)
+# ── Ongoing 실험 마킹 (대표 미지정 실험 넘버별 최신 run) ──────────────────────
+# 대표 실험이 지정된 ml_folder 집합
+_rep_ml_folders  = {_woe_iv_folder_name(d["rep"]["ml_folder"]) for d in exp_data.values()     if d.get("is_rep")}
+_rep_gnn_folders = {d["rep"]["folder"]                          for d in gnn_exp_data.values() if d.get("is_rep")}
 
-for _d in exp_data.values():
-    _d["is_ongoing"] = (
-        not _d.get("is_rep") and
-        _max_all_ml_n > _max_rep_ml_n and
-        _ml_folder_num(_d["rep"]["ml_folder"]) == _max_all_ml_n
-    )
-for _d in gnn_exp_data.values():
-    _d["is_ongoing"] = (
-        not _d.get("is_rep") and
-        _max_all_gnn_n > _max_rep_gnn_n and
-        _gnn_folder_num(_d["rep"]["folder"]) == _max_all_gnn_n
-    )
+# 대표 미지정 폴더별로 가장 마지막 run을 ongoing으로 마킹
+_ml_ongoing_set: set[str] = set()
+_ml_by_folder: dict[str, list] = {}
+for lbl, _d in exp_data.items():
+    if not _d.get("is_rep"):
+        folder = _woe_iv_folder_name(_d["rep"]["ml_folder"])
+        if folder not in _rep_ml_folders:
+            _ml_by_folder.setdefault(folder, []).append(lbl)
+for folder, lbls in _ml_by_folder.items():
+    latest = sorted(lbls, key=lambda l: (exp_data[l]["rep"].get("run_id",""), exp_data[l]["rep"].get("model_run_id","")))[-1]
+    _ml_ongoing_set.add(latest)
+for lbl, _d in exp_data.items():
+    _d["is_ongoing"] = (lbl in _ml_ongoing_set)
+
+_gnn_ongoing_set: set[str] = set()
+_gnn_by_folder: dict[str, list] = {}
+for lbl, _d in gnn_exp_data.items():
+    if not _d.get("is_rep"):
+        folder = _d["rep"]["folder"]
+        if folder not in _rep_gnn_folders:
+            _gnn_by_folder.setdefault(folder, []).append(lbl)
+for folder, lbls in _gnn_by_folder.items():
+    latest = sorted(lbls, key=lambda l: gnn_exp_data[l]["rep"].get("run_id",""))[-1]
+    _gnn_ongoing_set.add(latest)
+for lbl, _d in gnn_exp_data.items():
+    _d["is_ongoing"] = (lbl in _gnn_ongoing_set)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1646,8 +1681,8 @@ with tab_overview:
         if d.get("is_ongoing"):
             exp = f"{exp} (ongoing)"
         t_sec  = parsed.get("training_time_sec")
-        if t_sec is not None:
-            gnn_time_rows.append({"exp": exp, "time_sec": t_sec, "description": desc})
+        if t_sec is not None and epochs:
+            gnn_time_rows.append({"exp": exp, "time_sec": t_sec / len(epochs), "description": desc})
         if epochs:
             _ep_df = pd.DataFrame(epochs)
             _ep_df.index = _ep_df.index + 1
@@ -1668,99 +1703,93 @@ with tab_overview:
                 if val is not None:
                     gnn_rows.append({"exp": exp, "metric": metric, "value": val, "description": desc})
 
-    def _overview_line(rows: list[dict], title: str) -> None:
+    # ── 지표 선택 버튼 (ML·GNN 공통) ─────────────────────────────────────────
+    _all_metrics = ["F1", "AUPRC", "Recall", "학습시간"]
+    _sel_metrics: list[str] = st.pills(
+        "지표 선택",
+        _all_metrics,
+        selection_mode="multi",
+        default=["F1", "AUPRC", "Recall"],
+        key="ov_metric_sel",
+        label_visibility="collapsed",
+    ) or ["F1", "AUPRC", "Recall"]
+    _perf_metrics = [m for m in _sel_metrics if m != "학습시간"]
+    _show_time    = "학습시간" in _sel_metrics
+
+    def _overview_line(rows: list[dict], title: str, show_metrics: list[str]) -> None:
         if not rows:
             st.caption(f"{title} — 데이터 없음")
             return
         df_ov = pd.DataFrame(rows)
-        exps  = df_ov["exp"].unique().tolist()
+        df_ov = df_ov[df_ov["metric"].isin(show_metrics)]
+        if df_ov.empty:
+            st.caption(f"{title} — 선택된 지표 없음")
+            return
+        exps  = pd.DataFrame(rows)["exp"].unique().tolist()
         fig   = go.Figure()
         for metric, color in _METRIC_COLORS.items():
+            if metric not in show_metrics: continue
             sub  = df_ov[df_ov["metric"] == metric]
             dash = "solid" if metric == "F1" else "dash"
             fig.add_trace(go.Scatter(
-                x=sub["exp"],
-                y=sub["value"],
-                mode="lines+markers",
-                name=metric,
+                x=sub["exp"], y=sub["value"],
+                mode="lines+markers", name=metric,
                 line=dict(color=color, width=2, dash=dash),
                 marker=dict(size=8, color=color),
                 customdata=sub["description"],
-                hovertemplate=(
-                    "<b>%{x}</b><br>"
-                    f"{metric}: " + "%{y:.4f}<br>"
-                    "<i>%{customdata}</i><extra></extra>"
-                ),
+                hovertemplate="<b>%{x}</b><br>" + f"{metric}: " + "%{y:.4f}<br><i>%{customdata}</i><extra></extra>",
             ))
-        # x label 호버용 투명 마커 (description 표시)
-        desc_map = df_ov.drop_duplicates("exp").set_index("exp")["description"]
+        desc_map = pd.DataFrame(rows).drop_duplicates("exp").set_index("exp")["description"]
         fig.add_trace(go.Scatter(
-            x=exps,
-            y=[0] * len(exps),
-            mode="markers",
+            x=exps, y=[0]*len(exps), mode="markers",
             marker=dict(opacity=0, size=16),
             customdata=[desc_map.get(e, "") for e in exps],
             hovertemplate="<b>%{x}</b><br><i>%{customdata}</i><extra></extra>",
-            showlegend=False,
-            name="",
+            showlegend=False, name="",
         ))
         fig.update_layout(
-            title=title,
-            height=300,
-            margin=dict(t=40, b=20),
+            title=title, height=300, margin=dict(t=40, b=20),
             xaxis=dict(categoryorder="array", categoryarray=exps),
             yaxis=dict(range=[0, 1]),
-            legend=dict(
-                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                itemclick="toggleothers", itemdoubleclick="toggle",
-            ),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    def _overview_line_gnn(rows: list[dict], time_rows: list[dict], title: str) -> None:
+    def _overview_line_gnn(rows: list[dict], time_rows: list[dict], title: str,
+                           show_metrics: list[str], show_time: bool) -> None:
         if not rows:
             st.caption(f"{title} — 데이터 없음")
             return
         from plotly.subplots import make_subplots as _make_subplots
         df_ov   = pd.DataFrame(rows)
-        df_time = pd.DataFrame(time_rows) if time_rows else pd.DataFrame(columns=["exp", "time_sec", "description"])
+        df_time = pd.DataFrame(time_rows) if time_rows else pd.DataFrame(columns=["exp","time_sec","description"])
         exps    = df_ov["exp"].unique().tolist()
-        fig = _make_subplots(specs=[[{"secondary_y": True}]])
+        use_secondary = show_time and not df_time.empty
+        fig = _make_subplots(specs=[[{"secondary_y": use_secondary}]])
         for metric, color in _METRIC_COLORS.items():
+            if metric not in show_metrics: continue
             sub  = df_ov[df_ov["metric"] == metric]
             dash = "solid" if metric == "F1" else "dash"
             fig.add_trace(go.Scatter(
-                x=sub["exp"],
-                y=sub["value"],
-                mode="lines+markers",
-                name=metric,
+                x=sub["exp"], y=sub["value"],
+                mode="lines+markers", name=metric,
                 line=dict(color=color, width=2, dash=dash),
                 marker=dict(size=8, color=color),
                 customdata=sub["description"],
-                hovertemplate=(
-                    "<b>%{x}</b><br>"
-                    f"{metric}: " + "%{y:.4f}<br>"
-                    "<i>%{customdata}</i><extra></extra>"
-                ),
+                hovertemplate="<b>%{x}</b><br>" + f"{metric}: " + "%{y:.4f}<br><i>%{customdata}</i><extra></extra>",
             ), secondary_y=False)
-        if not df_time.empty:
+        if use_secondary:
             fig.add_trace(go.Bar(
-                x=df_time["exp"],
-                y=df_time["time_sec"],
-                name="학습시간 (s)",
-                width=0.3,
+                x=df_time["exp"], y=df_time["time_sec"],
+                name="평균 에폭 학습시간 (s/ep)", width=0.3,
                 marker_color="rgba(255,200,80,0.25)",
                 marker_line=dict(color="rgba(255,200,80,0.6)", width=1),
                 customdata=df_time["description"],
-                hovertemplate=(
-                    "<b>%{x}</b><br>학습시간: %{y:.0f}s<br>"
-                    "<i>%{customdata}</i><extra></extra>"
-                ),
+                hovertemplate="<b>%{x}</b><br>에폭당 학습시간: %{y:.1f}s/ep<br><i>%{customdata}</i><extra></extra>",
             ), secondary_y=True)
-        # x label 호버용 투명 마커
         desc_map = df_ov.drop_duplicates("exp").set_index("exp")["description"]
         fig.add_trace(go.Scatter(
-            x=exps, y=[0] * len(exps), mode="markers",
+            x=exps, y=[0]*len(exps), mode="markers",
             marker=dict(opacity=0, size=16),
             customdata=[desc_map.get(e, "") for e in exps],
             hovertemplate="<b>%{x}</b><br><i>%{customdata}</i><extra></extra>",
@@ -1769,18 +1798,17 @@ with tab_overview:
         fig.update_layout(
             title=title, height=320, margin=dict(t=40, b=20),
             xaxis=dict(categoryorder="array", categoryarray=exps),
-            legend=dict(
-                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                itemclick="toggleothers", itemdoubleclick="toggle",
-            ),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             barmode="overlay",
         )
-        fig.update_yaxes(range=[0, 1], title_text="Metric", secondary_y=False)
-        fig.update_yaxes(title_text="학습시간 (s)", secondary_y=True, showgrid=False)
+        if show_metrics:
+            fig.update_yaxes(range=[0, 1], title_text="Metric", secondary_y=False)
+        if use_secondary:
+            fig.update_yaxes(title_text="평균 에폭 학습시간 (s/ep)", secondary_y=True, showgrid=False)
         st.plotly_chart(fig, use_container_width=True)
 
-    _overview_line(ml_rows, "ML")
-    _overview_line_gnn(gnn_rows, gnn_time_rows, "GNN")
+    _overview_line(ml_rows, "ML", _perf_metrics)
+    _overview_line_gnn(gnn_rows, gnn_time_rows, "GNN", _perf_metrics, _show_time)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1815,7 +1843,16 @@ def _tab_gnn_render():
         epochs = parsed.get("epochs", [])
 
         if not epochs:
+            _dbg = gnn_exp_data.get(sel_gnn_label, {}).get("_gnn_debug", {})
             st.info("학습 로그를 파싱할 수 없습니다.")
+            if _dbg:
+                st.caption(
+                    f"🔍 gnn폴더: {'✅' if _dbg.get('gnn_id') else '❌'}  "
+                    f"실험폴더({sel_gnn_rep.get('folder','?')}): {'✅' if _dbg.get('exp_id') else '❌'}  "
+                    f"run폴더({sel_gnn_rep.get('run_id','?')}): {'✅' if _dbg.get('run_fid') else '❌'}  "
+                    f"logs폴더: {'✅' if _dbg.get('logs_id') else '❌'}  "
+                    f"로그: {_dbg.get('log_msg', '—')}"
+                )
         else:
             ep_df = pd.DataFrame(epochs)
             ep_df.index = ep_df.index + 1
