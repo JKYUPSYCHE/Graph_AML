@@ -23,9 +23,9 @@
     "ml_folder": "ml-02",
     "experiment_id": "ml_02",
     "run_id": "r02",
-    "model_run_id": "d00-optuna-out-format-rev2-t50",
+    "model_run_id": "d00-optuna-in-format-rev2-t50",
     "status": "test_final",
-    "selected_at": "2026-06-08",
+    "selected_at": "2026-06-09",
     "description": "일반 집계 피처 2단계",
     "note": "ML-02, ML-01과 동일 정책, optuna 하이퍼 파라미터 튜닝 적용"
   },
