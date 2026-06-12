@@ -23,9 +23,9 @@
     "ml_folder": "ml-02",
     "experiment_id": "ml_02",
     "run_id": "r02",
-    "model_run_id": "d00-optuna-out-format-rev2-t50",
-    "status": "candidate_val_only",
-    "selected_at": "2026-05-29",
+    "model_run_id": "d00-optuna-in-format-rev2-t50",
+    "status": "test_final",
+    "selected_at": "2026-06-09",
     "description": "일반 집계 피처 2단계",
     "note": "ML-02, ML-01과 동일 정책, optuna 하이퍼 파라미터 튜닝 적용"
   },
@@ -68,5 +68,15 @@
 "selected_at": "2026-06-01",
 "description": "ML-06 ratio 안정화 full reference",
 "note": "ML-06, ML-05 236-feature 계열에서 ratio 계열 21개를 train 기준 p99.99 clip variant로 안정화, Optuna 25 trial 튜닝"
+},
+{
+"ml_folder": "ml-07",
+"experiment_id": "ml_07",
+"run_id": "r00",
+"model_run_id": "ml07-d00-md4-top12-plus-fanin-formatoptuna-f1-t25",
+"status": "test_final",
+"selected_at": "2026-06-08",
+"description": "ML-07 피쳐 다이어트 후보군 실험",
+"note": "ML-07, 피쳐 다이어트 후보군 실험"
 }
 ]
