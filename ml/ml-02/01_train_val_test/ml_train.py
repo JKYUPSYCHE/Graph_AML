@@ -125,7 +125,7 @@ class XGBTrainConfig:
     scores_train_summary_file_name: str = "scores_train_summary.json"  # output_dir 아래 저장할 train/val logloss curve 파일명.
     feature_importance_file_name: str = "feature_importance.csv"  # output_dir 아래 저장할 importance 파일명.
     export_feature_assoc: bool = True
-    feature_assoc_train_sample_rows: int | None = None
+    feature_assoc_train_sample_rows: int | None = 500_000
     label_col: str = "label"                # 정답 label 컬럼명. 바꾸면 load_split(), label_summary(), scale_pos_weight 계산에 모두 영향.
     sample_rows: int | None = None          # 디버깅/샘플 실험용 행 수 제한. None이면 전체 사용.
     allow_nan: bool = False                 # feature NaN 허용 여부. False면 load_split() 단계에서 차단될 가능성이 높다. 확인 필요.
