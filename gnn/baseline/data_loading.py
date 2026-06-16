@@ -132,9 +132,10 @@ def get_data(args, data_config):
 
     if args.ports:
         logging.info("Start: adding ports")
-        tr_data.add_ports()
-        val_data.add_ports()
-        te_data.add_ports()
+        rp = getattr(args, 'reverse_ports', True)
+        tr_data.add_ports(reverse_ports=rp)
+        val_data.add_ports(reverse_ports=rp)
+        te_data.add_ports(reverse_ports=rp)
         logging.info("Done: adding ports")
     if args.tds:
         logging.info("Start: adding time-deltas")
